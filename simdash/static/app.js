@@ -517,8 +517,13 @@ function worstSlip(L) {
   });
 }
 
+// analysed lap blue, compare lap orange, the other laps cycle through the remaining series colours
+const LAP_COLOURS = ["--s-throttle", "--s-angle", "--s-lock", "--s-clutch", "--s-brake"];
 function lapSwatch(n) {
-  return css(n === hist.lap ? "--s-speed" : n === hist.cmp ? "--s-spin" : "--muted");
+  if (n === hist.lap) return css("--s-speed");
+  if (n === hist.cmp) return css("--s-spin");
+  const others = hist.detail.laps.map((l) => l.lap).filter((m) => m !== hist.lap && m !== hist.cmp);
+  return css(LAP_COLOURS[others.indexOf(n) % LAP_COLOURS.length]);
 }
 
 function renderMapLaps() {
@@ -539,6 +544,9 @@ $("#map-laps").onchange = (e) => {
   drawLapMap();
 };
 
+// surface classes sent by the lap API (surf_l / surf_r): worst surface under the left or right tyres
+const SURFACES = ["track", "kerb", "off"];
+
 function drawLapMap() {
   const A = hist.lapData;
   if (!A || !A.ts.length) return;
@@ -558,6 +566,10 @@ function drawLapMap() {
   } else if (mode === "slip") {
     cmin = -0.25; cmax = 0.25;
     scale = [[0, css("--s-lock")], [0.5, css("--neutral")], [1, css("--s-spin")]]; title = "lock ← → spin";
+  } else if (mode === "surface") {
+    cmin = 0; cmax = 2;
+    const [t, k, o] = [css("--muted"), css("--warning"), css("--critical")];
+    scale = [[0, t], [1 / 3, t], [1 / 3, k], [2 / 3, k], [2 / 3, o], [1, o]]; title = "";
   }
   const traces = laps.map((n, k) => {
     const L = hist.loaded[n], xy = L.x.map((x, i) => mapXY(x, L.z[i]));
@@ -571,18 +583,32 @@ function drawLapMap() {
     } else if (mode === "slip") {
       color = worstSlip(L);
       hover = color.map((v) => `slip ${Math.round(v * 100)}%`);
+    } else if (mode === "surface") {
+      color = L.surf_l.map((l, i) => Math.max(l ?? 0, L.surf_r[i] ?? 0));
+      hover = L.surf_l.map((l, i) => `left ${SURFACES[l] ?? "?"} · right ${SURFACES[L.surf_r[i]] ?? "?"}`);
     } else {
       color = lapSwatch(n);
       hover = L.speed.map((v) => `${Math.round(v)} km/h`);
     }
     const marker = mode === "lap"
-      ? { size: rank(n) ? 5 : 4, color, opacity: rank(n) ? 1 : 0.5 }
+      ? { size: n === hist.lap ? 3 : 6, color }  // analysed lap small on top: the laps under it stay visible
       : { size: 5, color, cmin, cmax, colorscale: scale, showscale: k === laps.length - 1,
-          colorbar: { title: { text: title, side: "right" }, thickness: 10, outlinewidth: 0, tickfont: { color: css("--muted") } } };
+          colorbar: { title: { text: title, side: "right" }, thickness: 10, outlinewidth: 0, tickfont: { color: css("--muted") },
+            ...(mode === "surface" ? { tickvals: [1 / 3, 1, 5 / 3], ticktext: SURFACES } : {}) } };
     return { x: xy.map((p) => p[0]), y: xy.map((p) => -p[1]), mode: "markers", type: "scattergl", marker,
       text: L.lap_dist.map((dd, i) => `lap ${n} · ${Math.round(dd)} m · ${hover[i]} · gear ${L.gear[i]}`),
       hovertemplate: "%{text}<extra></extra>" };
   });
+  // kerb and off-track points of every lap on top, else the laps drawn later hide them
+  if (mode === "surface") {
+    const o = { x: [], y: [], color: [], text: [], customdata: [] };
+    traces.forEach((t, k) => t.marker.color.forEach((c, i) => {
+      if (!c) return;
+      o.x.push(t.x[i]); o.y.push(t.y[i]); o.color.push(c); o.text.push(t.text[i]); o.customdata.push([laps[k], i]);
+    }));
+    traces.push({ x: o.x, y: o.y, customdata: o.customdata, text: o.text, mode: "markers", type: "scattergl",
+      marker: { size: 6, color: o.color, cmin, cmax, colorscale: scale }, hovertemplate: "%{text}<extra></extra>" });
+  }
   traces.push({ x: [], y: [], mode: "markers", type: "scatter", hoverinfo: "skip",
     marker: { size: 14, color: css("--s-speed"), line: { color: css("--surface"), width: 2 } } });
   hist.mapMarker = traces.length - 1;
@@ -606,10 +632,12 @@ function drawLapMap() {
 
 // red line in the lap traces at the lap distance of the hovered map point
 function onMapHover(ev) {
-  const p = ev.points[0], n = hist.mapLaps[p.curveNumber];
+  const p = ev.points[0];
+  // the surface overlay carries [lap, index]; every other trace is one lap
+  const [n, idx] = p.customdata ?? [hist.mapLaps[p.curveNumber], p.pointIndex];
   const L = n != null && hist.loaded[n];
   if (!L || !$("#lap-traces").data) return;
-  const dd = L.lap_dist[p.pointIndex];
+  const dd = L.lap_dist[idx];
   Plotly.relayout("lap-traces", { shapes: [{ type: "line", xref: "x", yref: "paper", x0: dd, x1: dd, y0: 0, y1: 1,
     line: { color: css("--critical"), width: 1.5 } }] });
 }
@@ -668,6 +696,7 @@ function drawTraces() {
     { key: "gear", title: "Gear", series: [["gear", "Gear", "--s-clutch", 1]] },
     { key: "steer", title: "Steering %", series: [["steer", "Steering", "--text-2", 100]] },
     { key: "slip", title: "Wheel slip %", series: [["spin", "Wheelspin", "--s-spin", 100], ["lock", "Lock-up", "--s-lock", 100]] },
+    { key: "surface", title: "Track limits", series: [["surf_l", "Left tyres", "--warning", -1], ["surf_r", "Right tyres", "--critical", 1]] },
   ];
   const worst = (L, f) => L.ts.map((_, i) => {
     const w = [L.slip_fl[i], L.slip_fr[i], L.slip_rl[i], L.slip_rr[i]].filter((v) => v != null);
@@ -707,6 +736,7 @@ function drawTraces() {
     const top = 1 - k * (hEach + gap);
     layout["yaxis" + ax] = { ...axisStyle(), domain: [top - hEach, top], title: { text: row.title, font: { size: 10, color: css("--muted") } }, fixedrange: true,
       ...(row.key === "slip" ? { range: [-30, 30] } : {}),
+      ...(row.key === "surface" ? { range: [-2.4, 2.4], tickvals: [-2, -1, 0, 1, 2], ticktext: ["L off", "L kerb", "", "R kerb", "R off"] } : {}),
       ...(z && ["speed", "steer", "delta"].includes(row.key) ? yFit(row) : {}) };
     layout["xaxis" + ax] = { ...axisStyle(), anchor: "y" + ax, matches: k ? "x" : undefined, showticklabels: k === n - 1,
       ...(k === 0 && z ? { range: z } : {}),
@@ -715,10 +745,12 @@ function drawTraces() {
       for (const [L, label, dash] of [[A, `lap ${hist.lap}`, "solid"], [row.key === "delta" ? null : B, `lap ${hist.cmp}`, "dot"]]) {
         if (!L) continue;
         traces.push({
-          x: L.lap_dist, y: L[col].map((v) => (v == null ? null : v * mul)), xaxis: "x" + ax, yaxis: "y" + ax,
+          x: L.lap_dist, y: L[col].map((v) => (v == null || (row.key === "surface" && !v) ? null : v * mul)), xaxis: "x" + ax, yaxis: "y" + ax,
           type: "scattergl", mode: "lines", name: `${name} · ${label}`, legendgroup: label,
-          line: { color: css(c), width: 2, dash, shape: row.key === "gear" ? "hv" : "linear" },
-          hovertemplate: `%{y:.${row.key === "delta" ? 3 : 0}f}`,
+          line: { color: css(c), width: 2, dash, shape: ["gear", "surface"].includes(row.key) ? "hv" : "linear" },
+          ...(row.key === "surface"
+            ? { text: L[col].map((v) => SURFACES[v] ?? ""), hovertemplate: "%{text}" }
+            : { hovertemplate: `%{y:.${row.key === "delta" ? 3 : 0}f}` }),
         });
       }
     }

@@ -42,8 +42,8 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   a rolling 30 s chart; a track map with every car; standings with approximate gaps.
 - **Sessions**: every recorded session from every day, searchable by track/car and
   filterable by type and day. Per session: laps table (sectors, top speed, fuel),
-  lap map coloured by speed / pedals / slip, lap traces with a second lap overlaid
-  and a delta-time row, race replay of all cars, results, CSV export, delete.
+  lap map coloured by speed / pedals / slip / track limits, lap traces with a second lap
+  overlaid, a delta-time row and a track-limits row (left/right tyres on a kerb or off track), race replay of all cars, results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
 
 ## Data source

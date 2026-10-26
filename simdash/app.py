@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import store
+from .pcars2 import TERRAINS
 from .recorder import Recorder
 
 log = logging.getLogger("simdash")
@@ -22,6 +23,12 @@ LIVE_PERIOD = 0.05  # s between WebSocket pushes
 SAMPLE_COLS = ["ts", "lap", "lap_dist", "lap_time", "x", "z", "speed", "rpm", "gear", "throttle",
                "brake", "steer", "clutch", "g_lat", "g_long", "slip_angle", "slip_fl", "slip_fr",
                "slip_rl", "slip_rr", "abs", "pos"]
+
+# Surface class of each terrain code: 0 track, 1 kerb, 2 off track (grass, gravel, runoff, walls...)
+KERBS = {"rumble strips", "exit rumble strips", "b1 rumbles", "b2 rumbles", "drains", "paint concrete"}
+TRACK = {"road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road 3", "marbles", "pavement",
+         "cobbles", "bumpy cobbles", "damaged road 1", "train track road", "rally tarmac"}
+SURFACE = [0 if t in TRACK else 1 if t in KERBS else 2 for t in TERRAINS]
 
 
 def create_app(recorder=None):
@@ -36,6 +43,14 @@ def create_app(recorder=None):
 
     app = FastAPI(title="simdash", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    # revalidate the page and its scripts on every load (cheap 304s), so an update shows on reload
+    @app.middleware("http")
+    async def no_stale_static(request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/")
     def index():
@@ -98,10 +113,23 @@ def create_app(recorder=None):
         """Samples of one completed lap. Lap N is the lap that ended when laps_completed reached N."""
         con, sid = open_ref(ref)
         with con:
-            rows = con.execute(f"SELECT {','.join(SAMPLE_COLS)} FROM v_samples WHERE session_id=? AND lap=? "
+            rows = con.execute(f"SELECT {','.join(SAMPLE_COLS)}, tick_id FROM v_samples WHERE session_id=? AND lap=? "
                                "ORDER BY ts", (sid, lap)).fetchall()
+            terrain = {}
+            if rows:
+                for tick, wheel, t in con.execute("SELECT tick_id, wheel, terrain FROM wheel WHERE tick_id BETWEEN ? AND ?",
+                                                  (rows[0]["tick_id"], rows[-1]["tick_id"])):
+                    terrain.setdefault(tick, [None] * 4)[wheel] = t
         con.close()
-        return {c: [r[i] for r in rows] for i, c in enumerate(SAMPLE_COLS)}
+        out = {c: [r[i] for r in rows] for i, c in enumerate(SAMPLE_COLS)}
+
+        # worst surface under the left (fl, rl) and right (fr, rr) tyres
+        def side(tick, wheels):
+            cls = [SURFACE[t] for w in wheels if (t := terrain.get(tick, [None] * 4)[w]) is not None and 0 <= t < len(SURFACE)]
+            return max(cls) if cls else None
+        out["surf_l"] = [side(r["tick_id"], (0, 2)) for r in rows]
+        out["surf_r"] = [side(r["tick_id"], (1, 3)) for r in rows]
+        return out
 
     @app.get("/api/sessions/{ref}/path")
     def session_path(ref: str):
