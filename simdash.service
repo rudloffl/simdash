@@ -1,0 +1,12 @@
+[Unit]
+Description=simdash - AMS2 live telemetry dashboard and session recorder
+After=simd.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/simdash --port 8050
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

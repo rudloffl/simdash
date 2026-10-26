@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simdash</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">simdash</div>
+  <nav>
+    <button data-tab="live" class="active">Live</button>
+    <button data-tab="history">Sessions</button>
+  </nav>
+  <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+</header>
+
+<main>
+<section id="tab-live" class="tab active">
+  <div class="session-line" id="session-line"></div>
+  <div class="live-grid">
+    <div class="col-main">
+      <div class="tiles">
+        <div class="tile big"><div class="label">Speed</div><div class="value" id="t-speed">–</div><div class="sub">km/h</div></div>
+        <div class="tile big"><div class="label">Gear</div><div class="value" id="t-gear">–</div>
+          <div class="rpmbar" id="rpmbar"><div></div></div><div class="sub" id="t-rpm">– rpm</div></div>
+        <div class="tile"><div class="label">Position</div><div class="value" id="t-pos">–</div><div class="sub" id="t-cars"></div></div>
+        <div class="tile"><div class="label">Lap</div><div class="value" id="t-lap">–</div><div class="sub" id="t-left"></div></div>
+        <div class="tile"><div class="label">Current</div><div class="value" id="t-cur">–</div><div class="sub" id="t-dist"></div></div>
+        <div class="tile"><div class="label">Last</div><div class="value" id="t-last">–</div></div>
+        <div class="tile"><div class="label">Best</div><div class="value" id="t-best">–</div></div>
+        <div class="tile"><div class="label">Fuel</div><div class="value" id="t-fuel">–</div><div class="sub">litres</div></div>
+      </div>
+
+      <div class="row3">
+        <div class="card pedals">
+          <h3>Inputs <span class="right"><span class="abs-badge" id="abs">ABS</span></span></h3>
+          <div class="bars">
+            <div class="vbar"><div class="track"><div class="fill" id="b-thr" style="background:var(--s-throttle)"></div></div><div class="v" id="v-thr">0</div><div class="n">Throttle</div></div>
+            <div class="vbar"><div class="track"><div class="fill" id="b-brk" style="background:var(--s-brake)"></div></div><div class="v" id="v-brk">0</div><div class="n">Brake</div></div>
+            <div class="vbar"><div class="track"><div class="fill" id="b-clu" style="background:var(--s-clutch)"></div></div><div class="v" id="v-clu">0</div><div class="n">Clutch</div></div>
+          </div>
+          <div class="steer">
+            <div class="hbar"><div class="mid"></div><div class="fill" id="b-steer" style="background:var(--s-speed)"></div></div>
+            <div class="hbar-label"><span>L</span><span>Steering <span id="v-steer" class="num">0</span>%</span><span>R</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>G-force <span class="right muted num" id="v-g"></span></h3>
+          <canvas id="gg"></canvas>
+        </div>
+        <div class="card">
+          <h3>Wheel slip</h3>
+          <div class="tyres-grid">
+            <div class="tyre" id="ty0"><div class="pct">–</div><div class="t"></div></div>
+            <div class="tyre" id="ty1"><div class="pct">–</div><div class="t"></div></div>
+            <div class="tyre" id="ty2"><div class="pct">–</div><div class="t"></div></div>
+            <div class="tyre" id="ty3"><div class="pct">–</div><div class="t"></div></div>
+          </div>
+          <div class="slip-note" id="slip-note"></div>
+          <div class="slip-angle">
+            <div class="hbar"><div class="mid"></div><div class="fill" id="b-angle" style="background:var(--s-angle)"></div></div>
+            <div class="hbar-label"><span>−15°</span><span>Car slip angle <span id="v-angle" class="num">0.0</span>°</span><span>+15°</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Last 30 seconds</h3>
+        <canvas id="trace"></canvas>
+        <div class="legend">
+          <span style="--c:var(--s-speed)">Speed</span>
+          <span style="--c:var(--s-throttle)">Throttle</span>
+          <span style="--c:var(--s-brake)">Brake</span>
+          <span style="--c:var(--s-spin)">Wheelspin (worst wheel)</span>
+          <span style="--c:var(--s-lock)">Lock-up (worst wheel)</span>
+          <span style="--c:var(--s-angle)">Car slip angle</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-side">
+      <div class="card">
+        <h3>Track map <span class="right map-tools">
+          <span class="muted" id="map-src"></span>
+          <button id="map-mirror" title="Flip the map left/right if it looks mirrored">Mirror</button>
+          <button id="map-rotate" title="Rotate the map 90°">Rotate</button>
+        </span></h3>
+        <canvas id="map"></canvas>
+      </div>
+      <div class="card">
+        <h3>Standings <span class="right muted">gap ≈ from track distance</span></h3>
+        <div class="table-wrap">
+          <table id="standings"><thead><tr>
+            <th class="r">P</th><th>Driver</th><th class="r">Lap</th><th class="r">Gap</th><th class="r">Last</th><th class="r">Best</th><th></th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-history" class="tab">
+  <div class="filters">
+    <input id="f-search" type="search" placeholder="Search track, car, driver class…">
+    <select id="f-type"><option value="">All sessions</option><option>Race</option><option>Qualify</option><option>Practice</option><option>Time attack</option><option>Test</option></select>
+    <select id="f-day"><option value="">All days</option></select>
+    <button id="f-refresh">Refresh</button>
+    <span class="muted" id="f-count"></span>
+  </div>
+  <div class="card">
+    <div class="table-wrap" style="max-height:340px">
+      <table id="sessions-table"><thead><tr>
+        <th>Date</th><th>Time</th><th>Type</th><th>Track</th><th>Car</th><th class="r">Laps</th><th class="r">Best</th><th class="r">Pos</th><th class="r">Driving</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div id="session-detail" hidden>
+    <div class="detail-head">
+      <h2 id="d-title"></h2><span class="muted" id="d-sub"></span>
+      <div class="actions">
+        <a id="d-csv" href="#"><button>Export CSV</button></a>
+        <button id="d-delete">Delete</button>
+      </div>
+    </div>
+    <div class="tiles" id="d-tiles"></div>
+    <div class="detail-grid">
+      <div class="card">
+        <h3>Laps <span class="right muted">click a lap to analyse it</span></h3>
+        <div class="table-wrap" style="max-height:420px">
+          <table id="laps-table"><thead><tr>
+            <th class="r">Lap</th><th class="r">Time</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th class="r">Pos</th><th class="r">Top km/h</th><th class="r">Fuel l</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Lap map <span class="right"><select id="map-color">
+          <option value="speed">Colour by speed</option>
+          <option value="pedals">Colour by throttle / brake</option>
+          <option value="slip">Colour by wheel slip</option>
+          <option value="lap">Colour by lap</option>
+        </select></span></h3>
+        <div class="map-wrap">
+          <div id="lap-map"></div>
+          <div class="map-laps" id="map-laps"></div>
+        </div>
+        <div class="map-hint muted">Drag a box or scroll to zoom into a corner: the lap traces follow. Double-click to zoom out.</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Lap traces <span class="muted num" id="traces-zoom"></span><span class="right">compare with <select id="compare"><option value="">none</option></select></span></h3>
+      <div id="lap-traces"></div>
+    </div>
+    <div class="detail-grid">
+      <div class="card" id="replay-card">
+        <h3>Race replay <span class="right muted num" id="replay-time"></span></h3>
+        <canvas id="replay-map"></canvas>
+        <div class="replay-controls">
+          <button id="replay-play">Play</button>
+          <select id="replay-speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="16">16×</option></select>
+          <input type="range" id="replay-slider" min="0" max="1" step="0.5" value="0">
+        </div>
+      </div>
+      <div class="card">
+        <h3>Results / participants</h3>
+        <div class="table-wrap">
+          <table id="results-table"><thead><tr>
+            <th class="r">P</th><th>Driver</th><th>Car</th><th class="r">Laps</th><th class="r">Best</th><th>State</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<script src="/static/plotly.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</body>
+</html>
