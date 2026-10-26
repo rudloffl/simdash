@@ -120,3 +120,7 @@ systemctl --user daemon-reload && systemctl --user enable --now simdash
   its `pcars2data.h` provides the field layout simdash reads.
 - [plotly.js](https://github.com/plotly/plotly.js) (MIT) for the charts and maps.
 - Code written with [Claude Code](https://claude.com/claude-code).
+
+## License
+
+GPL-3.0, like Monocoque (simapi itself is LGPL-3.0). See [LICENSE](LICENSE).
