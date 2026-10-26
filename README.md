@@ -10,10 +10,10 @@ gets AMS2's telemetry out of Proton, and simdash records it and turns it into th
 pages below.
 
 ![Session analysis: laps, lap map coloured by speed, lap traces, race replay and results](docs/session.png)
-*Sessions: a recorded race at Spielberg, with lap times, the lap map, lap traces, the race replay and results.*
+*Sessions: a race at Spielberg, lap 3 analysed against lap 2: lap map coloured by sector ranking, corner table with time gained per corner, lap traces with the delta row and sector lines, race replay and results.*
 
 ![Live dashboard while driving](docs/live.png)
-*Live: what the dashboard shows while you are on track (here fed by the built-in fake game, `simdash.fake_ams2`).*
+*Live: the dashboard while on track, with the track map focused on one corner and each pass compared with the reference lap (here fed by the built-in fake game, `simdash.fake_ams2`).*
 
 > **About this project:** I have not written any of this code (yet). simdash was
 > built entirely through conversations with [Claude Code](https://claude.com/claude-code),
