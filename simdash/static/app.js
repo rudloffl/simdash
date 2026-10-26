@@ -137,6 +137,7 @@ function drawMap(canvas, outline, cars, startLine, view = null) {
     ctx.fillStyle = css("--text");
     for (const l of view?.labels || []) {
       const [a, b] = S(l.p), half = ctx.measureText(l.text).width / 2 + 3;
+      if (a < 0 || a > w || b < 0 || b > h) continue;  // corner outside a zoomed map
       const x = clamp(a, half, w - half), y = clamp(b - 14, 8, h - 8);  // keep names near the edge readable
       ctx.strokeText(l.text, x, y);
       ctx.fillText(l.text, x, y);
@@ -391,13 +392,18 @@ async function refreshFocusRef(d) {
     focus.lastKey = key;
     focus.ref = r.samples?.ts.length ? r.samples : null;
     focus.refLabel = focus.ref ? `vs best ${fmtLap(r.lap_time)} (${new Date(r.started_at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" })})` : "";
+    // the selected corner is kept by apex distance: a new reference can number the corners differently
+    const trackKey = `${s.track}|${s.variation}`, sameTrack = trackKey === focus.trackKey;
+    const apex = sameTrack && focus.corner != null ? focus.corners[focus.corner].apex
+      : pref.get("cornerApex." + trackKey, null);
     focus.corners = focus.ref ? findCorners(focus.ref) : [];
-    focus.trackKey = `${s.track}|${s.variation}`;
+    focus.trackKey = trackKey;
     await loadCornerNames(s.track, s.variation);
+    const k = apex == null ? -1 : focus.corners.findIndex((c) => Math.abs(c.apex - apex) <= 80);
+    if (k >= 0 && focus.corner != null && sameTrack) focus.corner = k;  // same corner: keep its passes
+    else if (k >= 0) setCorner(k);
+    else if (focus.corner != null) setCorner(null);
     liveCornerOptions();
-    const saved = pref.get("corner." + focus.trackKey, null);
-    if (focus.corner !== saved || focus.corner >= focus.corners.length) setCorner(saved != null && saved < focus.corners.length ? saved : null);
-    $("#live-corner").value = focus.corner ?? "";
   } catch { /* retried on the next frame */ } finally {
     focus.fetching = false;
   }
@@ -418,7 +424,7 @@ function setCorner(k) {
   const last = focus.buf[focus.buf.length - 1];
   focus.passDone = !c || !last || last[LT.dist] > Math.max(c.s, 0) + 100;
   $("#live-corner").value = focus.corner ?? "";
-  pref.set("corner." + focus.trackKey, focus.corner);
+  pref.set("cornerApex." + focus.trackKey, c ? c.apex : null);
   $("#corner-card").hidden = !c;
   if (!c) Plotly.purge("corner-plot");
   focus.lastDraw = 0;
