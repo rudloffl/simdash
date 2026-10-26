@@ -17,6 +17,7 @@
   --s-lock: #9085e9;     /* slot 7 violet */
   --s-brake: #e66767;    /* slot 8 red */
   --s-clutch: #d55181;   /* slot 5 magenta */
+  --surf-gravel: #a8743f; /* gravel, sand, dirt on the raw surface map */
   --car: #898781;
   --good: #0ca30c;
   --warning: #fab219;
@@ -44,6 +45,7 @@
     --s-lock: #6250d6;
     --s-brake: #e34948;
     --s-clutch: #e87ba4;
+    --surf-gravel: #9a6633;
     --seq-lo: #cde2fb;
     --seq-hi: #104281;
   }
@@ -171,7 +173,8 @@ canvas { display: block; width: 100%; }
 }
 
 #map { height: 420px; }
-.map-tools { display: flex; gap: 6px; }
+.map-tools { display: flex; gap: 6px; align-items: center; }
+.map-tools select { font-size: 12px; padding: 2px 4px; }
 .map-tools button { padding: 2px 8px; font-size: 12px; }
 
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -192,7 +195,16 @@ tr.player td { background: color-mix(in srgb, var(--s-speed) 18%, transparent); 
 #sessions-table tbody tr.sel td, #laps-table tbody tr.sel td {
   background: color-mix(in srgb, var(--s-speed) 22%, transparent);
 }
-#laps-table tbody tr { cursor: pointer; }
+#laps-table tbody tr, #corners-table tbody tr[data-k] { cursor: pointer; }
+#corners-table tbody tr[data-k]:hover td { background: var(--surface-2); }
+#corners-table tbody tr.sel td { background: color-mix(in srgb, var(--s-speed) 14%, transparent); }
+#corners-table td.lost, #corner-passes td.lost { color: var(--critical); font-weight: 600; }
+#corners-table td.gained, #corner-passes td.gained { color: var(--good); font-weight: 600; }
+#corner-plot { height: 260px; }
+a.rename { color: var(--muted); cursor: pointer; font-size: 12px; margin-left: 2px; }
+a.rename:hover { color: var(--s-speed); }
+#corner-passes tr.ref td { color: var(--muted); }
+#corners-table tr.total td { border-top: 1px solid var(--axis); font-weight: 600; }
 td.best { color: var(--good); font-weight: 600; }
 td.invalid { color: var(--muted); text-decoration: line-through; }
 .empty { padding: 30px; text-align: center; color: var(--muted); }
@@ -213,6 +225,7 @@ td.invalid { color: var(--muted); text-decoration: line-through; }
 .map-laps .t.best { color: var(--good); }
 .map-laps .t.invalid { color: var(--muted); text-decoration: line-through; }
 .map-laps .sw { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.map-laps .sw.sq { border-radius: 2px; margin-right: -4px; }
 .map-hint { font-size: 12px; margin-top: 4px; }
 #traces-zoom { margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 #traces-zoom a { color: var(--s-speed); cursor: pointer; margin-left: 6px; }

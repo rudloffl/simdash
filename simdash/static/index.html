@@ -84,10 +84,20 @@
       <div class="card">
         <h3>Track map <span class="right map-tools">
           <span class="muted" id="map-src"></span>
+          <select id="live-corner" title="Focus on one corner"><option value="">Whole track</option></select>
           <button id="map-mirror" title="Flip the map left/right if it looks mirrored">Mirror</button>
           <button id="map-rotate" title="Rotate the map 90°">Rotate</button>
         </span></h3>
         <canvas id="map"></canvas>
+      </div>
+      <div class="card" id="corner-card" hidden>
+        <h3><span id="corner-title"></span> <span class="right muted" id="corner-ref"></span></h3>
+        <div id="corner-plot"></div>
+        <div class="table-wrap">
+          <table id="corner-passes"><thead><tr>
+            <th>Pass</th><th class="r">Braking at</th><th class="r">Entry</th><th class="r">Min</th><th class="r">Exit</th><th class="r">Gear</th><th class="r">Δ s</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
       </div>
       <div class="card">
         <h3>Standings <span class="right muted">gap ≈ from track distance</span></h3>
@@ -141,6 +151,8 @@
           <option value="pedals">Colour by throttle / brake</option>
           <option value="slip">Colour by wheel slip</option>
           <option value="surface">Colour by track limits</option>
+          <option value="terrain">Colour by surface (raw)</option>
+          <option value="sectors">Colour by sector ranking</option>
           <option value="lap">Colour by lap</option>
         </select></span></h3>
         <div class="map-wrap">
@@ -148,6 +160,14 @@
           <div class="map-laps" id="map-laps"></div>
         </div>
         <div class="map-hint muted">Drag a box or scroll to zoom into a corner: the lap traces follow. Double-click to zoom out.</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Corners <span class="muted" id="corners-ref"></span><span class="right muted">click a corner to zoom on it</span></h3>
+      <div class="table-wrap">
+        <table id="corners-table"><thead><tr>
+          <th>Corner</th><th class="r">Apex at</th><th class="r">Braking at</th><th class="r">Entry km/h</th><th class="r">Min km/h</th><th class="r">Exit km/h</th><th class="r">Gear</th><th class="r">Time s</th><th class="r">Δ s</th>
+        </tr></thead><tbody></tbody></table>
       </div>
     </div>
     <div class="card">

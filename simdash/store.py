@@ -407,6 +407,28 @@ def all_sessions():
     return out
 
 
+def best_laps(track, variation, car, exclude_ref=None, limit=15):
+    """Best valid lap of every session on this track layout with this car, from every day, fastest first."""
+    out = []
+    for day in list_days():
+        try:
+            con = read_day(day)
+            rows = con.execute(
+                """SELECT s.id, s.session_type, s.started_at, l.lap, MIN(l.lap_time) AS lap_time
+                   FROM lap l JOIN v_sessions s ON s.id = l.session_id
+                   WHERE s.track = ? AND s.variation = ? AND s.car = ? AND l.valid AND l.lap_time > 0
+                   GROUP BY s.id""", (track, variation, car)).fetchall()
+            con.close()
+        except sqlite3.Error:
+            continue
+        for r in rows:
+            ref = f"{day}:{r['id']}"
+            if ref != exclude_ref:
+                out.append({"ref": ref, "day": day, "session_type": r["session_type"], "started_at": r["started_at"],
+                            "lap": r["lap"], "lap_time": r["lap_time"]})
+    return sorted(out, key=lambda r: r["lap_time"])[:limit]
+
+
 def track_key(track, variation):
     raw = f"{track}__{variation}".lower()
     return re.sub(r"[^a-z0-9_]+", "-", raw).strip("-") or "unknown"
@@ -426,6 +448,36 @@ def save_track(track, variation, outline):
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(outline))
     tmp.replace(p)
+
+
+# Corner names, named by the user: [{"apex": lap distance in m, "name": ...}], one file per track layout.
+# Kept apart from the outline, which is rewritten on every new best lap.
+CORNER_MATCH_M = 80  # a name belongs to the detected corner whose apex is within this distance
+
+
+def _corners_path(track, variation):
+    return TRACKS_DIR / (track_key(track, variation) + ".corners.json")
+
+
+def load_corner_names(track, variation):
+    try:
+        return json.loads(_corners_path(track, variation).read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def save_corner_name(track, variation, apex, name):
+    """Set the name of the corner at this apex (replacing a name within CORNER_MATCH_M); an empty name removes it."""
+    names = [c for c in load_corner_names(track, variation) if abs(c["apex"] - apex) > CORNER_MATCH_M]
+    if name:
+        names.append({"apex": round(apex, 1), "name": name})
+    names.sort(key=lambda c: c["apex"])
+    TRACKS_DIR.mkdir(parents=True, exist_ok=True)
+    p = _corners_path(track, variation)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(names, ensure_ascii=False, indent=1))
+    tmp.replace(p)
+    return names
 
 
 def load_wheels():

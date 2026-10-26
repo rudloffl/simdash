@@ -40,11 +40,45 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
 - **Live**: speed, gear, RPM, position, lap times, fuel; throttle/brake/clutch/steering;
   G-force circle with a 3 s trail; per-wheel slip (spin / lock) and car slip angle;
   a rolling 30 s chart; a track map with every car; standings with approximate gaps.
+  **Corner focus**: pick a corner of your best lap (same track and car, any day) on the track
+  map to zoom on it; each pass shows live speed and pedals over the reference and a row with
+  braking point, entry / minimum / exit speed and time gained or lost.
 - **Sessions**: every recorded session from every day, searchable by track/car and
   filterable by type and day. Per session: laps table (sectors, top speed, fuel),
   lap map coloured by speed / pedals / slip / track limits, lap traces with a second lap
-  overlaid, a delta-time row and a track-limits row (left/right tyres on a kerb or off track), race replay of all cars, results, CSV export, delete.
+  overlaid, a delta-time row and a track-limits row (left/right tyres on a kerb or off track),
+  a corner table (braking point, entry / minimum / exit speed, gear and time gained or lost per
+  corner against the compare lap or the session's best; click a corner to zoom on it),
+  and compare laps from other sessions and days on the same track layout with the same car,
+  corner names and sector lines on the maps and traces, race replay of all cars, results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
+
+## How corners are found
+
+AMS2 gives no corner positions or names, so simdash derives the corners from a lap's speed
+along its lap distance: the analysed lap in **Sessions**, your best lap on that track and car
+(the reference) in **Live**. The code is `findCorners` and `cornerStats` in `simdash/static/app.js`.
+
+- **Corner:** a speed dip of more than 10 km/h. Going along the lap, once the speed has
+  dropped more than 10 km/h below its last peak and then risen more than 10 km/h above its
+  lowest point, that lowest point is a corner's **apex**. Fast kinks taken without slowing
+  are not corners. Corners are numbered C1, C2... in lap order (not the official turn numbers).
+- **Segment:** each corner owns the stretch from the speed peak before it to the speed peak
+  after it. The first starts at the lap start, the last ends at the lap end, so the segments
+  cover the whole lap and their times add up to the lap time. A segment's time therefore
+  includes the straight its exit leads onto.
+- **Braking point:** the first sample after the peak before the corner where the brake is above
+  20 %, at most 600 m before the apex ("lift" if there is none). 20 % because the brake can read
+  6 to 10 % with a foot resting on the pedal.
+- **Entry speed** is the speed at the braking point (at the segment start for a lift),
+  **min speed** the lowest speed in the segment, **exit speed** the speed 100 m after the apex
+  (or at the segment end if sooner), **gear** the lowest gear in the segment.
+- **Comparing laps:** the other lap (compare lap, session best, or each live pass) is measured
+  over the same segment distances. Δ is the difference in segment time; negative means faster.
+- **Names:** corners you name are saved per track layout with their apex distance, and a name
+  goes to the corner whose apex is within 80 m of it.
+- **Sectors:** where sector 2 and 3 start comes from the sector number AMS2 reports while you
+  drive, recorded with every sample.
 
 ## Data source
 
@@ -71,6 +105,7 @@ Offsets of every field in `pcars2_offsets.json` are generated from simapi's `pca
 |---|---|
 | `days/YYYY-MM-DD.sqlite` | one database per day, every shared-memory field in its raw unit (layout below) |
 | `tracks/*.json` | track outline from your best clean lap, used for the live map |
+| `tracks/*.corners.json` | corner names you gave (AMS2 provides none), matched to corners by apex distance |
 | `wheels.json` | learned wheel ratios per car |
 
 A session belongs to the day it started on. A new session starts on a change of

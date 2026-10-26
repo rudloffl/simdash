@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import store
 from .pcars2 import TERRAINS
@@ -29,6 +30,13 @@ KERBS = {"rumble strips", "exit rumble strips", "b1 rumbles", "b2 rumbles", "dra
 TRACK = {"road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road 3", "marbles", "pavement",
          "cobbles", "bumpy cobbles", "damaged road 1", "train track road", "rally tarmac"}
 SURFACE = [0 if t in TRACK else 1 if t in KERBS else 2 for t in TERRAINS]
+
+
+class CornerName(BaseModel):
+    track: str
+    variation: str
+    apex: float
+    name: str = ""
 
 
 def create_app(recorder=None):
@@ -108,13 +116,50 @@ def create_app(recorder=None):
                 "participants": [dict(r) for r in parts], "t0": span[0], "t1": span[1],
                 "live": rec.snapshot().get("session", {}).get("ref") == ref}
 
+    @app.get("/api/corners")
+    def corner_names(track: str, variation: str):
+        return store.load_corner_names(track, variation)
+
+    @app.post("/api/corners")
+    def set_corner_name(c: CornerName):
+        return store.save_corner_name(c.track, c.variation, c.apex, c.name.strip()[:40])
+
+    @app.get("/api/live/reference")
+    def live_reference():
+        """Best lap on the live track layout with the live car, from any session (this one included)."""
+        s = rec.snapshot().get("session") or {}
+        if not s.get("track"):
+            return {}
+        best = store.best_laps(s["track"], s["variation"], s["car"], limit=1)
+        if not best:
+            return {}
+        return {**best[0], "samples": read_lap(best[0]["ref"], best[0]["lap"])}
+
+    @app.get("/api/sessions/{ref}/references")
+    def references(ref: str):
+        """Best laps from other sessions (any day) on the same track layout with the same car, to compare against."""
+        con, sid = open_ref(ref)
+        with con:
+            row = con.execute("SELECT track, variation, car FROM v_sessions WHERE id=?", (sid,)).fetchone()
+        con.close()
+        if row is None:
+            raise HTTPException(404, "no such session")
+        return store.best_laps(row["track"], row["variation"], row["car"], exclude_ref=ref)
+
     @app.get("/api/sessions/{ref}/lap/{lap}")
     def lap_samples(ref: str, lap: int):
+        return read_lap(ref, lap)
+
+    def read_lap(ref, lap):
         """Samples of one completed lap. Lap N is the lap that ended when laps_completed reached N."""
         con, sid = open_ref(ref)
         with con:
             rows = con.execute(f"SELECT {','.join(SAMPLE_COLS)}, tick_id FROM v_samples WHERE session_id=? AND lap=? "
                                "ORDER BY ts", (sid, lap)).fetchall()
+            # lap distance where sector 2 and sector 3 start (mCurrentSector is 0-based)
+            sectors = [r[0] for r in con.execute(
+                "SELECT MIN(e.lap_dist) FROM telemetry e JOIN tick t ON t.id = e.tick_id "
+                "WHERE t.session_id=? AND e.lap=? AND e.sector > 0 GROUP BY e.sector ORDER BY e.sector", (sid, lap))]
             terrain = {}
             if rows:
                 for tick, wheel, t in con.execute("SELECT tick_id, wheel, terrain FROM wheel WHERE tick_id BETWEEN ? AND ?",
@@ -123,12 +168,17 @@ def create_app(recorder=None):
         con.close()
         out = {c: [r[i] for r in rows] for i, c in enumerate(SAMPLE_COLS)}
 
-        # worst surface under the left (fl, rl) and right (fr, rr) tyres
+        # worst surface under the left (fl, rl) and right (fr, rr) tyres: its class (surf_*) and
+        # its raw AMS2 terrain code (terr_*, names in "terrains"), the front tyre's on a tie
         def side(tick, wheels):
-            cls = [SURFACE[t] for w in wheels if (t := terrain.get(tick, [None] * 4)[w]) is not None and 0 <= t < len(SURFACE)]
-            return max(cls) if cls else None
-        out["surf_l"] = [side(r["tick_id"], (0, 2)) for r in rows]
-        out["surf_r"] = [side(r["tick_id"], (1, 3)) for r in rows]
+            codes = [t for w in wheels if (t := terrain.get(tick, [None] * 4)[w]) is not None and 0 <= t < len(SURFACE)]
+            return max(codes, key=lambda t: SURFACE[t]) if codes else None
+        for name, wheels in (("l", (0, 2)), ("r", (1, 3))):
+            raw = [side(r["tick_id"], wheels) for r in rows]
+            out["terr_" + name] = raw
+            out["surf_" + name] = [None if t is None else SURFACE[t] for t in raw]
+        out["terrains"] = TERRAINS
+        out["sectors"] = sectors
         return out
 
     @app.get("/api/sessions/{ref}/path")

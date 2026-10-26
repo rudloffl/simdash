@@ -260,7 +260,11 @@ class Recorder(threading.Thread):
                          round(snap["brake"], 3), round(snap["steering"], 3), round(der["g_lat"], 3),
                          round(der["g_long"], 3), round(der["slip_angle"], 2),
                          round(max(slips), 3) if slips else None,
-                         round(min(slips), 3) if slips else None]
+                         round(min(slips), 3) if slips else None,
+                         # for the live corner focus: which lap, where on it, and lap time so far
+                         player["laps_completed"], round(player["lap_dist"], 1),
+                         round(snap["current_time"], 3), snap["gear"],
+                         round(player["x"], 1), round(player["z"], 1)]
 
         self.set_live(self.build_live(snap, player, der, slips, gs), trace_row)
         return True
