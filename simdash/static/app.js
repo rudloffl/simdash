@@ -55,6 +55,7 @@ function showTab(name) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "history") loadSessions();
   if (name === "shakers" && !sh.dirty) loadShakers();
+  if (name === "system") { loadSystem(); loadSystemLog(); }
   else if (location.hash) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -1699,8 +1700,149 @@ $("#sh-save").onclick = async () => {
 };
 addEventListener("beforeunload", (ev) => { if (sh.dirty) ev.preventDefault(); });
 
+// ---------- system: telemetry chain status and restarts ----------
+const sys = { data: null, busy: null, timer: null };
+const fmtAge = (since, now) => {
+  if (!since) return "–";
+  const s = Math.max(0, Math.round(now - since));
+  return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+};
+
+// [state, short text, hint when broken] for each link, from the server's raw status
+function chainStates(d) {
+  const on = d.ams2.running;
+  const shmLive = ["recording", "paused", "idle"].includes(d.shm.status);
+  const st = {};
+  st.ams2 = on ? ["ok", d.busy.ams2 || "running"] : [d.busy.ams2 ? "warn" : "off", d.busy.ams2 || "not running"];
+  st.bridge = !on ? ["off", "–"] : d.bridge.running ? ["ok", "running"]
+    : ["bad", "not running", "The bridge is not running: Restart AMS2 (simd starts it when AMS2 launches)."];
+  st.shm = shmLive ? ["ok", { recording: "on track", paused: "paused", idle: "in menus" }[d.shm.status]]
+    : !on ? ["off", d.shm.exists ? "left over" : "none"]
+    : ["bad", "no data", "No AMS2 data: AMS2 Options > System > Shared Memory must be Project CARS 2, then Restart AMS2."];
+  st.simd = d.simd.state !== "active" ? ["bad", d.simd.state, "simd is not running: Restart simd."]
+    : d.simd.check === "live" ? ["ok", "live"]
+    : on && shmLive ? ["bad", "sees no game", "simd does not see AMS2 (it stops finding it after a few restarts): Restart AMS2, or Restart simd."]
+    : ["ok", "waiting for a game"];
+  st.monocoque = d.monocoque.running ? ["ok", "running"]
+    : on ? ["warn", "not running", "monocoque is not running, so no vibration: Restart monocoque."] : ["off", "not running"];
+  st.card = d.card.connected ? ["ok", "connected"] : ["bad", "not connected", "The shaker sound card is unplugged: plug the USB 7.1 card in."];
+  st.crewchief = d.crewchief.running ? (d.crewchief.listening ? ["ok", "listening"] : ["warn", "starting"])
+    : on ? ["warn", "not running"] : ["off", "not running"];
+  return st;
+}
+
+function dl(rows) {
+  return rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+}
+const stDot = ([s]) => `<span class="dot st-${s}"></span>`;
+
+function renderSystem() {
+  const d = sys.data;
+  if (!d) return;
+  const st = chainStates(d);
+  const chain = [["ams2", "AMS2"], ["bridge", "Bridge"], ["shm", "$pcars2$"], ["simd", "simd"], ["monocoque", "monocoque"], ["card", "Shaker card"]];
+  $("#sys-chain").innerHTML = chain.map(([k, n], i) =>
+    `${i ? '<span class="arrow">→</span>' : ""}<div class="node st-${st[k][0]}"><div class="n">${stDot(st[k])}${n}</div><div class="s">${esc(st[k][1])}</div></div>`).join("");
+  const hints = chain.map(([k]) => st[k][2]).filter(Boolean);
+  $("#sys-hint").innerHTML = hints.length ? `<span class="bad">${esc(hints[0])}</span>` : d.ams2.running ? "All links up." : "AMS2 is not running. Start session launches everything.";
+  const worst = Object.values(st).some((x) => x[0] === "bad") ? "bad" : Object.values(st).some((x) => x[0] === "warn") ? "warn" : "";
+  $("#sys-dot").className = "nav-dot " + worst;
+  $("#sys-updated").textContent = "updated " + new Date(d.now * 1000).toLocaleTimeString();
+
+  const card = (c, s) => document.querySelector(`.sys-card[data-c="${c}"] h3`).className = "st-" + s[0];
+  card("ams2", st.ams2);
+  card("simd", st.simd);
+  card("monocoque", st.monocoque);
+  $("#sys-ams2-state").textContent = st.ams2[1];
+  $("#sys-simd-state").textContent = st.simd[1];
+  $("#sys-mono-state").textContent = st.monocoque[1];
+
+  $("#sys-ams2").innerHTML = dl([
+    ["Process", d.ams2.pid ? `pid ${d.ams2.pid}, up ${fmtAge(d.ams2.since, d.now)}` : "–"],
+    ["Bridge", `${stDot(st.bridge)} ${st.bridge[1]}`],
+    ["Shared memory", `${stDot(st.shm)} ${esc(st.shm[1])}`],
+    d.shm.track && ["Session", `${esc(d.shm.track)} · ${esc(d.shm.car || "")}`],
+  ]);
+  const sa = d.simd.simapi || {};
+  $("#sys-simd").innerHTML = dl([
+    ["Service", `${esc(d.simd.state)}${d.simd.pid ? `, pid ${d.simd.pid}, up ${fmtAge(d.simd.since, d.now)}` : ""}`],
+    ["Telemetry", `${stDot(st.simd)} ${esc(d.simd.check)}${sa["data age"] && sa["data age"] !== "-1 ms" ? ` (data age ${esc(sa["data age"])})` : ""}`],
+    sa.car && ["Car", esc(sa.car)],
+    sa.track && ["Track", esc(sa.track)],
+  ]);
+  $("#sys-mono").innerHTML = dl([
+    ["Process", d.monocoque.pid ? `pid ${d.monocoque.pid}, up ${fmtAge(d.monocoque.since, d.now)}` : "–"],
+    ["Last log", `<span class="muted">${esc((d.monocoque.log || []).slice(-1)[0] || "–")}</span>`],
+  ]);
+  $("#sys-others").innerHTML = dl([
+    ["CrewChief", `${stDot(st.crewchief)} ${st.crewchief[1]}${d.crewchief.running ? (d.crewchief.listening ? " (UDP 5606)" : "") : ""}`],
+    ["Shaker card", `${stDot(st.card)} ${esc(d.card.description || d.card.devid || "none chosen")}`],
+    ["start-race", d.session ? '<span class="dot st-ok"></span> session running' : '<span class="dot st-off"></span> no session'],
+  ]);
+  $("#sys-actions").innerHTML = (d.actions || []).map((a) =>
+    `<li><span class="t">${new Date(a.t * 1000).toLocaleTimeString()}</span>${esc(a.text)}</li>`).join("") || '<li class="muted">None yet</li>';
+
+  // buttons that make no sense in the current state
+  const can = {
+    "ams2/start": !d.ams2.running && !d.session && !d.busy.ams2,
+    "ams2/restart": !d.busy.ams2,
+    "ams2/quit": d.ams2.running && !d.busy.ams2,
+    "simd/restart": true,
+    "monocoque/restart": true,
+    "monocoque/stop": d.monocoque.running,
+  };
+  document.querySelectorAll("#tab-system [data-act]").forEach((b) => {
+    b.disabled = sys.busy === b.dataset.act || !can[b.dataset.act];
+    b.classList.toggle("busy", sys.busy === b.dataset.act || (b.dataset.act.startsWith("ams2/") && !!d.busy.ams2));
+  });
+}
+
+async function loadSystem() {
+  try {
+    const r = await fetch("/api/system");
+    if (r.ok) sys.data = await r.json();
+  } catch { /* simdash restarting */ }
+  renderSystem();
+}
+
+async function loadSystemLog() {
+  const r = await fetch(`/api/system/log/${$("#sys-log").value}`);
+  if (!r.ok) return;
+  const box = $("#sys-logbox");
+  const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  box.textContent = (await r.json()).lines.join("\n") || "(empty)";
+  if (atEnd) box.scrollTop = box.scrollHeight;
+}
+
+document.querySelectorAll("#tab-system [data-act]").forEach((b) => (b.onclick = async () => {
+  if (b.dataset.confirm && sys.data?.ams2.running && !confirm(b.dataset.confirm)) return;
+  sys.busy = b.dataset.act;
+  renderSystem();
+  try {
+    const r = await fetch(`/api/system/${b.dataset.act}`, { method: "POST" });
+    const d = await r.json();
+    if (r.ok) sys.data = d;
+    else alert(d.detail || "Failed");
+  } finally {
+    sys.busy = null;
+    renderSystem();
+    loadSystemLog();
+  }
+}));
+$("#sys-log").onchange = loadSystemLog;
+
+// refresh every 2 s on the System tab, every 15 s elsewhere for the tab's warning dot
+setInterval(() => {
+  if (currentTab === "system") {
+    loadSystem();
+    loadSystemLog();
+  }
+}, 2000);
+setInterval(() => { if (currentTab !== "system") loadSystem(); }, 15000);
+loadSystem();
+
 // ---------- start ----------
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
-else if (location.hash === "#shakers") showTab("shakers");
+else if (location.hash === "#shakers" || location.hash === "#system") showTab(location.hash.slice(1));

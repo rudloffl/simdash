@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import shakers, store
+from . import shakers, store, system
 from .pcars2 import TERRAINS
 from .recorder import Recorder
 
@@ -302,5 +302,28 @@ def create_app(recorder=None):
     def stop_shaker():
         shakers.stop()
         return {}
+
+    # ---- system: telemetry chain status and restarts ----
+
+    @app.get("/api/system")
+    async def system_status():
+        return await asyncio.to_thread(system.status, rec.snapshot())
+
+    @app.get("/api/system/log/{name}")
+    def system_log(name: str):
+        if name not in system.LOGS:
+            raise HTTPException(404, "no such log")
+        return {"lines": system._tail(system.LOGS[name], 40)}
+
+    @app.post("/api/system/{component}/{action}")
+    async def system_action(component: str, action: str):
+        fn = system.ACTIONS.get(f"{component}/{action}")
+        if fn is None:
+            raise HTTPException(404, "no such action")
+        try:
+            await asyncio.to_thread(fn)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return await asyncio.to_thread(system.status, rec.snapshot())
 
     return app

@@ -311,3 +311,31 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .wheel-chips .chip { padding: 2px 0; width: 34px; font-size: 12px; font-weight: 600; text-transform: none; color: var(--muted); }
 .wheel-chips .chip.on { background: var(--c); border-color: var(--c); color: #fff; }
 .fx-hint .warn { color: var(--critical); }
+
+/* ---- system ---- */
+:root { --st-ok: var(--good); --st-warn: var(--warning); --st-bad: var(--critical); --st-off: var(--muted); }
+.nav-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 4px; vertical-align: middle; background: transparent; }
+.nav-dot.bad { background: var(--st-bad); }
+.nav-dot.warn { background: var(--st-warn); }
+.chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; }
+.chain .node { flex: 1 1 120px; min-width: 110px; border: 1px solid var(--border); border-top: 3px solid var(--st); border-radius: 8px; padding: 6px 8px; background: var(--surface-2); }
+.chain .node .n { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.chain .node .s { font-size: 12px; color: var(--text-2); }
+.chain .arrow { align-self: center; color: var(--muted); padding: 0 4px; }
+.chain-hint { margin-top: 8px; font-size: 13px; }
+.chain-hint .bad { color: var(--st-bad); font-weight: 600; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--st, var(--st-off)); flex: none; }
+.st-ok { --st: var(--st-ok); } .st-warn { --st: var(--st-warn); } .st-bad { --st: var(--st-bad); } .st-off { --st: var(--st-off); }
+.sys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 12px 0; }
+.sys-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0 0 10px; font-size: 13px; }
+.sys-card dt { color: var(--muted); }
+.sys-card dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sys-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.sys-btns button:disabled { opacity: 0.45; cursor: default; }
+.sys-btns button.busy { animation: pulse 1.2s infinite; }
+.sys-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.sub-h { margin-top: 12px !important; }
+.sys-actions { list-style: none; margin: 0; padding: 0; font-size: 13px; max-height: 150px; overflow-y: auto; }
+.sys-actions li { padding: 2px 0; border-bottom: 1px solid var(--grid); }
+.sys-actions .t { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.sys-logbox { margin: 0; max-height: 300px; overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -13,6 +13,7 @@
     <button data-tab="live" class="active">Live</button>
     <button data-tab="history">Sessions</button>
     <button data-tab="shakers">Shakers</button>
+    <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
 </header>
@@ -244,6 +245,54 @@
         Saving keeps a dated backup of <span class="num" id="sh-path"></span>.
       </div>
     </div>
+  </div>
+</section>
+
+<section id="tab-system" class="tab">
+  <div class="card">
+    <h3>Telemetry chain <span class="right muted" id="sys-updated"></span></h3>
+    <div class="chain" id="sys-chain"></div>
+    <div class="chain-hint" id="sys-hint"></div>
+  </div>
+  <div class="sys-grid">
+    <div class="card sys-card" data-c="ams2">
+      <h3><span class="dot"></span>AMS2 <span class="right muted" id="sys-ams2-state"></span></h3>
+      <dl id="sys-ams2"></dl>
+      <div class="sys-btns">
+        <button data-act="ams2/start">Start session</button>
+        <button data-act="ams2/restart" data-confirm="Close AMS2 and start a new session (simd, CrewChief, AMS2, monocoque)? A race in progress ends.">Restart AMS2</button>
+        <button data-act="ams2/quit" data-confirm="Close AMS2? A race in progress ends.">Quit AMS2</button>
+      </div>
+      <div class="sys-note">Start and Restart go through <span class="num">start-race</span>, which also gives a fresh simd, CrewChief and monocoque, and stops them when AMS2 exits.</div>
+    </div>
+    <div class="card sys-card" data-c="simd">
+      <h3><span class="dot"></span>simd (simapi) <span class="right muted" id="sys-simd-state"></span></h3>
+      <dl id="sys-simd"></dl>
+      <div class="sys-btns"><button data-act="simd/restart">Restart simd</button></div>
+      <div class="sys-note">Fixes “simd sees no game”. simd starts the bridge when it spots AMS2 starting, so with AMS2 already running a full AMS2 restart is the surer fix.</div>
+    </div>
+    <div class="card sys-card" data-c="monocoque">
+      <h3><span class="dot"></span>monocoque (shakers) <span class="right muted" id="sys-mono-state"></span></h3>
+      <dl id="sys-mono"></dl>
+      <div class="sys-btns">
+        <button data-act="monocoque/restart">Restart monocoque</button>
+        <button data-act="monocoque/stop">Stop</button>
+      </div>
+      <div class="sys-note">Restart after saving in Shakers to apply new settings now.</div>
+    </div>
+    <div class="card sys-card" data-c="others">
+      <h3>CrewChief, shaker card, session</h3>
+      <dl id="sys-others"></dl>
+      <h3 class="sub-h">Recent actions</h3>
+      <ul class="sys-actions" id="sys-actions"></ul>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Log <span class="right"><select id="sys-log">
+      <option value="monocoque">monocoque</option><option value="start-race">start-race</option>
+      <option value="crewchief">CrewChief</option><option value="simdash">simdash</option>
+    </select></span></h3>
+    <pre class="sys-logbox" id="sys-logbox"></pre>
   </div>
 </section>
 </main>
