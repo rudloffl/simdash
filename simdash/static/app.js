@@ -54,6 +54,7 @@ function showTab(name) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "history") loadSessions();
+  if (name === "shakers" && !sh.dirty) loadShakers();
   else if (location.hash) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -1328,7 +1329,316 @@ $("#d-delete").onclick = async () => {
   loadSessions();
 };
 
+// ---------- shakers (monocoque Sound effects) ----------
+const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle" };
+const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension" };
+const FX_DEFAULTS = {
+  Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
+  Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
+  TyreSlip: { tyre: "All", threshold: 0.3, modulation: "amplify", frequency: 32, amplitude: 50, amplitudeMax: 95 },
+  TyreLock: { tyre: "All", threshold: 0.3, modulation: "amplify", frequency: 40, amplitude: 50, amplitudeMax: 95 },
+  ABS: { tyre: "All", threshold: 0.3, modulation: "none", frequency: 45, amplitude: 70 },
+  Suspension: { tyre: "All", threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
+};
+// AMS2 field audit (AMS2-TELEMETRY-FIELDS.md)
+const FX_HINT = {
+  Engine: "Pitch follows the RPM. The BST1 is weak below about 25 Hz.",
+  Gear: "One kick per gear change.",
+  TyreSlip: "AMS2: needs the tyre diameters monocoque learns per car.",
+  TyreLock: "AMS2: needs the tyre diameters monocoque learns per car.",
+  ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
+  Suspension: "AMS2: not mapped by simapi, gives no vibration.",
+};
+const SPOT_XY = { seat: [120, 240], "seat-back": [120, 274], pedals: [120, 166], "front-left": [29, 95], "front-right": [211, 95], "rear-left": [29, 344], "rear-right": [211, 344] };
+const SPOT_NAME = { none: "Not connected", seat: "Seat", "seat-back": "Seat back", pedals: "Pedals", "front-left": "Front left", "front-right": "Front right", "rear-left": "Rear left", "rear-right": "Rear right" };
+const TYRE_SET = { All: ["FrontLeft", "FrontRight", "RearLeft", "RearRight"], Fronts: ["FrontLeft", "FrontRight"], Rears: ["RearLeft", "RearRight"] };
+const sh = { loaded: null, effects: [], devid: "", layout: {}, sinks: [], opts: null, running: false, dirty: false, sel: null, playing: null };
+
+async function loadShakers() {
+  const r = await fetch("/api/shakers");
+  const d = await r.json();
+  if (!r.ok) { $("#sh-note").textContent = d.detail || "Cannot read monocoque.config"; return; }
+  sh.loaded = d;
+  sh.effects = structuredClone(d.effects);
+  sh.devid = d.devid;
+  sh.layout = d.layout;
+  sh.sinks = d.sinks;
+  sh.opts = d.options;
+  sh.running = d.running;
+  sh.dirty = false;
+  $("#sh-path").textContent = d.path;
+  renderShakers();
+}
+
+function chName(ch) {
+  const l = sh.layout[ch];
+  return `${ch} · ${sh.opts.channels[ch]}` + (l ? ` · ${l.label || SPOT_NAME[l.spot]}` : "");
+}
+const cardConnected = () => sh.sinks.some((s) => s.name === sh.devid);
+
+function renderShakers() {
+  renderSinks();
+  renderCar();
+  renderChannels();
+  renderEffects();
+  renderShakerState();
+}
+
+function renderShakerState() {
+  $("#sh-save").disabled = !sh.dirty;
+  $("#sh-revert").disabled = !sh.dirty;
+  const ok = cardConnected();
+  const st = $("#sh-card-state");
+  st.textContent = !sh.devid ? "none chosen" : ok ? "connected" : "not connected";
+  st.className = "pill " + (ok ? "ok" : "bad");
+  $("#sh-note").textContent = sh.dirty ? "Unsaved changes" : sh.running ? "monocoque is running: saved changes apply from the next session" : "";
+}
+
+function renderSinks() {
+  const opts = sh.sinks.map((s) => `<option value="${esc(s.name)}">${esc(s.description)}${s.channels < 8 ? ` (${s.channels} ch)` : ""}</option>`);
+  if (sh.devid && !cardConnected()) opts.unshift(`<option value="${esc(sh.devid)}">${esc(sh.devid.replace(/^alsa_output\./, ""))} (not connected)</option>`);
+  if (!sh.devid) opts.unshift(`<option value="">Choose the shaker sound card…</option>`);
+  $("#sh-sink").innerHTML = opts.join("");
+  $("#sh-sink").value = sh.devid;
+}
+
+function effectsOn(ch) { return sh.effects.map((e, i) => ({ e, i })).filter(({ e }) => e.pan === ch); }
+
+function renderCar() {
+  const used = Object.keys(sh.layout).map(Number).sort((a, b) => a - b);
+  const bySpot = {};
+  used.forEach((ch) => (bySpot[sh.layout[ch].spot] ??= []).push(ch));
+  let html = "";
+  for (const [spot, chs] of Object.entries(bySpot)) {
+    const [x0, y] = SPOT_XY[spot] || [120, 220];
+    chs.forEach((ch, k) => {
+      const x = x0 + (k - (chs.length - 1) / 2) * 34;
+      const fx = effectsOn(ch);
+      const n = fx.length;
+      const halos = fx.map(({ e }, j) => {
+        // one arc per effect around the shaker
+        const r = 19, a0 = (j / n) * 2 * Math.PI - Math.PI / 2, a1 = ((j + 1) / n) * 2 * Math.PI - Math.PI / 2 - (n > 1 ? 0.25 : 0);
+        if (n === 1) return `<circle class="halo" r="${r}" style="stroke:var(${FX_COLOUR[e.effect]})"/>`;
+        return `<path class="halo" d="M${r * Math.cos(a0)} ${r * Math.sin(a0)} A${r} ${r} 0 0 1 ${r * Math.cos(a1)} ${r * Math.sin(a1)}" style="stroke:var(${FX_COLOUR[e.effect]})"/>`;
+      }).join("");
+      const lbl = sh.layout[ch].label || SPOT_NAME[spot];
+      html += `<g class="spot${sh.sel === ch ? " sel" : ""}${sh.playing === ch ? " playing" : ""}" data-ch="${ch}" transform="translate(${x} ${y})">
+        <title>${esc(chName(ch))}: ${n ? fx.map(({ e }) => FX_NAME[e.effect]).join(", ") : "no effect"}. Click to identify.</title>
+        ${halos}<circle class="base" r="14"/><text>${sh.opts.channels[ch]}</text>
+        <text class="lbl" y="${spot.startsWith("front") || spot.startsWith("rear") ? 46 : 30}">${esc(lbl)}</text></g>`;
+    });
+  }
+  if (!used.length) html = `<text x="120" y="230" text-anchor="middle" style="fill:var(--muted);font-size:12px">Place a shaker with the table below</text>`;
+  $("#sh-spots").innerHTML = html;
+  $("#sh-spots").querySelectorAll(".spot").forEach((g) => (g.onclick = () => {
+    selectChannel(+g.dataset.ch);
+    shakerTest({ pan: +g.dataset.ch }, "identify");
+  }));
+  const kinds = [...new Set(sh.effects.map((e) => e.effect))];
+  $("#sh-legend").innerHTML = kinds.map((k) => `<span style="--c:var(${FX_COLOUR[k]})">${FX_NAME[k]}</span>`).join("");
+}
+
+function selectChannel(ch) {
+  sh.sel = sh.sel === ch ? null : ch;
+  renderCar();
+  renderChannels();
+}
+
+function renderChannels() {
+  $("#sh-channels tbody").innerHTML = sh.opts.channels.map((short, ch) => {
+    const l = sh.layout[ch] || { spot: "none", label: "" };
+    const fx = effectsOn(ch).map(({ e }) => `<span title="${FX_NAME[e.effect]}"><span class="fx-dot" style="--c:var(${FX_COLOUR[e.effect]})"></span></span>`).join("");
+    return `<tr data-ch="${ch}" class="${sh.sel === ch ? "sel" : ""}">
+      <td class="num">${ch} · ${short}</td>
+      <td><select data-k="spot">${sh.opts.spots.map((s) => `<option value="${s}"${s === l.spot ? " selected" : ""}>${SPOT_NAME[s]}</option>`).join("")}</select></td>
+      <td><input data-k="label" value="${esc(l.label)}" placeholder="${l.spot === "none" ? "" : "e.g. BST1"}" maxlength="24"></td>
+      <td class="fx">${fx || (l.spot !== "none" ? '<span class="muted">none</span>' : "")}</td>
+      <td><button data-k="identify" title="Three 40 Hz pulses on this channel">Identify</button></td></tr>`;
+  }).join("");
+  $("#sh-channels tbody").querySelectorAll("tr").forEach((tr) => {
+    const ch = +tr.dataset.ch;
+    tr.querySelector('[data-k="identify"]').onclick = () => shakerTest({ pan: ch }, "identify");
+    tr.querySelector('[data-k="spot"]').onchange = (ev) => updateLayout(ch, { spot: ev.target.value });
+    tr.querySelector('[data-k="label"]').onchange = (ev) => updateLayout(ch, { label: ev.target.value.trim() });
+  });
+}
+
+async function updateLayout(ch, patch) {
+  const cur = sh.layout[ch] || { spot: "none", label: "" };
+  const next = { ...cur, ...patch };
+  if (next.spot === "none") delete sh.layout[ch];
+  else sh.layout[ch] = next;
+  const r = await fetch("/api/shakers/layout", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sh.layout) });
+  if (r.ok) sh.layout = await r.json();
+  renderCar();
+  renderChannels();
+  renderEffects();
+}
+
+const FIELD_DEFAULT = { noise: 0, amplitude: 50, volume: 100, threshold: 0 };  // monocoque's when a key is missing
+function fxField(e, i, key, label, min, max, step, unit = "") {
+  const v = e[key] ?? FIELD_DEFAULT[key] ?? "";
+  return `<label>${label}${unit ? ` (${unit})` : ""}<span class="row">
+    <input type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-k="${key}" data-i="${i}">
+    <input type="number" min="${min}" max="${max}" step="${step}" value="${v}" data-k="${key}" data-i="${i}"></span></label>`;
+}
+
+function renderEffects() {
+  const o = sh.opts;
+  if (!sh.effects.length) {
+    $("#sh-effects").innerHTML = `<div class="empty">No effect yet. Add one, then save.</div>`;
+    return;
+  }
+  $("#sh-effects").innerHTML = sh.effects.map((e, i) => {
+    const wheel = o.wheel_effects.includes(e.effect);
+    const mod = e.modulation || "none";
+    let f = "";
+    if (wheel) f += `<label>Tyre<select data-k="tyre" data-i="${i}">${o.tyres.map((t) => `<option${t === (e.tyre || "All") ? " selected" : ""}>${t}</option>`).join("")}</select></label>`;
+    if (e.effect !== "Gear") f += `<label>Modulation<select data-k="modulation" data-i="${i}">${o.modulations.map((m) => `<option value="${m}"${m === mod ? " selected" : ""}>${{ none: "None (constant)", frequency: "Pitch (frequency)", amplify: "Strength (amplitude)" }[m]}</option>`).join("")}</select></label>`;
+    f += fxField(e, i, "volume", "Volume", 0, 100, 1, "%");
+    f += fxField(e, i, "frequency", mod === "frequency" ? "Frequency min" : "Frequency", 5, 120, 1, "Hz");
+    if (mod === "frequency") f += fxField(e, i, "frequencyMax", "Frequency max", 5, 120, 1, "Hz");
+    f += fxField(e, i, "amplitude", mod === "amplify" ? "Strength min" : "Strength", 0, 100, 1, "%");
+    if (mod === "amplify") f += fxField(e, i, "amplitudeMax", "Strength max", 0, 100, 1, "%");
+    if (e.effect === "Gear") f += fxField(e, i, "duration", "Duration", 0.05, 1, 0.05, "s");
+    if (wheel) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
+    f += fxField(e, i, "noise", "Roughness", 0, 20, 1, "Hz");
+    const chOpts = o.channels.map((_, ch) => `<option value="${ch}"${ch === e.pan ? " selected" : ""}>${esc(chName(ch))}</option>`).join("");
+    return `<div class="fx" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
+      <div class="fx-head">
+        <select data-k="effect" data-i="${i}">${o.effects.map((x) => `<option value="${x}"${x === e.effect ? " selected" : ""}>${FX_NAME[x]}</option>`).join("")}</select>
+        <span class="muted">on</span>
+        <select data-k="pan" data-i="${i}" title="Shaker (sound card channel)">${chOpts}</select>
+        <span class="grow"></span>
+        <button class="test" data-act="test" data-i="${i}">Test</button>
+        <button class="del" data-act="del" data-i="${i}" title="Remove this effect">Remove</button>
+      </div>
+      <div class="fx-fields">${f}</div>
+      <div class="fx-hint">${FX_HINT[e.effect] || ""}</div></div>`;
+  }).join("");
+
+  const box = $("#sh-effects");
+  box.querySelectorAll("[data-k]").forEach((el) => {
+    el.oninput = el.onchange = (ev) => onEffectInput(ev);
+  });
+  box.querySelectorAll("[data-act=test]").forEach((b) => (b.onclick = () => shakerTest(sh.effects[+b.dataset.i])));
+  box.querySelectorAll("[data-act=del]").forEach((b) => (b.onclick = () => {
+    sh.effects.splice(+b.dataset.i, 1);
+    markShakersDirty(true);
+  }));
+  box.querySelectorAll(".fx").forEach((card) => {
+    card.onmouseenter = () => highlightTyres(sh.effects[+card.dataset.i], card);
+    card.onmouseleave = () => highlightTyres(null, card);
+  });
+}
+
+function onEffectInput(ev) {
+  const el = ev.target, i = +el.dataset.i, k = el.dataset.k, e = sh.effects[i];
+  if (k === "effect") {
+    // keep the shaker and volume, take the new effect's starting values
+    sh.effects[i] = { device: "Sound", effect: el.value, pan: e.pan, volume: e.volume ?? 100, fps: e.fps ?? 60, ...FX_DEFAULTS[el.value] };
+    markShakersDirty(true);
+    return;
+  }
+  if (["tyre", "modulation"].includes(k)) {
+    e[k] = el.value;
+    if (k === "modulation" && el.value === "frequency" && !(e.frequencyMax >= e.frequency)) e.frequencyMax = e.frequency * 2;
+    if (k === "modulation" && el.value === "amplify" && e.amplitudeMax == null) e.amplitudeMax = Math.min(100, e.amplitude + 40);
+    markShakersDirty(true);
+    if (k === "tyre") highlightTyres(e, el.closest(".fx"));
+    return;
+  }
+  if (k === "pan") {
+    e.pan = +el.value;
+    markShakersDirty(false);
+    renderCar();
+    renderChannels();
+    return;
+  }
+  if (el.value === "") return;
+  e[k] = +el.value;
+  // keep the slider and the number box of this field in step
+  el.closest(".row").querySelectorAll("input").forEach((x) => { if (x !== el) x.value = el.value; });
+  if (k === "frequency" && e.modulation === "frequency" && e.frequencyMax < e.frequency) e.frequencyMax = e.frequency;
+  markShakersDirty(false);
+}
+
+function markShakersDirty(rerender) {
+  sh.dirty = true;
+  if (rerender) {
+    renderEffects();
+    renderCar();
+    renderChannels();
+  }
+  renderShakerState();
+}
+
+function highlightTyres(e, card) {
+  card?.classList.toggle("hover", !!e);
+  const on = e && sh.opts.wheel_effects.includes(e.effect) ? TYRE_SET[e.tyre || "All"] || [e.tyre] : [];
+  document.querySelectorAll("#sh-car .tyre-r").forEach((t) => {
+    t.classList.toggle("hl", on.includes(t.dataset.tyre));
+    t.style.setProperty("--hl", e ? `var(${FX_COLOUR[e.effect]})` : "");
+  });
+}
+
+let shPlayTimer = null;
+async function shakerTest(effect, mode = "effect") {
+  const r = await fetch("/api/shakers/test", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ devid: sh.devid, effect, mode }),
+  });
+  const d = await r.json();
+  if (!r.ok) {
+    $("#sh-note").textContent = d.detail === "the shaker sound card is not connected"
+      ? "Test not played: the shaker sound card is not connected (plug it in, then pick it in Sound card)" : d.detail || "Test failed";
+    return;
+  }
+  sh.playing = effect.pan;
+  renderCar();
+  clearTimeout(shPlayTimer);
+  shPlayTimer = setTimeout(() => { sh.playing = null; renderCar(); }, d.seconds * 1000);
+}
+
+// pick up a card plugged in since the tab was opened
+$("#sh-sink").onfocus = async () => {
+  const r = await fetch("/api/shakers");
+  if (!r.ok) return;
+  sh.sinks = (await r.json()).sinks;
+  renderSinks();
+  renderShakerState();
+};
+$("#sh-sink").onchange = (ev) => {
+  sh.devid = ev.target.value;
+  markShakersDirty(false);
+  renderSinks();
+};
+$("#sh-stop").onclick = async () => {
+  await fetch("/api/shakers/stop", { method: "POST" });
+  clearTimeout(shPlayTimer);
+  sh.playing = null;
+  renderCar();
+};
+$("#sh-revert").onclick = () => loadShakers();
+$("#sh-add").onclick = () => {
+  const pan = sh.sel ?? +(Object.keys(sh.layout)[0] ?? 0);
+  sh.effects.push({ device: "Sound", effect: "Engine", pan, volume: 100, fps: 60, ...FX_DEFAULTS.Engine });
+  markShakersDirty(true);
+};
+$("#sh-save").onclick = async () => {
+  const r = await fetch("/api/shakers", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ devid: sh.devid, effects: sh.effects }),
+  });
+  const d = await r.json();
+  if (!r.ok) { $("#sh-note").textContent = d.detail || "Save failed"; return; }
+  await loadShakers();
+  $("#sh-note").textContent = d.running ? "Saved. monocoque is running: the change applies from the next session." : "Saved.";
+};
+addEventListener("beforeunload", (ev) => { if (sh.dirty) ev.preventDefault(); });
+
 // ---------- start ----------
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
+else if (location.hash === "#shakers") showTab("shakers");

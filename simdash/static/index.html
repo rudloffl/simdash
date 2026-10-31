@@ -12,6 +12,7 @@
   <nav>
     <button data-tab="live" class="active">Live</button>
     <button data-tab="history">Sessions</button>
+    <button data-tab="shakers">Shakers</button>
   </nav>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
 </header>
@@ -191,6 +192,56 @@
             <th class="r">P</th><th>Driver</th><th>Car</th><th class="r">Laps</th><th class="r">Best</th><th>State</th>
           </tr></thead><tbody></tbody></table>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-shakers" class="tab">
+  <div class="filters shaker-bar">
+    <label class="muted" for="sh-sink">Sound card</label>
+    <select id="sh-sink"></select>
+    <span id="sh-card-state" class="pill"></span>
+    <span class="muted" id="sh-note"></span>
+    <span class="sh-actions">
+      <button id="sh-stop" title="Stop the test vibration">Stop test</button>
+      <button id="sh-revert">Revert</button>
+      <button id="sh-save" class="primary">Save to monocoque</button>
+    </span>
+  </div>
+  <div class="shaker-grid">
+    <div class="card">
+      <h3>Shakers on the car <span class="right muted">click a shaker to test it</span></h3>
+      <svg id="sh-car" viewBox="0 0 240 440" role="img" aria-label="Car seen from above with the shaker positions">
+        <g class="car-body">
+          <rect class="tyre-r" data-tyre="FrontLeft" x="14" y="66" width="30" height="58" rx="7"/>
+          <rect class="tyre-r" data-tyre="FrontRight" x="196" y="66" width="30" height="58" rx="7"/>
+          <rect class="tyre-r" data-tyre="RearLeft" x="12" y="312" width="34" height="64" rx="7"/>
+          <rect class="tyre-r" data-tyre="RearRight" x="194" y="312" width="34" height="64" rx="7"/>
+          <path class="body" d="M120 14 C 82 14 58 26 50 52 L 42 120 C 40 140 46 160 50 175 L 50 290 C 44 310 40 330 42 360 L 46 400 C 48 418 70 426 120 426 C 170 426 192 418 194 400 L 198 360 C 200 330 196 310 190 290 L 190 175 C 194 160 200 140 198 120 L 190 52 C 182 26 158 14 120 14 Z"/>
+          <path class="glass" d="M76 150 C 92 140 148 140 164 150 L 156 196 C 140 190 100 190 84 196 Z"/>
+          <path class="roof" d="M84 200 C 100 194 140 194 156 200 L 158 282 C 140 288 100 288 82 282 Z"/>
+          <path class="glass" d="M84 290 C 100 296 140 296 156 290 L 160 324 C 140 330 100 330 80 324 Z"/>
+          <rect class="wing" x="52" y="398" width="136" height="14" rx="4"/>
+          <path class="line" d="M96 30 C 104 60 136 60 144 30"/>
+        </g>
+        <g id="sh-spots"></g>
+      </svg>
+      <div class="sh-legend" id="sh-legend"></div>
+      <div class="table-wrap">
+        <table id="sh-channels"><thead><tr>
+          <th>Channel</th><th>Where</th><th>Name</th><th>Effects</th><th></th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Effects <span class="right"><button id="sh-add">Add effect</button></span></h3>
+      <div id="sh-effects"></div>
+      <div class="muted sh-help">
+        monocoque reads these settings when it starts, so a saved change applies from the next session.
+        <b>Test</b> plays the effect as it would feel in the car (3 s, unsaved values included);
+        <b>Identify</b> plays three short 40 Hz pulses on a channel to find which shaker it is.
+        Saving keeps a dated backup of <span class="num" id="sh-path"></span>.
       </div>
     </div>
   </div>

@@ -244,3 +244,62 @@ td.invalid { color: var(--muted); text-decoration: line-through; }
   .map-wrap { flex-direction: column; }
   .map-laps { width: auto; max-height: 160px; display: flex; flex-wrap: wrap; }
 }
+
+/* ---- shakers ---- */
+.shaker-bar .sh-actions { margin-left: auto; display: flex; gap: 6px; }
+#sh-sink { max-width: 360px; }
+button.primary { background: var(--s-speed); border-color: var(--s-speed); color: #fff; }
+button.primary:disabled { opacity: 0.45; cursor: default; }
+.pill.ok { background: color-mix(in srgb, var(--good) 28%, transparent); color: var(--text); }
+.pill.bad { background: color-mix(in srgb, var(--critical) 30%, transparent); color: var(--text); }
+.shaker-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 12px; align-items: start; }
+#sh-car { display: block; width: min(100%, 300px); margin: 0 auto 6px; }
+#sh-car .body { fill: var(--surface-2); stroke: var(--axis); stroke-width: 2; }
+#sh-car .glass { fill: color-mix(in srgb, var(--s-speed) 16%, var(--surface)); stroke: var(--axis); }
+#sh-car .roof { fill: var(--surface); stroke: var(--axis); }
+#sh-car .wing { fill: var(--neutral); stroke: var(--axis); }
+#sh-car .line { fill: none; stroke: var(--axis); stroke-width: 2; }
+#sh-car .tyre-r { fill: var(--axis); transition: fill 120ms; }
+#sh-car .tyre-r.hl { fill: var(--hl); }
+#sh-car .spot { cursor: pointer; }
+#sh-car .spot circle.base { fill: var(--surface); stroke: var(--text-2); stroke-width: 2; }
+#sh-car .spot:hover circle.base { stroke: var(--text); }
+#sh-car .spot.sel circle.base { stroke: var(--s-speed); stroke-width: 3; }
+#sh-car .spot.playing circle.base { animation: buzz 0.12s infinite alternate; }
+@keyframes buzz { to { transform: translateX(1.5px); } }
+#sh-car .spot text { fill: var(--text); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#sh-car .spot text.lbl { fill: var(--text-2); font-size: 10px; font-weight: 400; }
+#sh-car .spot .halo { fill: none; stroke-width: 4; }
+.sh-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+.sh-legend span::before, .fx-dot {
+  content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 5px; vertical-align: baseline; background: var(--c);
+}
+#sh-channels select, #sh-channels input { padding: 2px 6px; font-size: 13px; }
+#sh-channels input { width: 110px; }
+#sh-channels tr.sel td { background: color-mix(in srgb, var(--s-speed) 14%, transparent); }
+#sh-channels td.fx { white-space: normal; }
+#sh-channels button { padding: 2px 8px; font-size: 12px; }
+.fx { border: 1px solid var(--border); border-left: 4px solid var(--c); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
+.fx.hover { background: var(--surface-2); }
+.fx-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.fx-head select { font-weight: 600; }
+.fx-head .grow { flex: 1; }
+.fx-head button { padding: 3px 10px; }
+.fx-head button.test { border-color: var(--c); }
+.fx-head button.del { color: var(--muted); }
+.fx-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; }
+.fx-fields label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.fx-fields .row { display: flex; gap: 6px; align-items: center; }
+.fx-fields input[type=range] { flex: 1; min-width: 0; padding: 0; accent-color: var(--c); }
+.fx-fields input[type=number] { width: 68px; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.fx-fields select { padding: 2px 6px; }
+.fx-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.sh-help { font-size: 12px; margin-top: 6px; }
+@media (max-width: 1100px) {
+  .shaker-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .shaker-bar .sh-actions { margin-left: 0; }
+  #sh-channels input { width: 80px; }
+}

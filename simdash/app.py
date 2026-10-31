@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import store
+from . import shakers, store
 from .pcars2 import TERRAINS
 from .recorder import Recorder
 
@@ -30,6 +30,17 @@ KERBS = {"rumble strips", "exit rumble strips", "b1 rumbles", "b2 rumbles", "dra
 TRACK = {"road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road 3", "marbles", "pavement",
          "cobbles", "bumpy cobbles", "damaged road 1", "train track road", "rally tarmac"}
 SURFACE = [0 if t in TRACK else 1 if t in KERBS else 2 for t in TERRAINS]
+
+
+class ShakerConfig(BaseModel):
+    devid: str
+    effects: list[dict]
+
+
+class ShakerTest(BaseModel):
+    devid: str
+    effect: dict
+    mode: str = "effect"
 
 
 class CornerName(BaseModel):
@@ -250,5 +261,46 @@ def create_app(recorder=None):
         finally:
             con.close()
         return {"deleted": ref}
+
+    # ---- bass shakers (monocoque Sound effects) ----
+
+    @app.get("/api/shakers")
+    def shaker_setup():
+        try:
+            cfg = shakers.load()
+        except (OSError, ValueError) as e:
+            raise HTTPException(500, str(e))
+        return {**cfg, "layout": shakers.load_layout(), "sinks": shakers.sinks(), "running": shakers.monocoque_running(),
+                "options": {"effects": shakers.EFFECTS, "wheel_effects": sorted(shakers.WHEEL_EFFECTS),
+                            "tyres": shakers.TYRES, "modulations": shakers.MODULATIONS, "spots": shakers.SPOTS,
+                            "channels": shakers.CHANNEL_SHORT}}
+
+    @app.put("/api/shakers")
+    def save_shakers(c: ShakerConfig):
+        try:
+            return {**shakers.save(c.effects, c.devid), "running": shakers.monocoque_running()}
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+        except OSError as e:
+            raise HTTPException(500, str(e))
+
+    @app.put("/api/shakers/layout")
+    def save_shaker_layout(layout: dict[str, dict]):
+        return shakers.save_layout(layout)
+
+    @app.post("/api/shakers/test")
+    async def test_shaker(t: ShakerTest):
+        try:
+            secs = await asyncio.to_thread(shakers.play, t.effect, t.devid, t.mode)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+        return {"seconds": secs}
+
+    @app.post("/api/shakers/stop")
+    def stop_shaker():
+        shakers.stop()
+        return {}
 
     return app
