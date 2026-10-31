@@ -28,11 +28,15 @@ CHANNEL_SHORT = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
 EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension"]
 WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"}
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
+WHEELS = ["FL", "FR", "RL", "RR"]
+TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
+               "FrontRight": ["FR"], "RearLeft": ["RL"], "RearRight": ["RR"]}
+GROUP_OFFSET = 3  # Hz between the streams of a split effect, so equal sines cannot cancel or beat on the shaker
 MODULATIONS = ["none", "frequency", "amplify"]
 SPOTS = ["none", "seat", "seat-back", "pedals", "front-left", "front-right", "rear-left", "rear-right"]
 FLOAT_KEYS = {"threshold", "duration", "ampfactor", "fanpower"}
 # key order in the written file, the rest follow
-KEY_ORDER = ["device", "effect", "tyre", "devid", "channels", "pan", "fps", "threshold", "volume", "modulation",
+KEY_ORDER = ["device", "effect", "tyre", "group", "devid", "channels", "pan", "fps", "threshold", "volume", "modulation",
              "frequency", "frequencyMax", "amplitude", "amplitudeMax", "duration", "noise"]
 
 
@@ -172,10 +176,31 @@ def _norm_effect(name):
     return {"slip": "TyreSlip", "tireslip": "TyreSlip", "lock": "TyreLock", "tirelock": "TyreLock"}.get(n, name)
 
 
+def tyres_for(wheels):
+    """monocoque `tyre` values covering a set of wheels: one when it has a name, else one per axle part.
+
+    monocoque has no left/right side, diagonal or three-wheel value, so e.g. FL+RL becomes
+    FrontLeft + RearLeft: two effects on the same shaker, which add up like `All` does.
+    """
+    w = [x for x in WHEELS if x in set(wheels)]
+    for name, ws in TYRE_WHEELS.items():
+        if w == ws:
+            return [name]
+    out = []
+    for axle, pair in (("Fronts", ["FL", "FR"]), ("Rears", ["RL", "RR"])):
+        got = [x for x in pair if x in w]
+        if got == pair:
+            out.append(axle)
+        else:
+            out += [n for n in ("FrontLeft", "FrontRight", "RearLeft", "RearRight") if TYRE_WHEELS[n] == got]
+    return out
+
+
 def load():
     cfg = _read_cfg()
     devices = _default_entry(cfg).get("devices", [])
     effects = []
+    groups = {}
     for d in devices:
         if str(d.get("device", "")).lower() != "sound":
             continue
@@ -187,17 +212,30 @@ def load():
         e.setdefault("volume", 100)
         e.setdefault("pan", 0)
         e.setdefault("frequency", 0)
+        if e["effect"] in WHEEL_EFFECTS:
+            tyre = str(e.pop("tyre", "All")).lower()
+            e["wheels"] = list(TYRE_WHEELS[next((t for t in TYRES if t.lower() == tyre), "All")])
+            g = e.pop("group", None)
+            if g is not None and g in groups:
+                # a wheel set monocoque cannot name, split by save(): show it as one effect again
+                first = groups[g]
+                first["wheels"] = [w for w in WHEELS if w in first["wheels"] or w in e["wheels"]]
+                continue
+            if g is not None:
+                groups[g] = e
         effects.append(e)
     devid = next((e.get("devid") for e in effects if e.get("devid")), "")
     return {"effects": effects, "devid": devid, "path": str(CONFIG), "mtime": CONFIG.stat().st_mtime if CONFIG.exists() else 0}
 
 
-def _clean(e, devid, layout):
+def _clean(e, devid, layout, tyre=None, group=None):
     out = {"device": "Sound", "effect": _norm_effect(e.get("effect", "Engine"))}
     if out["effect"] not in EFFECTS:
         raise ValueError(f"unknown effect {e.get('effect')!r}")
     if out["effect"] in WHEEL_EFFECTS:
-        out["tyre"] = e.get("tyre") if e.get("tyre") in TYRES else "All"
+        out["tyre"] = tyre or "All"
+        if group is not None:
+            out["group"] = group  # simdash only, monocoque ignores it
     out["devid"] = devid
     out["channels"] = 8
     out["pan"] = max(0, min(7, int(e.get("pan", 0))))
@@ -225,7 +263,20 @@ def save(effects, devid):
     if not devid:
         raise ValueError("choose the shaker sound card first")
     layout = load_layout()
-    cleaned = [_clean(e, devid, layout) for e in effects]
+    cleaned = []
+    for i, e in enumerate(effects):
+        if _norm_effect(e.get("effect")) not in WHEEL_EFFECTS:
+            cleaned.append(_clean(e, devid, layout))
+            continue
+        tyres = tyres_for(e.get("wheels") or TYRE_WHEELS.get(e.get("tyre"), []))
+        if not tyres:
+            raise ValueError(f"effect {i + 1} ({e.get('effect')}): pick at least one wheel")
+        for k, tyre in enumerate(tyres):
+            part = dict(e)
+            for f in ("frequency", "frequencyMax"):
+                if part.get(f) not in (None, ""):
+                    part[f] = float(part[f]) + k * GROUP_OFFSET
+            cleaned.append(_clean(part, devid, layout, tyre, f"g{i + 1}" if len(tyres) > 1 else None))
     cfg = _read_cfg()
     entry = _default_entry(cfg)
     others = [d for d in entry.get("devices", []) if str(d.get("device", "")).lower() != "sound"]

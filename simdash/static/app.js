@@ -1335,10 +1335,10 @@ const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", T
 const FX_DEFAULTS = {
   Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
   Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
-  TyreSlip: { tyre: "All", threshold: 0.3, modulation: "amplify", frequency: 32, amplitude: 50, amplitudeMax: 95 },
-  TyreLock: { tyre: "All", threshold: 0.3, modulation: "amplify", frequency: 40, amplitude: 50, amplitudeMax: 95 },
-  ABS: { tyre: "All", threshold: 0.3, modulation: "none", frequency: 45, amplitude: 70 },
-  Suspension: { tyre: "All", threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
+  TyreSlip: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "amplify", frequency: 32, amplitude: 50, amplitudeMax: 95 },
+  TyreLock: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "amplify", frequency: 40, amplitude: 50, amplitudeMax: 95 },
+  ABS: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "none", frequency: 45, amplitude: 70 },
+  Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
 };
 // AMS2 field audit (AMS2-TELEMETRY-FIELDS.md)
 const FX_HINT = {
@@ -1351,8 +1351,9 @@ const FX_HINT = {
 };
 const SPOT_XY = { seat: [120, 240], "seat-back": [120, 274], pedals: [120, 166], "front-left": [29, 95], "front-right": [211, 95], "rear-left": [29, 344], "rear-right": [211, 344] };
 const SPOT_NAME = { none: "Not connected", seat: "Seat", "seat-back": "Seat back", pedals: "Pedals", "front-left": "Front left", "front-right": "Front right", "rear-left": "Rear left", "rear-right": "Rear right" };
-const TYRE_SET = { All: ["FrontLeft", "FrontRight", "RearLeft", "RearRight"], Fronts: ["FrontLeft", "FrontRight"], Rears: ["RearLeft", "RearRight"] };
-const sh = { loaded: null, effects: [], devid: "", layout: {}, sinks: [], opts: null, running: false, dirty: false, sel: null, playing: null };
+const WHEEL_NAME = { FL: "front left", FR: "front right", RL: "rear left", RR: "rear right" };
+// sh.active: index of the wheel effect whose wheels the car's tyres toggle
+const sh = { loaded: null, effects: [], devid: "", layout: {}, sinks: [], opts: null, running: false, dirty: false, sel: null, playing: null, active: null };
 
 async function loadShakers() {
   const r = await fetch("/api/shakers");
@@ -1366,6 +1367,7 @@ async function loadShakers() {
   sh.opts = d.options;
   sh.running = d.running;
   sh.dirty = false;
+  sh.active = null;
   $("#sh-path").textContent = d.path;
   renderShakers();
 }
@@ -1379,6 +1381,7 @@ const cardConnected = () => sh.sinks.some((s) => s.name === sh.devid);
 function renderShakers() {
   renderSinks();
   renderCar();
+  renderWheels();
   renderChannels();
   renderEffects();
   renderShakerState();
@@ -1493,7 +1496,7 @@ function renderEffects() {
     const wheel = o.wheel_effects.includes(e.effect);
     const mod = e.modulation || "none";
     let f = "";
-    if (wheel) f += `<label>Tyre<select data-k="tyre" data-i="${i}">${o.tyres.map((t) => `<option${t === (e.tyre || "All") ? " selected" : ""}>${t}</option>`).join("")}</select></label>`;
+    if (wheel) f += `<label>Wheels<span class="wheel-chips">${o.wheels.map((w) => `<button type="button" class="chip${e.wheels.includes(w) ? " on" : ""}" data-wheel="${w}" data-i="${i}" title="${WHEEL_NAME[w]}">${w}</button>`).join("")}</span></label>`;
     if (e.effect !== "Gear") f += `<label>Modulation<select data-k="modulation" data-i="${i}">${o.modulations.map((m) => `<option value="${m}"${m === mod ? " selected" : ""}>${{ none: "None (constant)", frequency: "Pitch (frequency)", amplify: "Strength (amplitude)" }[m]}</option>`).join("")}</select></label>`;
     f += fxField(e, i, "volume", "Volume", 0, 100, 1, "%");
     f += fxField(e, i, "frequency", mod === "frequency" ? "Frequency min" : "Frequency", 5, 120, 1, "Hz");
@@ -1504,7 +1507,7 @@ function renderEffects() {
     if (wheel) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
     f += fxField(e, i, "noise", "Roughness", 0, 20, 1, "Hz");
     const chOpts = o.channels.map((_, ch) => `<option value="${ch}"${ch === e.pan ? " selected" : ""}>${esc(chName(ch))}</option>`).join("");
-    return `<div class="fx" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
+    return `<div class="fx${sh.active === i ? " active" : ""}" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
       <div class="fx-head">
         <select data-k="effect" data-i="${i}">${o.effects.map((x) => `<option value="${x}"${x === e.effect ? " selected" : ""}>${FX_NAME[x]}</option>`).join("")}</select>
         <span class="muted">on</span>
@@ -1514,7 +1517,7 @@ function renderEffects() {
         <button class="del" data-act="del" data-i="${i}" title="Remove this effect">Remove</button>
       </div>
       <div class="fx-fields">${f}</div>
-      <div class="fx-hint">${FX_HINT[e.effect] || ""}</div></div>`;
+      <div class="fx-hint">${wheel ? wheelNote(e) : ""}${FX_HINT[e.effect] || ""}</div></div>`;
   }).join("");
 
   const box = $("#sh-effects");
@@ -1523,29 +1526,76 @@ function renderEffects() {
   });
   box.querySelectorAll("[data-act=test]").forEach((b) => (b.onclick = () => shakerTest(sh.effects[+b.dataset.i])));
   box.querySelectorAll("[data-act=del]").forEach((b) => (b.onclick = () => {
-    sh.effects.splice(+b.dataset.i, 1);
+    const i = +b.dataset.i;
+    sh.effects.splice(i, 1);
+    if (sh.active === i) sh.active = null;
+    else if (sh.active > i) sh.active--;
     markShakersDirty(true);
   }));
+  box.querySelectorAll(".chip").forEach((b) => (b.onclick = () => toggleWheel(+b.dataset.i, b.dataset.wheel)));
   box.querySelectorAll(".fx").forEach((card) => {
-    card.onmouseenter = () => highlightTyres(sh.effects[+card.dataset.i], card);
-    card.onmouseleave = () => highlightTyres(null, card);
+    const i = +card.dataset.i;
+    card.onmouseenter = () => renderWheels(sh.effects[i]);
+    card.onmouseleave = () => renderWheels();
+    // a click on a wheel effect hands the car's tyres to it
+    card.onclick = (ev) => {
+      if (ev.target.closest("button, select, input") && !ev.target.closest(".chip")) return;
+      setActiveEffect(i);
+    };
   });
+}
+
+// monocoque names one wheel, an axle or all four; other sets are saved as one effect per part
+function wheelParts(wheels) {
+  const w = ["FL", "FR", "RL", "RR"].filter((x) => wheels.includes(x));
+  if (w.length === 4) return [w];
+  const parts = [];
+  for (const pair of [["FL", "FR"], ["RL", "RR"]]) {
+    const got = pair.filter((x) => w.includes(x));
+    if (got.length === 2) parts.push(got);
+    else got.forEach((x) => parts.push([x]));
+  }
+  return parts;
+}
+function wheelNote(e) {
+  const parts = wheelParts(e.wheels);
+  if (!parts.length) return `<b class="warn">Pick at least one wheel. </b>`;
+  if (parts.length === 1) return "";
+  const off = sh.opts.group_offset;
+  return `Saved as ${parts.length} monocoque effects (${parts.map((p) => p.join("+")).join(", ")}), ` +
+    `each ${off} Hz above the previous so they add up on the shaker instead of cancelling. `;
+}
+
+function setActiveEffect(i) {
+  const e = sh.effects[i];
+  const next = e && sh.opts.wheel_effects.includes(e.effect) ? i : null;
+  if (next === sh.active) return;
+  sh.active = next;
+  document.querySelectorAll("#sh-effects .fx").forEach((c) => c.classList.toggle("active", +c.dataset.i === sh.active));
+  renderWheels();
+}
+
+function toggleWheel(i, w) {
+  const e = sh.effects[i];
+  e.wheels = e.wheels.includes(w) ? e.wheels.filter((x) => x !== w) : [...e.wheels, w];
+  sh.active = i;
+  markShakersDirty(true);
 }
 
 function onEffectInput(ev) {
   const el = ev.target, i = +el.dataset.i, k = el.dataset.k, e = sh.effects[i];
   if (k === "effect") {
     // keep the shaker and volume, take the new effect's starting values
-    sh.effects[i] = { device: "Sound", effect: el.value, pan: e.pan, volume: e.volume ?? 100, fps: e.fps ?? 60, ...FX_DEFAULTS[el.value] };
+    sh.effects[i] = { device: "Sound", effect: el.value, pan: e.pan, volume: e.volume ?? 100, fps: e.fps ?? 60, ...structuredClone(FX_DEFAULTS[el.value]) };
+    sh.active = sh.opts.wheel_effects.includes(el.value) ? i : null;
     markShakersDirty(true);
     return;
   }
-  if (["tyre", "modulation"].includes(k)) {
+  if (k === "modulation") {
     e[k] = el.value;
     if (k === "modulation" && el.value === "frequency" && !(e.frequencyMax >= e.frequency)) e.frequencyMax = e.frequency * 2;
     if (k === "modulation" && el.value === "amplify" && e.amplitudeMax == null) e.amplitudeMax = Math.min(100, e.amplitude + 40);
     markShakersDirty(true);
-    if (k === "tyre") highlightTyres(e, el.closest(".fx"));
     return;
   }
   if (k === "pan") {
@@ -1566,21 +1616,33 @@ function onEffectInput(ev) {
 function markShakersDirty(rerender) {
   sh.dirty = true;
   if (rerender) {
+    if (sh.active != null && !sh.opts.wheel_effects.includes(sh.effects[sh.active]?.effect)) sh.active = null;
     renderEffects();
     renderCar();
     renderChannels();
+    renderWheels();
   }
   renderShakerState();
 }
 
-function highlightTyres(e, card) {
-  card?.classList.toggle("hover", !!e);
-  const on = e && sh.opts.wheel_effects.includes(e.effect) ? TYRE_SET[e.tyre || "All"] || [e.tyre] : [];
+// tyres on the car: the hovered effect's wheels, else the active effect's (clickable)
+function renderWheels(preview = null) {
+  const act = sh.active != null ? sh.effects[sh.active] : null;
+  const e = preview && sh.opts.wheel_effects.includes(preview.effect) ? preview : act;
+  const on = e && sh.opts.wheel_effects.includes(e.effect) ? e.wheels : [];
   document.querySelectorAll("#sh-car .tyre-r").forEach((t) => {
-    t.classList.toggle("hl", on.includes(t.dataset.tyre));
+    t.classList.toggle("hl", on.includes(t.dataset.wheel));
+    t.classList.toggle("pick", !!act);
     t.style.setProperty("--hl", e ? `var(${FX_COLOUR[e.effect]})` : "");
+    t.innerHTML = act ? `<title>${WHEEL_NAME[t.dataset.wheel]}: click to ${act.wheels.includes(t.dataset.wheel) ? "remove from" : "add to"} ${FX_NAME[act.effect]}</title>` : "";
   });
+  $("#sh-car-hint").textContent = act
+    ? `click the wheels for ${FX_NAME[act.effect]} on ${sh.opts.channels[act.pan]}`
+    : "click a shaker to test it, a wheel effect to pick its wheels";
 }
+document.querySelectorAll("#sh-car .tyre-r").forEach((t) => (t.onclick = () => {
+  if (sh.active != null) toggleWheel(sh.active, t.dataset.wheel);
+}));
 
 let shPlayTimer = null;
 async function shakerTest(effect, mode = "effect") {
@@ -1622,7 +1684,7 @@ $("#sh-stop").onclick = async () => {
 $("#sh-revert").onclick = () => loadShakers();
 $("#sh-add").onclick = () => {
   const pan = sh.sel ?? +(Object.keys(sh.layout)[0] ?? 0);
-  sh.effects.push({ device: "Sound", effect: "Engine", pan, volume: 100, fps: 60, ...FX_DEFAULTS.Engine });
+  sh.effects.push({ device: "Sound", effect: "Engine", pan, volume: 100, fps: 60, ...structuredClone(FX_DEFAULTS.Engine) });
   markShakersDirty(true);
 };
 $("#sh-save").onclick = async () => {

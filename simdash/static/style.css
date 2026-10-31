@@ -303,3 +303,11 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
   .shaker-bar .sh-actions { margin-left: 0; }
   #sh-channels input { width: 80px; }
 }
+#sh-car .tyre-r.pick { cursor: pointer; }
+#sh-car .tyre-r.pick:hover { stroke: var(--text); stroke-width: 2; }
+.fx { cursor: default; }
+.fx.active { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 55%, transparent); }
+.wheel-chips { display: flex; gap: 4px; }
+.wheel-chips .chip { padding: 2px 0; width: 34px; font-size: 12px; font-weight: 600; text-transform: none; color: var(--muted); }
+.wheel-chips .chip.on { background: var(--c); border-color: var(--c); color: #fff; }
+.fx-hint .warn { color: var(--critical); }

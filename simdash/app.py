@@ -272,7 +272,7 @@ def create_app(recorder=None):
             raise HTTPException(500, str(e))
         return {**cfg, "layout": shakers.load_layout(), "sinks": shakers.sinks(), "running": shakers.monocoque_running(),
                 "options": {"effects": shakers.EFFECTS, "wheel_effects": sorted(shakers.WHEEL_EFFECTS),
-                            "tyres": shakers.TYRES, "modulations": shakers.MODULATIONS, "spots": shakers.SPOTS,
+                            "wheels": shakers.WHEELS, "group_offset": shakers.GROUP_OFFSET, "modulations": shakers.MODULATIONS, "spots": shakers.SPOTS,
                             "channels": shakers.CHANNEL_SHORT}}
 
     @app.put("/api/shakers")
