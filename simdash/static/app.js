@@ -1395,7 +1395,7 @@ function renderShakerState() {
   const st = $("#sh-card-state");
   st.textContent = !sh.devid ? "none chosen" : ok ? "connected" : "not connected";
   st.className = "pill " + (ok ? "ok" : "bad");
-  $("#sh-note").textContent = sh.dirty ? "Unsaved changes" : sh.running ? "monocoque is running: saved changes apply from the next session" : "";
+  $("#sh-note").textContent = sh.dirty ? "Unsaved changes" : sh.running ? "monocoque is running: after saving, Restart monocoque in System to apply" : "";
 }
 
 function renderSinks() {
@@ -1696,7 +1696,7 @@ $("#sh-save").onclick = async () => {
   const d = await r.json();
   if (!r.ok) { $("#sh-note").textContent = d.detail || "Save failed"; return; }
   await loadShakers();
-  $("#sh-note").textContent = d.running ? "Saved. monocoque is running: the change applies from the next session." : "Saved.";
+  $("#sh-note").textContent = d.running ? "Saved. monocoque is running: Restart monocoque in System to apply it now." : "Saved.";
 };
 addEventListener("beforeunload", (ev) => { if (sh.dirty) ev.preventDefault(); });
 
@@ -1711,7 +1711,8 @@ const fmtAge = (since, now) => {
 // [state, short text, hint when broken] for each link, from the server's raw status
 function chainStates(d) {
   const on = d.ams2.running;
-  const shmLive = ["recording", "paused", "idle"].includes(d.shm.status);
+  // the file outlives AMS2, with the last state in it
+  const shmLive = on && ["recording", "paused", "idle"].includes(d.shm.status);
   const st = {};
   st.ams2 = on ? ["ok", d.busy.ams2 || "running"] : [d.busy.ams2 ? "warn" : "off", d.busy.ams2 || "not running"];
   st.bridge = !on ? ["off", "–"] : d.bridge.running ? ["ok", "running"]

@@ -15,6 +15,12 @@ pages below.
 ![Live dashboard while driving](docs/live.png)
 *Live: the dashboard while on track, with the track map focused on one corner and each pass compared with the reference lap (here fed by the built-in fake game, `simdash.fake_ams2`).*
 
+![Shakers: the car seen from above with the shakers and their effects, and each effect's settings](docs/shakers.png)
+*Shakers: four pucks at the wheels and a BST1 under the seat on a 7.1 USB card; engine and gear shift on the seat, lock-up and wheelspin on the front-left puck with their wheels picked on the car.*
+
+![System: the telemetry chain status with restart buttons and logs](docs/system.png)
+*System: AMS2 closed, simd waiting for a game, monocoque running with the shaker card connected.*
+
 > **About this project:** I have not written any of this code (yet). simdash was
 > built entirely through conversations with [Claude Code](https://claude.com/claude-code),
 > Anthropic's coding assistant: I described what I wanted, tested it in the car,
