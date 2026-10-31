@@ -52,6 +52,16 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   and compare laps from other sessions and days on the same track layout with the same car,
   corner names and sector lines on the maps and traces, race replay of all cars, results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
+- **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque).
+  A top view of the car shows where each channel of the shaker sound card is mounted (seat,
+  pedals, each wheel...) and which effects it gets. Each effect (engine, gear shift, wheelspin,
+  lock-up, ABS, suspension) gets its shaker, wheels, modulation, frequency, strength, threshold
+  and volume, with a **Test** button that plays it as monocoque would; **Identify** pulses one
+  channel to find which shaker it is. Details below. Link: `/#shakers`.
+- **System**: the telemetry chain AMS2 → pcars2bridge → `$pcars2$` → simd → monocoque →
+  shaker card, plus CrewChief and the race session, each green / yellow / red with the fix for
+  the first broken link; buttons to restart simd, restart or stop monocoque, and start, restart
+  or quit AMS2; tails of each tool's log. Link: `/#system`.
 
 ## How corners are found
 
@@ -80,6 +90,35 @@ along its lap distance: the analysed lap in **Sessions**, your best lap on that 
 - **Sectors:** where sector 2 and 3 start comes from the sector number AMS2 reports while you
   drive, recorded with every sample.
 
+## Bass shakers (Shakers tab)
+
+simdash edits the `Sound` effects of the default entry in `~/.config/monocoque/monocoque.config`
+(other devices and per-car entries are kept). Saving rewrites the file with a comment per effect
+and keeps the previous one as `monocoque.config.bak-<date-time>`. monocoque reads its config when
+it starts: after saving, use **Restart monocoque** on the System tab, or start a new session.
+
+- **Shakers on the car:** where each of the 8 channels (7.1 order FL, FR, FC, LFE, RL, RR, SL, SR)
+  is mounted is simdash's own data (`shakers.json`); monocoque only knows channel numbers (`pan`).
+- **Tests** are synthesised like monocoque's PulseAudio streams (a sine at `amplitude`%, stream
+  volume `volume`%, one channel of 8) and played with `pacat`, only on the shaker card chosen at
+  the top: if it is unplugged the test is refused rather than played on the speakers.
+- **Wheels:** monocoque's `tyre` takes one wheel, `Fronts`, `Rears` or `All`. Any other set picked
+  on the car (one side, a diagonal, three wheels) is saved as one effect per part on the same
+  shaker, each 3 Hz above the previous so the sines add up instead of cancelling, tagged with a
+  `group` key that monocoque ignores so simdash shows them as one effect again.
+- AMS2 notes shown per effect: wheelspin and lock-up need the tyre diameters monocoque learns
+  per car; ABS probably never fires and suspension gives nothing (how simapi maps AMS2's data).
+
+## System tab
+
+It expects the launchers of the setup it was written for in `~/.local/bin`: `start-race` (one
+session: restarts simd, starts CrewChief, AMS2 through Steam and monocoque, stops them when AMS2
+exits; logs in `~/.local/state/`), `start-monocoque` and `simtelemetry` (simd's data check).
+simd runs as the systemd user service `simd`. **Start session** and **Restart AMS2** run
+`start-race`; **Quit AMS2** ends the game process and waits for `start-race` to clean up.
+Opening the page on the game PC while AMS2 runs moves the focus away from AMS2, which then loses
+the wheel: use it from a phone or tablet (`simdash --host 0.0.0.0`) during a race.
+
 ## Data source
 
 It reads `/dev/shm/$pcars2$` directly (the copy pcars2bridge makes), not `SIMAPI.DAT`,
@@ -107,6 +146,7 @@ Offsets of every field in `pcars2_offsets.json` are generated from simapi's `pca
 | `tracks/*.json` | track outline from your best clean lap, used for the live map |
 | `tracks/*.corners.json` | corner names you gave (AMS2 provides none), matched to corners by apex distance |
 | `wheels.json` | learned wheel ratios per car |
+| `shakers.json` | where each shaker sound card channel is mounted on the car (Shakers tab) |
 
 A session belongs to the day it started on. A new session starts on a change of
 track, car or session type, on a restart, or after returning to the main menu.
