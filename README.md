@@ -161,7 +161,10 @@ wheel's effect. The code is `simdash/replay.py`.
   engine = `rpm / max rpm`; a gear kick when the gear changes to 1st or above; wheelspin and lock-up from
   each wheel's speed (`tyre diameter × rps / 2`) against the car's, past the threshold, only while moving
   forwards. ABS fires only while AMS2's ABS flag is on; suspension gives nothing, as in the car.
-- Tyre diameters come from monocoque's `~/.config/monocoque/diameters.config`. monocoque only learns
+- Tyre diameters come from monocoque's `diameters.config`: `~/.config/monocoque/` up to monocoque `47d0c50`,
+  `~/.cache/monocoque/` from `9be899e` on. simdash looks inside the monocoque that `start-monocoque` runs
+  (the older path is written in the program) and uses that file only; the first time it writes the new
+  one, it carries over the cars monocoque learned in the old one. monocoque only learns
   them itself while coasting above 50 km/h with the brake at exactly 0, which a resting foot never gives,
   so simdash writes the sizes it learns (`wheels.json`, diameter = 2 × radius) into that file, tagged
   `source = "simdash"`: at start and each time it learns or refines a car. Cars monocoque learned itself

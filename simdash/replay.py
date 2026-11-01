@@ -22,7 +22,6 @@ AHEAD = 0.12          # s of audio generated ahead of the clock
 LATENCY = 0.1         # s between generating a sample and feeling it (pacat + PulseAudio)
 GAP = 2.0             # s without ticks (pause, menus) skipped during playback
 GEAR_FADE = 0.005     # monocoque's gear pulse fade-out
-DIAMETERS = shakers.CONFIG.with_name("diameters.config")
 
 TYRE_IDX = {"FrontLeft": [0], "FrontRight": [1], "RearLeft": [2], "RearRight": [3],
             "Fronts": [0, 1], "Rears": [2, 3], "All": [0, 1, 2, 3]}
@@ -72,7 +71,7 @@ def read_session(ref):
 def tyre_diameters(car):
     """(diameters, source): monocoque's learned ones if it has this car, else simdash's (2 x radius)."""
     try:
-        cfg = shakers.parse(DIAMETERS.read_text())
+        cfg = shakers.parse(shakers.diameters_path().read_text())
         for c in cfg.get("cars", []):
             if str(c.get("car", "")).lower() == str(car).lower():
                 dia = [float(c.get(f"tyre{i}", 0)) for i in range(4)]

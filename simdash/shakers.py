@@ -374,8 +374,42 @@ def save(effects, devid):
 
 # ---------- tyre diameters for monocoque's wheelspin / lock-up ----------
 
-DIAMETERS = CONFIG.with_name("diameters.config")
+OLD_DIAMETERS = CONFIG.with_name("diameters.config")  # monocoque up to 47d0c50
+NEW_DIAMETERS = Path.home() / ".cache/monocoque/diameters.config"  # from 9be899e (XDG cache dir)
 SIM_AMS2 = 1066890  # simapi's SIMULATOREXE_AUTOMOBILISTA2, which monocoque matches with the car name
+LAUNCHER = Path.home() / ".local/bin/start-monocoque"
+_where = {}  # monocoque binary -> (mtime, diameters path)
+
+
+def _monocoque_binary():
+    """The monocoque start-monocoque runs (its first absolute path ending in /monocoque), else the one on PATH."""
+    try:
+        m = re.search(r"(/\S+/monocoque)\b", LAUNCHER.read_text())
+        if m and Path(m.group(1)).is_file():
+            return Path(m.group(1))
+    except OSError:
+        pass
+    found = shutil.which("monocoque")
+    return Path(found) if found else None
+
+
+def diameters_path():
+    """The tyre diameters file the installed monocoque reads.
+
+    Older builds have "%s/.config/monocoque/diameters.config" in the binary; newer ones build the path
+    from the XDG cache dir at run time, so without that string the file is ~/.cache/monocoque/.
+    """
+    exe = _monocoque_binary()
+    if exe is None:
+        return OLD_DIAMETERS
+    try:
+        mtime = exe.stat().st_mtime
+        if _where.get(exe, (None,))[0] != mtime:
+            old = b"/.config/monocoque/diameters.config" in exe.read_bytes()
+            _where[exe] = (mtime, OLD_DIAMETERS if old else NEW_DIAMETERS)
+        return _where[exe][1]
+    except OSError:
+        return OLD_DIAMETERS
 
 
 def sync_diameters(radii):
@@ -386,8 +420,11 @@ def sync_diameters(radii):
     Entries tagged source = "simdash" are refreshed; cars monocoque learned itself are left alone.
     Returns the cars written.
     """
+    DIAMETERS = diameters_path()
+    # first write to the new location after a monocoque update: keep what monocoque learned before
+    src = DIAMETERS if DIAMETERS.exists() or not OLD_DIAMETERS.exists() else OLD_DIAMETERS
     try:
-        cars = parse(DIAMETERS.read_text()).get("cars", []) if DIAMETERS.exists() else []
+        cars = parse(src.read_text()).get("cars", []) if src.exists() else []
     except (OSError, ValueError):
         return []  # never overwrite a file we cannot read
     own = {str(c.get("car", "")).lower() for c in cars if c.get("source") != "simdash"}
@@ -400,7 +437,7 @@ def sync_diameters(radii):
                      "source": "simdash"})
     new = keep + ours
     old = {c["car"]: [c.get(f"tyre{i}", 0) for i in range(4)] for c in cars if c.get("source") == "simdash"}
-    if len(cars) == len(new) and all(
+    if src == DIAMETERS and len(cars) == len(new) and all(
             c["car"] in old and all(abs(a - b) < 0.0005 for a, b in zip(old[c["car"]], [c[f"tyre{i}"] for i in range(4)]))
             for c in ours):
         return [c["car"] for c in ours]  # no car added and no size moved by 0.5 mm: leave the file alone
@@ -408,8 +445,9 @@ def sync_diameters(radii):
             "// are written by simdash from the sizes it learns (wheels.json); monocoque adds its own below.\n"
             "cars = " + _fmt(new, 0) + ";\n")
     parse(text)
-    if keep:  # only simdash's own entries need no backup
+    if keep and DIAMETERS.exists():  # only simdash's own entries need no backup
         shutil.copy2(DIAMETERS, DIAMETERS.with_name(f"diameters.config.bak-{time.strftime('%Y-%m-%d-%H%M%S')}"))
+    DIAMETERS.parent.mkdir(parents=True, exist_ok=True)
     tmp = DIAMETERS.with_suffix(".tmp")
     tmp.write_text(text)
     tmp.replace(DIAMETERS)
