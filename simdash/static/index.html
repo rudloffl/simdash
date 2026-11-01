@@ -90,7 +90,8 @@
           <button id="map-mirror" title="Flip the map left/right if it looks mirrored">Mirror</button>
           <button id="map-rotate" title="Rotate the map 90°">Rotate</button>
         </span></h3>
-        <canvas id="map"></canvas>
+        <div class="map-car"><canvas id="map"></canvas>
+          <svg id="live-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Shakers playing now"><title>What monocoque plays now, on each shaker</title></svg></div>
       </div>
       <div class="card" id="corner-card" hidden>
         <h3><span id="corner-title"></span> <span class="right muted" id="corner-ref"></span></h3>
@@ -179,7 +180,8 @@
     <div class="detail-grid">
       <div class="card" id="replay-card">
         <h3>Race replay <span class="right muted num" id="replay-time"></span></h3>
-        <canvas id="replay-map"></canvas>
+        <div class="map-car"><canvas id="replay-map"></canvas>
+          <svg id="sess-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Shakers at the replay time"><title>What each shaker played at the replay time, with the monocoque settings of that day</title></svg></div>
         <div class="replay-controls">
           <button id="replay-play">Play</button>
           <select id="replay-speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="16">16×</option></select>
@@ -211,6 +213,43 @@
     </span>
   </div>
   <div class="shaker-grid">
+    <div class="sh-col">
+    <div class="card" id="rp-card">
+      <h3>Replay a race on the shakers <span class="right muted" id="rp-note"></span></h3>
+      <div class="rp-bar">
+        <select id="rp-session"><option value="">Choose a recorded session…</option></select>
+        <select id="rp-lap" title="Jump to a lap" disabled></select>
+        <button id="rp-play" class="primary" disabled>Play</button>
+        <select id="rp-speed" title="Replay speed: the vibrations keep their pitch, gear kicks their length">
+          <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+        </select>
+        <input type="range" id="rp-slider" min="0" max="1" step="0.05" value="0" disabled>
+        <span class="num" id="rp-time"></span>
+      </div>
+      <div id="rp-body" hidden>
+        <div class="rp-top">
+          <canvas id="rp-map"></canvas>
+          <svg id="rp-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Which shakers are playing"></svg>
+        </div>
+        <div class="rp-gauges">
+          <div class="rp-rpm"><span class="muted">RPM</span><b class="num" id="rp-rpm">–</b>
+            <div class="rp-rpmbar"><i id="rp-rpmfill"></i></div></div>
+          <div><span class="muted">Gear</span><b class="num" id="rp-gear">–</b></div>
+          <div><span class="muted">km/h</span><b class="num" id="rp-speed-v">–</b></div>
+          <div><span class="muted">Lap</span><b class="num" id="rp-lapv">–</b></div>
+        </div>
+        <div class="rp-surface"><span class="pill" id="rp-where">–</span><div class="rp-wheels" id="rp-wheels"></div></div>
+        <div class="rp-pedal"><span class="muted">Throttle</span><div><i id="rp-thr"></i></div></div>
+        <div class="rp-pedal"><span class="muted">Brake</span><div><i id="rp-brk"></i></div></div>
+        <div id="rp-fx"></div>
+      </div>
+      <div class="muted sh-help">
+        Plays a recorded session on the shakers with the effects on this page, unsaved changes included: change an
+        effect on the right while it plays and you feel the new setting a moment later. Computed from the recording with
+        monocoque's formulas. Under each wheel: AMS2's raw terrain and monocoque's slip (lock &gt; 0, spin &lt; 0),
+        highlighted past the effect's threshold. Without the shaker card it only shows it.
+      </div>
+    </div>
     <div class="card">
       <h3>Shakers on the car <span class="right muted" id="sh-car-hint">click a shaker to test it</span></h3>
       <svg id="sh-car" viewBox="0 0 240 440" role="img" aria-label="Car seen from above with the shaker positions">
@@ -234,6 +273,7 @@
           <th>Channel</th><th>Where</th><th>Name</th><th>Effects</th><th></th>
         </tr></thead><tbody></tbody></table>
       </div>
+    </div>
     </div>
     <div class="card">
       <h3>Effects <span class="right"><button id="sh-add">Add effect</button></span></h3>

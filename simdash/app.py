@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import shakers, store, system
+from . import replay, shakers, store, system
 from .pcars2 import TERRAINS
 from .recorder import Recorder
 
@@ -41,6 +41,19 @@ class ShakerTest(BaseModel):
     devid: str
     effect: dict
     mode: str = "effect"
+
+
+class ReplayLoad(BaseModel):
+    ref: str
+    devid: str = ""
+    effects: list[dict]
+
+
+class ReplayControl(BaseModel):
+    action: str  # play, pause, seek
+    ts: float | None = None
+    speed: float = 1.0
+    devid: str = ""
 
 
 class CornerName(BaseModel):
@@ -202,6 +215,22 @@ def create_app(recorder=None):
         con.close()
         return {"ts": [r[0] for r in rows], "x": [r[1] for r in rows], "z": [r[2] for r in rows]}
 
+    @app.get("/api/sessions/{ref}/shakers")
+    def session_shakers(ref: str):
+        """What each shaker played, per tick, with the monocoque settings in force when the session started."""
+        con, sid = open_ref(ref)
+        with con:
+            row = con.execute("SELECT started_at FROM session WHERE id=?", (sid,)).fetchone()
+        con.close()
+        if row is None:
+            raise HTTPException(404, "no such session")
+        devices, path = shakers.devices_at(row[0])
+        try:
+            tl = replay.Timeline(ref, devices=devices)
+        except LookupError:
+            return {"ts": [], "channels": {}, "config": path}
+        return {"ts": [round(t, 3) for t in tl.data["ts"]], "channels": tl.channels(), "config": path}
+
     @app.get("/api/sessions/{ref}/cars_at")
     def cars_at(ref: str, ts: float):
         con, sid = open_ref(ref)
@@ -302,6 +331,40 @@ def create_app(recorder=None):
     def stop_shaker():
         shakers.stop()
         return {}
+
+    # ---- shaker replay: a recorded session played on the shakers ----
+
+    @app.post("/api/shakers/replay")
+    async def replay_load(r: ReplayLoad):
+        """Load a session with these (possibly unsaved) effects; returns what the page draws."""
+        try:
+            tl = await asyncio.to_thread(replay.player.load, r.ref, r.effects, r.devid)
+        except (LookupError, FileNotFoundError):
+            raise HTTPException(404, "no such session")
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+        return {**await asyncio.to_thread(tl.display), "terrains": TERRAINS, "surface": SURFACE,
+                "state": replay.player.state()}
+
+    @app.get("/api/shakers/replay")
+    def replay_state():
+        return replay.player.state()
+
+    @app.post("/api/shakers/replay/control")
+    def replay_control(c: ReplayControl):
+        p = replay.player
+        try:
+            if c.action == "play":
+                p.play(c.ts if c.ts is not None else p.now(), max(0.1, min(2.0, c.speed)), c.devid)
+            elif c.action == "pause":
+                p.pause()
+            elif c.action == "seek" and c.ts is not None:
+                p.seek(c.ts)
+            else:
+                raise HTTPException(400, "unknown action")
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        return p.state()
 
     # ---- system: telemetry chain status and restarts ----
 

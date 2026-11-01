@@ -13,7 +13,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import store
+from . import replay, shakers, store
 from .pcars2 import (GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
                      PIT_MODES, RACE_STATES, SESSION_TYPES, Pcars2Reader, _name, derived)
 
@@ -73,6 +73,10 @@ class WheelSlip:
 
     def __init__(self):
         self.data = store.load_wheels()
+        try:
+            shakers.sync_diameters(self.data)  # sizes learned before monocoque got them
+        except (OSError, ValueError) as e:
+            log.warning("cannot write monocoque's tyre diameters: %s", e)
         self.car = None
         self.k = None
         self.sums = [0.0] * 4
@@ -120,6 +124,7 @@ class WheelSlip:
             self.data[self.car] = self.k
             try:
                 store.save_wheels(self.data)
+                shakers.sync_diameters(self.data)
             except OSError as e:
                 log.warning("cannot save wheels: %s", e)
         self.dirty = False
@@ -164,6 +169,7 @@ class Recorder(threading.Thread):
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.wheels = WheelSlip()
+        self.shakers = replay.Live()  # what monocoque plays, for the live car
         self.sess = None
         self.con = None
         self.con_day = None
@@ -266,7 +272,13 @@ class Recorder(threading.Thread):
                          round(snap["current_time"], 3), snap["gear"],
                          round(player["x"], 1), round(player["z"], 1)]
 
-        self.set_live(self.build_live(snap, player, der, slips, gs), trace_row)
+        live = self.build_live(snap, player, der, slips, gs)
+        try:
+            live["shakers"] = self.shakers.update(snap, now) if gs == GAME_PLAYING else {}
+        except Exception:  # never let the shaker view stop the recording
+            log.exception("live shakers")
+            live["shakers"] = {}
+        self.set_live(live, trace_row)
         return True
 
     # ---- sessions ----

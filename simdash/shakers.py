@@ -228,6 +228,38 @@ def load():
     return {"effects": effects, "devid": devid, "path": str(CONFIG), "mtime": CONFIG.stat().st_mtime if CONFIG.exists() else 0}
 
 
+def devices_at(ts):
+    """monocoque's Sound devices as configured at time ts (epoch), and the file they come from.
+
+    Saving keeps the previous file as monocoque.config.bak-<date-time>, which therefore holds the
+    settings used until that moment: the first backup made after ts, else the current file.
+    """
+    path = CONFIG
+    for b in sorted(CONFIG.parent.glob("monocoque.config.bak-*")):
+        try:
+            t = time.mktime(time.strptime(b.name.removeprefix("monocoque.config.bak-"), "%Y-%m-%d-%H%M%S"))
+        except ValueError:
+            continue  # hand-made backups without a time
+        if t > ts:
+            path = b
+            break
+    try:
+        cfg = parse(path.read_text())
+    except (OSError, ValueError):
+        return [], str(path)
+    out = []
+    for d in _default_entry(cfg).get("devices", []):
+        if str(d.get("device", "")).lower() != "sound":
+            continue
+        e = dict(d)
+        e["effect"] = _norm_effect(d.get("effect", "Engine"))
+        e["modulation"] = str(e.get("modulation", "none")).lower()
+        e["tyre"] = next((t for t in TYRES if t.lower() == str(d.get("tyre", "All")).lower()), "All")
+        e["pan"] = int(e.get("pan", 0))
+        out.append(e)
+    return out, str(path)
+
+
 def _clean(e, devid, layout, tyre=None, group=None):
     out = {"device": "Sound", "effect": _norm_effect(e.get("effect", "Engine"))}
     if out["effect"] not in EFFECTS:
@@ -259,14 +291,14 @@ def _clean(e, devid, layout, tyre=None, group=None):
     return {k: out[k] for k in sorted(out, key=lambda k: (KEY_ORDER + [k]).index(k) if k != "//" else -1)}
 
 
-def save(effects, devid):
-    if not devid:
-        raise ValueError("choose the shaker sound card first")
+def expand(effects, devid):
+    """simdash effects -> (monocoque Sound devices as they are written, index of the effect each came from)."""
     layout = load_layout()
-    cleaned = []
+    cleaned, source = [], []
     for i, e in enumerate(effects):
         if _norm_effect(e.get("effect")) not in WHEEL_EFFECTS:
             cleaned.append(_clean(e, devid, layout))
+            source.append(i)
             continue
         tyres = tyres_for(e.get("wheels") or TYRE_WHEELS.get(e.get("tyre"), []))
         if not tyres:
@@ -277,6 +309,14 @@ def save(effects, devid):
                 if part.get(f) not in (None, ""):
                     part[f] = float(part[f]) + k * GROUP_OFFSET
             cleaned.append(_clean(part, devid, layout, tyre, f"g{i + 1}" if len(tyres) > 1 else None))
+            source.append(i)
+    return cleaned, source
+
+
+def save(effects, devid):
+    if not devid:
+        raise ValueError("choose the shaker sound card first")
+    cleaned, _ = expand(effects, devid)
     cfg = _read_cfg()
     entry = _default_entry(cfg)
     others = [d for d in entry.get("devices", []) if str(d.get("device", "")).lower() != "sound"]
@@ -290,6 +330,50 @@ def save(effects, devid):
     tmp.write_text(text)
     tmp.replace(CONFIG)
     return load()
+
+
+# ---------- tyre diameters for monocoque's wheelspin / lock-up ----------
+
+DIAMETERS = CONFIG.with_name("diameters.config")
+SIM_AMS2 = 1066890  # simapi's SIMULATOREXE_AUTOMOBILISTA2, which monocoque matches with the car name
+
+
+def sync_diameters(radii):
+    """Give monocoque the tyre sizes simdash learned ({car: [radius FL, FR, RL, RR]}).
+
+    monocoque only learns them itself while coasting above 50 km/h with the brake at exactly 0, which a
+    resting foot never gives. Its diameter is 2 x simdash's radius (both are speed / wheel rad/s).
+    Entries tagged source = "simdash" are refreshed; cars monocoque learned itself are left alone.
+    Returns the cars written.
+    """
+    try:
+        cars = parse(DIAMETERS.read_text()).get("cars", []) if DIAMETERS.exists() else []
+    except (OSError, ValueError):
+        return []  # never overwrite a file we cannot read
+    own = {str(c.get("car", "")).lower() for c in cars if c.get("source") != "simdash"}
+    keep = [c for c in cars if c.get("source") != "simdash"]
+    ours = []
+    for car, r in sorted(radii.items()):
+        if car.lower() in own or not r or len(r) != 4 or not all(x and x > 0 for x in r):
+            continue
+        ours.append({"car": car, "sim": SIM_AMS2, **{f"tyre{i}": round(2 * float(x), 5) for i, x in enumerate(r)},
+                     "source": "simdash"})
+    new = keep + ours
+    old = {c["car"]: [c.get(f"tyre{i}", 0) for i in range(4)] for c in cars if c.get("source") == "simdash"}
+    if len(cars) == len(new) and all(
+            c["car"] in old and all(abs(a - b) < 0.0005 for a, b in zip(old[c["car"]], [c[f"tyre{i}"] for i in range(4)]))
+            for c in ours):
+        return [c["car"] for c in ours]  # no car added and no size moved by 0.5 mm: leave the file alone
+    text = ("// Tyre diameters (m) for monocoque's wheelspin and lock-up effects. Entries with source = \"simdash\"\n"
+            "// are written by simdash from the sizes it learns (wheels.json); monocoque adds its own below.\n"
+            "cars = " + _fmt(new, 0) + ";\n")
+    parse(text)
+    if keep:  # only simdash's own entries need no backup
+        shutil.copy2(DIAMETERS, DIAMETERS.with_name(f"diameters.config.bak-{time.strftime('%Y-%m-%d-%H%M%S')}"))
+    tmp = DIAMETERS.with_suffix(".tmp")
+    tmp.write_text(text)
+    tmp.replace(DIAMETERS)
+    return [c["car"] for c in ours]
 
 
 # ---------- channel layout on the car (simdash's own file) ----------

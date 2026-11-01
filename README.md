@@ -15,8 +15,8 @@ pages below.
 ![Live dashboard while driving](docs/live.png)
 *Live: the dashboard while on track, with the track map focused on one corner and each pass compared with the reference lap (here fed by the built-in fake game, `simdash.fake_ams2`).*
 
-![Shakers: the car seen from above with the shakers and their effects, and each effect's settings](docs/shakers.png)
-*Shakers: four pucks at the wheels and a BST1 under the seat on a 7.1 USB card; engine and gear shift on the seat, lock-up and wheelspin on the front-left puck with their wheels picked on the car.*
+![Shakers: replay of a recorded lap with the map, a small car showing the shakers playing, RPM, surface and wheel slip, next to the effects being tuned](docs/shakers.png)
+*Shakers: a lap at Laguna Seca replayed on the shakers while the effects are tuned on the right: braking with the front-left wheel locked (its puck lit violet), the front-right on a kerb, the engine on the BST1 under the seat.*
 
 ![System: the telemetry chain status with restart buttons and logs](docs/system.png)
 *System: AMS2 closed, simd waiting for a game, monocoque running with the shaker card connected.*
@@ -45,7 +45,8 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
 
 - **Live**: speed, gear, RPM, position, lap times, fuel; throttle/brake/clutch/steering;
   G-force circle with a 3 s trail; per-wheel slip (spin / lock) and car slip angle;
-  a rolling 30 s chart; a track map with every car; standings with approximate gaps.
+  a rolling 30 s chart; a track map with every car and, beside it, the car seen from above with
+  each bass shaker lit by what monocoque is playing on it; standings with approximate gaps.
   **Corner focus**: pick a corner of your best lap (same track and car, any day) on the track
   map to zoom on it; each pass shows live speed and pedals over the reference and a row with
   braking point, entry / minimum / exit speed and time gained or lost.
@@ -56,14 +57,18 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   a corner table (braking point, entry / minimum / exit speed, gear and time gained or lost per
   corner against the compare lap or the session's best; click a corner to zoom on it),
   and compare laps from other sessions and days on the same track layout with the same car,
-  corner names and sector lines on the maps and traces, race replay of all cars, results, CSV export, delete.
+  corner names and sector lines on the maps and traces, race replay of all cars (with the car seen from
+  above showing which shaker played what at that moment), results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
 - **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque).
   A top view of the car shows where each channel of the shaker sound card is mounted (seat,
   pedals, each wheel...) and which effects it gets. Each effect (engine, gear shift, wheelspin,
   lock-up, ABS, suspension) gets its shaker, wheels, modulation, frequency, strength, threshold
   and volume, with a **Test** button that plays it as monocoque would; **Identify** pulses one
-  channel to find which shaker it is. Details below. Link: `/#shakers`.
+  channel to find which shaker it is. **Replay** plays a recorded session on the shakers with these
+  effects, to tune them on corners you know: track map, RPM, surface under each tyre, wheel slip, and a
+  small car with each shaker lit by what it plays.
+  Details below. Link: `/#shakers`.
 - **System**: the telemetry chain AMS2 → pcars2bridge → `$pcars2$` → simd → monocoque →
   shaker card, plus CrewChief and the race session, each green / yellow / red with the fix for
   the first broken link; buttons to restart simd, restart or stop monocoque, and start, restart
@@ -112,8 +117,42 @@ it starts: after saving, use **Restart monocoque** on the System tab, or start a
   on the car (one side, a diagonal, three wheels) is saved as one effect per part on the same
   shaker, each 3 Hz above the previous so the sines add up instead of cancelling, tagged with a
   `group` key that monocoque ignores so simdash shows them as one effect again.
-- AMS2 notes shown per effect: wheelspin and lock-up need the tyre diameters monocoque learns
-  per car; ABS probably never fires and suspension gives nothing (how simapi maps AMS2's data).
+- AMS2 notes shown per effect: wheelspin and lock-up need each car's tyre diameters, which simdash
+  gives monocoque (below); ABS probably never fires and suspension gives nothing (simapi does not map
+  AMS2's suspension, so kerbs cannot be felt through monocoque).
+
+### Shakers on the Live and Sessions maps
+
+The small car next to the Live track map and the session's race replay shows each shaker lit in the
+colour of the strongest effect it plays, computed like the replay below. Live uses the settings
+monocoque started with (it reads its config only at start). A recorded session uses the settings in force
+when it started: saving keeps the previous file as `monocoque.config.bak-<date-time>`, so the first
+backup made after the session start holds them (the current file if none). Where each channel sits on
+the car comes from today's `shakers.json`, which has no history.
+
+### Replay on the shakers
+
+Pick a recorded session at the top of the Shakers tab, then Play (0.25×, 0.5× or 1×), drag the slider
+or jump to a lap. The replay card stays in view while you scroll the effects, and uses them as they are on
+the page, unsaved changes included: change a threshold or a strength while it plays and you feel the new
+setting a moment later. It shows the track map, a small car with each shaker lit by what it plays, RPM
+against the car's max, gear, speed, pedals, each effect's frequency and strength, whether the car is on
+track, on a kerb or off track (the worst surface under any tyre, from AMS2's raw terrain), and under each
+wheel its terrain name and monocoque's slip (lock > 0, spin < 0), highlighted past the threshold of that
+wheel's effect. The code is `simdash/replay.py`.
+
+- Each effect is recomputed from the recorded telemetry (20 Hz, interpolated) with monocoque's formulas:
+  engine = `rpm / max rpm`; a gear kick when the gear changes to 1st or above; wheelspin and lock-up from
+  each wheel's speed (`tyre diameter × rps / 2`) against the car's, past the threshold, only while moving
+  forwards. ABS fires only while AMS2's ABS flag is on; suspension gives nothing, as in the car.
+- Tyre diameters come from monocoque's `~/.config/monocoque/diameters.config`. monocoque only learns
+  them itself while coasting above 50 km/h with the brake at exactly 0, which a resting foot never gives,
+  so simdash writes the sizes it learns (`wheels.json`, diameter = 2 × radius) into that file, tagged
+  `source = "simdash"`: at start and each time it learns or refines a car. Cars monocoque learned itself
+  are left alone, and the previous file is kept as `diameters.config.bak-<date-time>`.
+- The streams are mixed into one 8-channel signal (stream volumes as PulseAudio applies them) and played
+  with `pacat` on the shaker card only. Without the card the replay runs silently for the map and the car.
+  Slower replays keep each vibration's pitch and each gear kick's length.
 
 ## System tab
 

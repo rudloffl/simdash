@@ -339,3 +339,68 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .sys-actions li { padding: 2px 0; border-bottom: 1px solid var(--grid); }
 .sys-actions .t { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
 .sys-logbox { margin: 0; max-height: 300px; overflow: auto; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* shaker replay */
+.sh-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; align-self: stretch; }
+/* stays in view while the effects on the right are tuned */
+#rp-card { position: sticky; top: 8px; z-index: 2; max-height: calc(100vh - 16px); overflow: auto; }
+.rp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+#rp-session { max-width: 420px; min-width: 0; flex: 0 1 420px; }
+#rp-slider { flex: 1 1 160px; padding: 0; }
+.rp-top { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 8px; align-items: center; }
+#rp-map { width: 100%; height: 250px; display: block; }
+.shaker-car .body { fill: var(--surface-2); stroke: var(--axis); stroke-width: 3; }
+.shaker-car .glass { fill: color-mix(in srgb, var(--s-speed) 16%, var(--surface)); stroke: var(--axis); }
+.shaker-car .roof { fill: var(--surface); stroke: var(--axis); }
+.shaker-car .wing { fill: var(--neutral); stroke: var(--axis); }
+.shaker-car .line { display: none; }
+.shaker-car .tyre-r { fill: var(--axis); }
+.shaker-car .tyre-r.s1 { fill: var(--s-angle); }
+.shaker-car .tyre-r.s2 { fill: var(--s-brake); }
+.shaker-car .spot circle { fill: color-mix(in srgb, var(--glow, var(--s-speed)) calc(var(--lvl, 0) * 100%), var(--surface)); stroke: var(--text-2); stroke-width: 3; }
+.shaker-car .spot.felt circle { stroke: var(--glow); stroke-width: 6; animation: buzz 0.12s infinite alternate; }
+.shaker-car .spot text { fill: var(--text); font-size: 20px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.rp-gauges { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; margin: 8px 0; }
+.rp-gauges > div { display: flex; flex-direction: column; min-width: 0; }
+.rp-gauges span { font-size: 11px; }
+.rp-gauges b { font-size: 22px; line-height: 1.2; }
+.rp-rpmbar { height: 8px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: 2px; }
+.rp-rpmbar i { display: block; height: 100%; width: 0; background: var(--s-speed); }
+.rp-rpmbar i.red { background: var(--s-brake); }
+.rp-surface { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+#rp-where { font-weight: 600; min-width: 74px; text-align: center; }
+#rp-where.s0 { background: color-mix(in srgb, var(--s-throttle) 22%, transparent); }
+#rp-where.s1 { background: color-mix(in srgb, var(--s-angle) 30%, transparent); }
+#rp-where.s2 { background: color-mix(in srgb, var(--s-brake) 30%, transparent); }
+.rp-wheels { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 12px; flex: 1; min-width: 0; }
+.rp-wheels span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.rp-wheels b { color: var(--text); }
+.rp-wheels .s1 { color: var(--s-angle); }
+.rp-wheels .s2 { color: var(--s-brake); }
+.rp-wheels .over { font-weight: 700; color: var(--c); }
+.rp-pedal { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; }
+.rp-pedal div { height: 8px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.rp-pedal i { display: block; height: 100%; width: 0; background: var(--s-throttle); }
+#rp-brk { background: var(--s-brake); }
+#rp-fx { margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.rp-fx { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 6px; font-size: 11px; }
+.rp-fx .n { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-fx .v { text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.rp-fx .bar { grid-column: 1 / -1; height: 6px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.rp-fx .bar i { display: block; height: 100%; width: 0; background: var(--c); }
+#sh-car .spot circle.base { fill: color-mix(in srgb, var(--glow, var(--s-speed)) calc(var(--lvl, 0) * 100%), var(--surface)); }
+#sh-car .spot.felt circle.base { animation: buzz 0.12s infinite alternate; }
+@media (max-width: 900px) {
+  #rp-card { position: static; max-height: none; }
+  #rp-map { height: 220px; }
+  #rp-fx { grid-template-columns: 1fr; }
+}
+
+/* small car with its shakers next to a map (live, session replay, shaker replay) */
+.shaker-car { width: 140px; display: block; }
+.map-car { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 8px; align-items: center; }
+.map-car .shaker-car { width: 120px; }
+@media (max-width: 600px) {
+  .map-car { grid-template-columns: minmax(0, 1fr) 80px; }
+  .map-car .shaker-car { width: 80px; }
+}

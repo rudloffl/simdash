@@ -56,7 +56,9 @@ function showTab(name) {
   if (name === "history") loadSessions();
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
-  else if (location.hash) history.replaceState(null, "", location.pathname);
+  // drop a link's hash once its tab is left (#session=… belongs to history)
+  const own = { history: /^#session=/, shakers: /^#shakers$/, system: /^#system$/ }[name];
+  if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
 document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
@@ -77,6 +79,7 @@ function redrawMaps() {
   live.dirty = true;
   if (hist.lapData) drawLapMap();
   if (replay.cars) drawReplay();
+  rp.lastDraw = -1;
 }
 
 // view (optional), in map coordinates: { bounds: [x0, x1, y0, y1], marks: [{ p: [X, Y], color }],
@@ -222,6 +225,9 @@ function renderLive() {
   const st = d.status;
   setStatus(st === "recording" ? "recording" : st === "paused" ? "paused" : "",
     st === "recording" ? "Recording" : st === "paused" ? "Paused" : d.detail || st);
+  const liveSh = {};
+  for (const [ch, [a, fx]] of Object.entries(d.shakers || {})) liveSh[ch] = { a, fx };
+  paintShakerCar("#live-car .spot", liveSh, d.status === "recording");
   if (!d.car) {
     $("#session-line").innerHTML = `<span class="muted">${esc(d.detail || "Waiting for AMS2")}</span>`;
     drawTrace();
@@ -1276,6 +1282,10 @@ async function initReplay(d) {
     if (!q || Math.hypot(path.x[i] - q[0], path.z[i] - q[1]) > 3) out.push([path.x[i], path.z[i]]);
   }
   replay.outline = out;
+  hist.shakers = null;
+  fetch(`/api/sessions/${hist.ref}/shakers`).then((r) => r.json()).then((sd) => {
+    if (sd.ts?.length && d.t0 === replay.t0) { hist.shakers = sd; paintSessionCar(); }
+  });
   replay.t0 = d.t0;
   replay.t1 = d.t1;
   const sl = $("#replay-slider");
@@ -1296,9 +1306,21 @@ async function seekReplay(offset) {
     const r = await (await fetch(`/api/sessions/${hist.ref}/cars_at?ts=${replay.t0 + o}`)).json();
     replay.cars = r.cars.map((c) => ({ ...c, player: !!c.is_player, pit: c.pit > 0 }));
     $("#replay-time").textContent = `${fmtDur(o)} / ${fmtDur(replay.t1 - replay.t0)}`;
+    replay.at = replay.t0 + o;
+    paintSessionCar();
     drawReplay();
   }
   replay.busy = false;
+}
+function paintSessionCar() {
+  const sd = hist.shakers;
+  if (!sd) { paintShakerCar("#sess-car .spot", {}, false); return; }
+  const t = replay.at ?? replay.t0;
+  let lo = 0, hi = sd.ts.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (sd.ts[m] <= t) lo = m; else hi = m - 1; }
+  const chan = {};
+  for (const [ch, v] of Object.entries(sd.channels)) chan[ch] = { a: v.a[lo], fx: v.fx[lo] };
+  paintShakerCar("#sess-car .spot", chan, !!replay.timer);
 }
 function drawReplay() { drawMap($("#replay-map"), replay.outline, replay.cars || [], false, trackMarks(hist.lapData, hist.trackKey)); }
 $("#replay-slider").oninput = (e) => seekReplay(+e.target.value);
@@ -1345,8 +1367,8 @@ const FX_DEFAULTS = {
 const FX_HINT = {
   Engine: "Pitch follows the RPM. The BST1 is weak below about 25 Hz.",
   Gear: "One kick per gear change.",
-  TyreSlip: "AMS2: needs the tyre diameters monocoque learns per car.",
-  TyreLock: "AMS2: needs the tyre diameters monocoque learns per car.",
+  TyreSlip: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
+  TyreLock: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
   Suspension: "AMS2: not mapped by simapi, gives no vibration.",
 };
@@ -1371,6 +1393,8 @@ async function loadShakers() {
   sh.active = null;
   $("#sh-path").textContent = d.path;
   renderShakers();
+  loadReplaySessions();
+  scheduleReplayReload();
 }
 
 function chName(ch) {
@@ -1438,6 +1462,8 @@ function renderCar() {
     selectChannel(+g.dataset.ch);
     shakerTest({ pan: +g.dataset.ch }, "identify");
   }));
+  if (rp.d) renderMiniCar();
+  if (shCar.layout) loadShakerCars();
   const kinds = [...new Set(sh.effects.map((e) => e.effect))];
   $("#sh-legend").innerHTML = kinds.map((k) => `<span style="--c:var(${FX_COLOUR[k]})">${FX_NAME[k]}</span>`).join("");
 }
@@ -1616,6 +1642,7 @@ function onEffectInput(ev) {
 
 function markShakersDirty(rerender) {
   sh.dirty = true;
+  scheduleReplayReload();
   if (rerender) {
     if (sh.active != null && !sh.opts.wheel_effects.includes(sh.effects[sh.active]?.effect)) sh.active = null;
     renderEffects();
@@ -1699,6 +1726,250 @@ $("#sh-save").onclick = async () => {
   $("#sh-note").textContent = d.running ? "Saved. monocoque is running: Restart monocoque in System to apply it now." : "Saved.";
 };
 addEventListener("beforeunload", (ev) => { if (sh.dirty) ev.preventDefault(); });
+
+// ---------- shaker replay: a recorded session felt on the shakers ----------
+// The server runs the clock and the sound; the page polls it and extrapolates between polls.
+const rp = { d: null, outline: null, st: null, stAt: 0, lastDraw: -1, reloadTimer: null, poll: null };
+
+async function loadReplaySessions() {
+  let list;
+  try { list = await (await fetch("/api/sessions")).json(); } catch { return; }
+  const cur = $("#rp-session").value || rp.d?.ref || "";
+  $("#rp-session").innerHTML = `<option value="">Choose a recorded session…</option>` + list.filter((x) => x.driving_s > 0).map((x) => {
+    const t = new Date(x.started_at * 1000);
+    return `<option value="${x.ref}">${x.day} ${t.toTimeString().slice(0, 5)} · ${esc(x.session_type)} · ${esc(x.track)} · ${esc(x.car)} · ${x.laps ?? 0} lap${x.laps === 1 ? "" : "s"}</option>`;
+  }).join("");
+  $("#rp-session").value = cur;
+  if (!rp.d) {
+    // a replay the server still has (page reloaded, or opened on another device)
+    const st = await (await fetch("/api/shakers/replay")).json().catch(() => ({}));
+    if (st.ref && !rp.d) { $("#rp-session").value = st.ref; loadReplay(st.ref); }
+  }
+}
+
+async function loadReplay(ref) {
+  if (!ref) return;
+  $("#rp-note").textContent = "loading…";
+  const r = await fetch("/api/shakers/replay", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref, devid: sh.devid, effects: sh.effects }),
+  });
+  const d = await r.json();
+  if (!r.ok) { $("#rp-note").textContent = d.detail || "Cannot load this session"; return; }
+  const fresh = rp.d?.ref !== ref;
+  rp.d = d;
+  if (fresh) {
+    const out = [];
+    for (let i = 0; i < d.x.length; i++) {
+      const q = out[out.length - 1];
+      if (!q || Math.hypot(d.x[i] - q[0], d.z[i] - q[1]) > 3) out.push([d.x[i], d.z[i]]);
+    }
+    rp.outline = out;
+    const laps = [...new Set(d.lap)].filter((n) => n > 0);
+    $("#rp-lap").innerHTML = `<option value="">Lap…</option>` + laps.map((n) => `<option value="${n}">Lap ${n}</option>`).join("");
+    const sl = $("#rp-slider");
+    sl.min = 0; sl.max = Math.max(1, d.t1 - d.t0);
+  }
+  setReplayState(d.state);
+  ["#rp-lap", "#rp-play", "#rp-slider"].forEach((q) => ($(q).disabled = false));
+  $("#rp-body").hidden = false;
+  const notes = [];
+  const wheelFx = sh.effects.some((e) => ["TyreSlip", "TyreLock", "ABS"].includes(e.effect));
+  if (wheelFx && d.diameters === "simdash") notes.push("this car's tyre sizes are not in monocoque's file yet (simdash adds them at its next start), so in the car wheelspin and lock-up stay silent; the replay uses simdash's");
+  if (wheelFx && !d.diameters) notes.push("no tyre sizes known for this car: wheelspin and lock-up stay silent");
+  if (!cardConnected()) notes.push("shaker card not connected: showing only");
+  $("#rp-note").textContent = notes.join(" · ");
+  renderReplayFx();
+  renderMiniCar();
+  rp.lastDraw = -1;
+}
+
+// small top view of the car with its shakers (replay, live and session maps): same body and
+// shaker spots as the big one on the Shakers tab, no labels
+function buildShakerCar(svg, layout, channels) {
+  const body = $("#sh-car .car-body").outerHTML.replace(/<title>.*?<\/title>/g, "");
+  const bySpot = {};
+  Object.keys(layout).map(Number).sort((a, b) => a - b).forEach((ch) => (bySpot[layout[ch].spot] ??= []).push(ch));
+  let spots = "";
+  for (const [spot, chs] of Object.entries(bySpot)) {
+    const [x0, y] = SPOT_XY[spot] || [120, 220];
+    chs.forEach((ch, k) => {
+      const x = x0 + (k - (chs.length - 1) / 2) * 44;
+      const name = `${ch} · ${channels[ch]}${layout[ch].label ? ` · ${layout[ch].label}` : ` · ${SPOT_NAME[spot]}`}`;
+      spots += `<g class="spot" data-ch="${ch}" transform="translate(${x} ${y})"><title>${esc(name)}</title>
+        <circle r="25"/><text>${channels[ch]}</text></g>`;
+    });
+  }
+  $(svg).innerHTML = body + spots;
+}
+function renderMiniCar() { buildShakerCar("#rp-car", sh.layout, sh.opts.channels); }
+
+// light each shaker with its strongest effect: chan = { channel: { a: strength %, fx: effect } }
+function paintShakerCar(sel, chan, buzz) {
+  document.querySelectorAll(sel).forEach((g) => {
+    const c = chan[g.dataset.ch];
+    const on = !!c && c.a > 0;
+    g.style.setProperty("--lvl", on ? 0.25 + 0.75 * c.a / 100 : 0);
+    if (on) g.style.setProperty("--glow", `var(${FX_COLOUR[c.fx]})`);
+    g.classList.toggle("felt", on && buzz);
+    const t = g.querySelector("title");
+    if (t) t.textContent = t.textContent.replace(/: .*$/, "") + (on ? `: ${FX_NAME[c.fx]} ${c.a}%` : "");
+  });
+}
+
+// the live and session cars need the shaker layout even before the Shakers tab is opened
+const shCar = { layout: null, channels: null };
+async function loadShakerCars() {
+  if (sh.loaded) Object.assign(shCar, { layout: sh.layout, channels: sh.opts.channels });
+  else {
+    try {
+      const d = await (await fetch("/api/shakers")).json();
+      Object.assign(shCar, { layout: d.layout, channels: d.options.channels });
+    } catch { return; }
+  }
+  for (const svg of ["#live-car", "#sess-car"]) buildShakerCar(svg, shCar.layout, shCar.channels);
+  if (hist.shakers) paintSessionCar();
+}
+
+function setReplayState(st) {
+  rp.st = st;
+  rp.stAt = performance.now();
+  $("#rp-play").textContent = st.playing ? "Pause" : "Play";
+  if (st.error) $("#rp-note").textContent = st.error;
+}
+const replayTs = () => {
+  const st = rp.st;
+  if (!st) return 0;
+  return st.playing ? Math.min(st.t1 ?? Infinity, st.ts + (performance.now() - rp.stAt) / 1000 * st.speed) : st.ts;
+};
+
+async function replayControl(body) {
+  const r = await fetch("/api/shakers/replay/control", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ devid: sh.devid, speed: +$("#rp-speed").value, ...body }),
+  });
+  const d = await r.json();
+  if (!r.ok) { $("#rp-note").textContent = d.detail || "Replay failed"; return; }
+  setReplayState(d);
+  clearInterval(rp.poll);
+  if (d.playing) rp.poll = setInterval(pollReplay, 250);
+}
+async function pollReplay() {
+  try {
+    const st = await (await fetch("/api/shakers/replay")).json();
+    if (st.ref !== rp.d?.ref) return;
+    setReplayState(st);
+    if (!st.playing) clearInterval(rp.poll);
+  } catch { /* simdash restarting */ }
+}
+
+// effects in the replay: one row per effect card
+function renderReplayFx() {
+  const d = rp.d;
+  $("#rp-fx").innerHTML = sh.effects.map((e, i) => {
+    const wheels = sh.opts.wheel_effects.includes(e.effect) ? ` ${e.wheels.join("+")}` : "";
+    return `<div class="rp-fx" style="--c:var(${FX_COLOUR[e.effect]})"><span class="n">${FX_NAME[e.effect]}${wheels} → ${esc(chName(e.pan))}</span>
+      <span class="v" data-i="${i}"></span><div class="bar"><i data-i="${i}"></i></div></div>`;
+  }).join("") || '<span class="muted">No effect configured.</span>';
+  if (d && d.level.length !== sh.effects.length) scheduleReplayReload();
+}
+
+function replayIndex(t) {
+  const ts = rp.d.ts;
+  let lo = 0, hi = ts.length - 1;
+  if (t <= ts[0]) return 0;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ts[m] <= t) lo = m; else hi = m - 1; }
+  return lo;
+}
+
+function drawReplayFrame() {
+  const d = rp.d;
+  if (!d || currentTab !== "shakers") return;
+  const t = replayTs();
+  if (Math.abs(t - rp.lastDraw) < 0.01 && !rp.st?.playing) return;
+  rp.lastDraw = t;
+  const i = replayIndex(t), j = Math.min(i + 1, d.ts.length - 1);
+  const u = j > i && d.ts[j] - d.ts[i] < 2 ? clamp((t - d.ts[i]) / (d.ts[j] - d.ts[i]), 0, 1) : 0;
+  const x = d.x[i] + (d.x[j] - d.x[i]) * u, z = d.z[i] + (d.z[j] - d.z[i]) * u;
+  drawMap($("#rp-map"), rp.outline, [{ x, z, player: true, pos: d.gear[i] > 0 ? d.gear[i] : d.gear[i] < 0 ? "R" : "N" }], true);
+
+  if (document.activeElement !== $("#rp-slider")) $("#rp-slider").value = t - d.t0;
+  $("#rp-time").textContent = `${fmtDur(t - d.t0)} / ${fmtDur(d.t1 - d.t0)}`;
+  $("#rp-speed-v").textContent = d.speed[i];
+  $("#rp-gear").textContent = d.gear[i] > 0 ? d.gear[i] : d.gear[i] < 0 ? "R" : "N";
+  const rpm = d.rpm[i] + (d.rpm[j] - d.rpm[i]) * u, mx = d.maxrpm[i] || 0;
+  $("#rp-rpm").textContent = `${Math.round(rpm)}${mx ? ` / ${mx}` : ""}`;
+  const fill = $("#rp-rpmfill");
+  fill.style.width = mx ? `${clamp(rpm / mx, 0, 1) * 100}%` : "0";
+  fill.classList.toggle("red", mx > 0 && rpm >= 0.95 * mx);
+  drawReplaySurface(i);
+  $("#rp-lapv").textContent = d.lap[i] || "–";
+  $("#rp-thr").style.width = `${d.throttle[i] * 100}%`;
+  $("#rp-brk").style.width = `${d.brake[i] * 100}%`;
+
+  // effect levels, and each shaker on the car lit by its strongest effect
+  const chan = {};
+  d.level.forEach((lv, k) => {
+    const a = lv[i], e = sh.effects[k];
+    const v = $(`#rp-fx .v[data-i="${k}"]`), bar = $(`#rp-fx i[data-i="${k}"]`);
+    if (v) v.textContent = a ? `${d.freq[k][i]} Hz ${a}%` : "–";
+    if (bar) bar.style.width = `${a}%`;
+    if (e && a > (chan[e.pan]?.a ?? 0)) chan[e.pan] = { a, fx: e.effect };
+  });
+  paintShakerCar("#sh-spots .spot, #rp-car .spot", chan, !!rp.st?.playing);
+}
+
+// where the car is (worst surface under any tyre, from AMS2's raw terrain) and each wheel's
+// terrain and monocoque slip, highlighted past the threshold of an effect on that wheel
+const SURF_NAME = ["On track", "Kerb", "Off track"];
+function slipThreshold(kind, w) {
+  const th = sh.effects.filter((e) => e.effect === kind && e.wheels?.includes(w)).map((e) => e.threshold ?? 0);
+  return th.length ? Math.min(...th) : null;
+}
+function drawReplaySurface(i) {
+  const d = rp.d;
+  const codes = d.terrain.map((col) => col[i]);
+  const cls = codes.map((c) => (c == null ? null : d.surface[c] ?? null));
+  const worst = Math.max(-1, ...cls.filter((c) => c != null));
+  const where = $("#rp-where");
+  where.textContent = worst < 0 ? "–" : SURF_NAME[worst];
+  where.className = "pill" + (worst < 0 ? "" : ` s${worst}`);
+  $("#rp-wheels").innerHTML = ["FL", "FR", "RL", "RR"].map((w, k) => {
+    const name = codes[k] == null ? "–" : d.terrains[codes[k]] ?? `terrain ${codes[k]}`;
+    const sl = d.slip[k][i];
+    const lockTh = slipThreshold("TyreLock", w), spinTh = slipThreshold("TyreSlip", w);
+    const over = sl > 0 ? lockTh != null && sl > lockTh : spinTh != null && -sl > spinTh;
+    const colour = sl > 0 ? FX_COLOUR.TyreLock : FX_COLOUR.TyreSlip;
+    const slip = Math.abs(sl) < 0.005 ? "" : ` · <span class="${over ? "over" : ""}" style="--c:var(${colour})">${sl > 0 ? "lock" : "spin"} ${Math.abs(sl).toFixed(2)}</span>`;
+    return `<span><b>${w}</b> <span class="s${cls[k]}">${esc(name)}</span>${slip}</span>`;
+  }).join("");
+  document.querySelectorAll("#rp-car .tyre-r").forEach((t) => {
+    const k = ["FL", "FR", "RL", "RR"].indexOf(t.dataset.wheel);
+    t.setAttribute("class", `tyre-r s${cls[k] ?? 0}`);
+  });
+}
+
+function scheduleReplayReload() {
+  if (!rp.d) return;
+  clearTimeout(rp.reloadTimer);
+  rp.reloadTimer = setTimeout(() => loadReplay(rp.d.ref), 400);
+}
+
+$("#rp-session").onfocus = loadReplaySessions;
+$("#rp-session").onchange = async (ev) => {
+  if (rp.st?.playing) await replayControl({ action: "pause" });
+  loadReplay(ev.target.value);
+};
+$("#rp-play").onclick = () => replayControl(rp.st?.playing ? { action: "pause" } : { action: "play", ts: replayTs() >= rp.d.t1 - 0.1 ? rp.d.t0 : replayTs() });
+$("#rp-speed").onchange = () => { if (rp.st?.playing) replayControl({ action: "play", ts: replayTs() }); };
+$("#rp-slider").oninput = (ev) => replayControl({ action: rp.st?.playing ? "play" : "seek", ts: rp.d.t0 + +ev.target.value });
+$("#rp-lap").onchange = (ev) => {
+  const n = +ev.target.value;
+  const k = rp.d.lap.findIndex((l) => l === n);
+  ev.target.value = "";
+  if (k >= 0) replayControl({ action: rp.st?.playing ? "play" : "seek", ts: rp.d.ts[k] });
+};
+(function replayLoop() { drawReplayFrame(); requestAnimationFrame(replayLoop); })();
 
 // ---------- system: telemetry chain status and restarts ----------
 const sys = { data: null, busy: null, timer: null };
@@ -1843,6 +2114,7 @@ setInterval(() => { if (currentTab !== "system") loadSystem(); }, 15000);
 loadSystem();
 
 // ---------- start ----------
+loadShakerCars();
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
