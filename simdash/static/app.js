@@ -1353,8 +1353,12 @@ $("#d-delete").onclick = async () => {
 };
 
 // ---------- shakers (monocoque Sound effects) ----------
-const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle" };
-const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension" };
+const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle",
+  Kerb: "--s-clutch", OffTrack: "--surf-gravel" };
+const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension",
+  Kerb: "Kerb", OffTrack: "Off track" };
+// played by simdash itself from AMS2's per-wheel terrain, not by monocoque
+const OWN_FX = new Set(["Kerb", "OffTrack"]);
 const FX_DEFAULTS = {
   Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
   Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
@@ -1362,6 +1366,8 @@ const FX_DEFAULTS = {
   TyreLock: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "amplify", frequency: 40, amplitude: 50, amplitudeMax: 95 },
   ABS: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "none", frequency: 45, amplitude: 70 },
   Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
+  Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
+  OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
 };
 // AMS2 field audit (AMS2-TELEMETRY-FIELDS.md)
 const FX_HINT = {
@@ -1371,6 +1377,8 @@ const FX_HINT = {
   TyreLock: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
   Suspension: "AMS2: not mapped by simapi, gives no vibration.",
+  Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
+  OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
 };
 const SPOT_XY = { seat: [120, 240], "seat-back": [120, 274], pedals: [120, 166], "front-left": [29, 95], "front-right": [211, 95], "rear-left": [29, 344], "rear-right": [211, 344] };
 const SPOT_NAME = { none: "Not connected", seat: "Seat", "seat-back": "Seat back", pedals: "Pedals", "front-left": "Front left", "front-right": "Front right", "rear-left": "Rear left", "rear-right": "Rear right" };
@@ -1531,7 +1539,7 @@ function renderEffects() {
     f += fxField(e, i, "amplitude", mod === "amplify" ? "Strength min" : "Strength", 0, 100, 1, "%");
     if (mod === "amplify") f += fxField(e, i, "amplitudeMax", "Strength max", 0, 100, 1, "%");
     if (e.effect === "Gear") f += fxField(e, i, "duration", "Duration", 0.05, 1, 0.05, "s");
-    if (wheel) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
+    if (wheel && !OWN_FX.has(e.effect)) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
     f += fxField(e, i, "noise", "Roughness", 0, 20, 1, "Hz");
     const chOpts = o.channels.map((_, ch) => `<option value="${ch}"${ch === e.pan ? " selected" : ""}>${esc(chName(ch))}</option>`).join("");
     return `<div class="fx${sh.active === i ? " active" : ""}" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
@@ -1544,7 +1552,7 @@ function renderEffects() {
         <button class="del" data-act="del" data-i="${i}" title="Remove this effect">Remove</button>
       </div>
       <div class="fx-fields">${f}</div>
-      <div class="fx-hint">${wheel ? wheelNote(e) : ""}${FX_HINT[e.effect] || ""}</div></div>`;
+      <div class="fx-hint">${wheel && !OWN_FX.has(e.effect) ? wheelNote(e) : !e.wheels?.length && wheel ? '<b class="warn">Pick at least one wheel. </b>' : ""}${FX_HINT[e.effect] || ""}</div></div>`;
   }).join("");
 
   const box = $("#sh-effects");
@@ -1995,7 +2003,8 @@ function chainStates(d) {
     : d.simd.check === "live" ? ["ok", "live"]
     : on && shmLive ? ["bad", "sees no game", "simd does not see AMS2 (it stops finding it after a few restarts): Restart AMS2, or Restart simd."]
     : ["ok", "waiting for a game"];
-  st.monocoque = d.monocoque.running ? ["ok", "running"]
+  st.monocoque = d.monocoque.stale ? ["bad", "reads an old simd", "monocoque was started before simd was restarted and reads data that no longer changes (no vibration from it): Restart monocoque."]
+    : d.monocoque.running ? ["ok", "running"]
     : on ? ["warn", "not running", "monocoque is not running, so no vibration: Restart monocoque."] : ["off", "not running"];
   st.card = d.card.connected ? ["ok", "connected"] : ["bad", "not connected", "The shaker sound card is unplugged: plug the USB 7.1 card in."];
   st.crewchief = d.crewchief.running ? (d.crewchief.listening ? ["ok", "listening"] : ["warn", "starting"])

@@ -39,6 +39,13 @@ TERRAINS = ["road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road
             "orion only", "b1 rumbles", "b2 rumbles", "rough sand medium", "rough sand heavy",
             "snow walls", "ice road", "runoff road", "illegal strip", "paint concrete",
             "paint concrete illegal", "rally tarmac"]
+
+# Surface class of each terrain code: 0 track, 1 kerb, 2 off track (grass, gravel, runoff, walls...)
+KERBS = {"rumble strips", "exit rumble strips", "b1 rumbles", "b2 rumbles", "drains", "paint concrete"}
+TRACK = {"road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road 3", "marbles", "pavement",
+         "cobbles", "bumpy cobbles", "damaged road 1", "train track road", "rally tarmac"}
+SURFACE = [0 if t in TRACK else 1 if t in KERBS else 2 for t in TERRAINS]
+
 ERS_MODES = ["none", "off", "build", "balanced", "attack", "qual"]
 YELLOW_FLAG_STATES = {-1: "invalid", 0: "none", 1: "pending", 2: "pits closed", 3: "pit lead lap",
                       4: "pits open", 5: "pits open 2", 6: "last lap", 7: "resume", 8: "race halt"}

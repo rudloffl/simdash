@@ -126,7 +126,7 @@ def status(rec_live=None):
 
     mono = _pids("monocoque")
     out["monocoque"] = {"running": bool(mono), "pid": mono[0] if mono else None, "since": _started(mono[0]) if mono else None,
-                        "log": _tail(LOGS["monocoque"], 8)}
+                        "log": _tail(LOGS["monocoque"], 8), "stale": bool(mono) and _stale_simapi(mono[0])}
 
     cc = _pids(r"CrewChiefV4\.exe", full=True)
     udp = _run("ss", "-uln").stdout
@@ -184,11 +184,24 @@ def stop_monocoque():
     _note("monocoque stopped" if n else "monocoque was not running")
 
 
+def _stale_simapi(pid):
+    """True if the process still maps a SIMAPI.DAT that a newer simd has replaced (deleted)."""
+    try:
+        return any("SIMAPI.DAT" in l and l.rstrip().endswith("(deleted)") for l in Path(f"/proc/{pid}/maps").open())
+    except OSError:
+        return False
+
+
 def restart_simd():
     r = _run("systemctl", "--user", "restart", "simd", timeout=20)
     if r.returncode:
         raise RuntimeError(r.stderr.strip() or "systemctl failed")
-    _note("simd restarted")
+    # the new simd replaces /dev/shm/SIMAPI.DAT: a running monocoque would keep reading the old one
+    if _kill_monocoque():
+        _start_monocoque()
+        _note("simd restarted, and monocoque with it")
+    else:
+        _note("simd restarted")
 
 
 def _in_background(name, what, fn):

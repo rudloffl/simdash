@@ -14,6 +14,7 @@ import time
 from array import array
 
 from . import shakers, store
+from .pcars2 import SURFACE
 
 RATE = 8000           # Hz; shaker frequencies stay far below 4 kHz, and it keeps the synth cheap
 CHUNK = 0.05          # s of audio per synthesis step
@@ -116,20 +117,39 @@ def slip_play(dev, data, i, slips):
     return play
 
 
+SURFACE_FULL = 200 / 3.6  # m/s at which a surface effect reaches its max pitch or strength
+WHEEL_IDX = {"FL": 0, "FR": 1, "RL": 2, "RR": 3}
+
+
+def surface_play(dev, data, i):
+    """simdash's Kerb / OffTrack: one of the effect's wheels is on that surface (AMS2's raw terrain),
+    as strong as the car is fast (full at 200 km/h)."""
+    want = shakers.SURFACE_CLASS[dev["effect"]]
+    v = data["speed"][i]
+    if v < 1.5:
+        return 0.0
+    for w in dev["wheels"]:
+        t = data["terrain"][i][WHEEL_IDX[w]]
+        if t is not None and 0 <= t < len(SURFACE) and SURFACE[t] == want:
+            return max(0.01, min(1.0, v / SURFACE_FULL))
+    return 0.0
+
+
+def effect_value(dev, data, i, slips):
+    """(frequency, amplitude %) of a continuous effect at tick i; amplitude 0 = silent."""
+    if dev["effect"] == "Engine":
+        mx = round(data["maxrpm"][i])
+        return shakers._modulated(dev, round(data["rpm"][i]) / mx if mx > 0 else 0.0)
+    if dev["effect"] in shakers.SIMDASH_EFFECTS:
+        x = surface_play(dev, data, i)
+    else:
+        x = slip_play(dev, data, i, slips)
+    return shakers._modulated(dev, x) if x > 0 else (0.0, 0.0)
+
+
 def effect_track(dev, data, dia):
     """Per tick (frequency, amplitude %) of one continuous effect; amplitude 0 = silent."""
-    out = []
-    for i in range(len(data["ts"])):
-        if dev["effect"] == "Engine":
-            mx = round(data["maxrpm"][i])
-            x = round(data["rpm"][i]) / mx if mx > 0 else 0.0
-        else:
-            x = slip_play(dev, data, i, wheel_slip(data, i, dia))
-            if x <= 0:
-                out.append((0.0, 0.0))
-                continue
-        out.append(shakers._modulated(dev, x))
-    return out
+    return [effect_value(dev, data, i, wheel_slip(data, i, dia)) for i in range(len(data["ts"]))]
 
 
 def gear_events(data):
@@ -259,6 +279,7 @@ class Live:
     REFRESH = 5.0  # s between checks for a restarted monocoque or new tyre sizes
 
     def __init__(self):
+        self.player = OwnPlayer()
         self.devices, self.dia, self.car = [], None, None
         self.checked = 0.0
         self.gear = None
@@ -269,6 +290,9 @@ class Live:
         pids = system._pids("monocoque")
         since = system._started(pids[0]) if pids else None
         self.devices = shakers.devices_at(since)[0] if since else []
+        own = shakers.simdash_devices()  # simdash plays these itself, monocoque or not
+        self.devices += own
+        self.player.devid = shakers.load()["devid"] if own else ""
         if car != self.car or self.dia is None:
             self.car = car
         self.dia = tyre_diameters(car)[0]
@@ -280,24 +304,24 @@ class Live:
             self._refresh(snap["car"], now)
         lv = snap["local_vel"]
         data = {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
-                "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]]}
+                "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
+                "terrain": [list(snap["terrain"])]}
         shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
         self.gear = snap["gear"]
         slips = wheel_slip(data, 0, self.dia)
-        out = {}
+        out, own = {}, []
         for k, dev in enumerate(self.devices):
             if dev["effect"] == "Gear":
                 if shifted:
                     self.kicks[k] = now + float(dev.get("duration", 0.125))
                 a = dev.get("amplitude", 50) if self.kicks.get(k, 0) > now else 0
-            elif dev["effect"] == "Engine":
-                mx = round(snap["max_rpm"])
-                a = shakers._modulated(dev, round(snap["rpm"]) / mx if mx > 0 else 0.0)[1]
             else:
-                x = slip_play(dev, data, 0, slips)
-                a = shakers._modulated(dev, x)[1] if x > 0 else 0
+                f, a = effect_value(dev, data, 0, slips)
+                if dev["effect"] in shakers.SIMDASH_EFFECTS:
+                    own.append((dev, f, a))
             if a > out.get(dev["pan"], [0])[0]:
                 out[dev["pan"]] = [int(round(min(a, 100))), dev["effect"]]
+        self.player.feed(own, now)
         return out
 
 
@@ -313,6 +337,120 @@ class _Stream:
         self.noise = float(dev.get("noise", 0) or 0)
         self.phase = 0.0
         self.pulse = None  # gear: seconds into the current kick
+
+    def glide(self, mix, n, f0, a0, f1, a1):
+        """Add n samples gliding from (f0, a0) to (f1, a1) to the 8-channel mix."""
+        if a0 <= 0 and a1 <= 0:
+            self.phase = 0.0
+            return
+        for j in range(n):
+            u = j / n
+            f, a = f0 + (f1 - f0) * u, min(100.0, a0 + (a1 - a0) * u)
+            mix[8 * j + self.pan] += self.gain * a / 100 * math.sin(2 * math.pi * self.phase)
+            ff = f + (random.uniform(-1, 1) * self.noise if self.noise else 0)
+            self.phase = (self.phase + ff / RATE) % 1.0
+
+
+def _pcm(mix):
+    return array("h", (int(max(-1.0, min(1.0, v)) * 32767) for v in mix)).tobytes()
+
+
+def _pacat(devid, name):
+    if not devid or devid not in {s["name"] for s in shakers.sinks()}:
+        return None  # never let PulseAudio fall back to the speakers
+    return subprocess.Popen(
+        ["pacat", "--playback", f"--device={devid}", "--format=s16le", f"--rate={RATE}", "--channels=8",
+         "--channel-map=" + ",".join(shakers.CHANNEL_MAP), "--volume=65536", "--client-name=simdash",
+         f"--stream-name={name}", "--latency-msec=60"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class OwnPlayer:
+    """Plays simdash's own effects (kerbs, off track) live, next to monocoque on the same card.
+
+    The recorder feeds the effects' targets at each sample (~20 Hz); a thread turns them into
+    sound, gliding between targets. Without fresh targets (game paused, AMS2 closed) it goes
+    silent, and it lets the card go after IDLE seconds of silence.
+    """
+
+    STALE = 0.25   # s without a sample before going silent
+    IDLE = 10.0    # s of silence before closing the stream
+    RETRY = 10.0   # s between looks for an unplugged card
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.devid = ""
+        self.targets = {}   # id(dev) -> (stream, f, a)
+        self.fed = 0.0
+        self.thread = None
+
+    def feed(self, own, now):
+        with self.lock:
+            streams = {k: v[0] for k, v in self.targets.items()}
+            self.targets = {}
+            for dev, f, a in own:
+                key = (dev["effect"], dev["pan"], tuple(dev["wheels"]), dev.get("frequency"))
+                st = streams.get(key)
+                if st is None or st.dev != dev:
+                    st = _Stream(dev)
+                self.targets[key] = (st, f, a)
+            self.fed = time.monotonic()
+            loud = any(a > 0 for _, _, a in self.targets.values())
+            start = loud and self.devid and self.thread is None
+            if start:
+                self.thread = threading.Thread(target=self._run, daemon=True)
+        if start:
+            self.thread.start()
+
+    def _run(self):
+        proc, last_try, quiet_since = None, 0.0, time.monotonic()
+        prev = {}
+        n = int(CHUNK * RATE)
+        due = time.monotonic()  # when the next chunk must be written: a fixed schedule, so no drift
+        try:
+            while True:
+                t0 = time.monotonic()
+                with self.lock:
+                    fresh = t0 - self.fed < self.STALE
+                    cur = {k: (st, f, a if fresh else 0.0) for k, (st, f, a) in self.targets.items()}
+                    devid = self.devid
+                loud = any(a > 0 for _, _, a in cur.values())
+                if loud:
+                    quiet_since = t0
+                elif t0 - quiet_since > self.IDLE:
+                    break
+                if proc is None and loud and t0 - last_try > self.RETRY:
+                    last_try = t0
+                    proc = _pacat(devid, "simdash surfaces")
+                    if proc is not None:
+                        proc.stdin.write(_pcm([0.0] * (8 * n)))  # one chunk of margin against underruns
+                if proc is not None:
+                    mix = [0.0] * (8 * n)
+                    for k, (st, f, a) in cur.items():
+                        f0, a0 = prev.get(k, (f, 0.0))
+                        st.glide(mix, n, f0 if a0 > 0 else f, a0, f, a)
+                    try:
+                        proc.stdin.write(_pcm(mix))
+                        proc.stdin.flush()
+                    except (BrokenPipeError, OSError):
+                        proc.kill()
+                        proc = None
+                prev = {k: (f, a) for k, (_, f, a) in cur.items()}
+                due += CHUNK
+                late = time.monotonic() - due
+                if late > 0.2:
+                    due = time.monotonic()  # fell far behind (suspend, load): restart the schedule
+                else:
+                    time.sleep(max(0.0, -late))
+        finally:
+            if proc is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+                proc.terminate()
+            with self.lock:
+                self.thread = None
 
 
 class Player:
@@ -388,13 +526,7 @@ class Player:
 
     # -- audio thread --
     def _open(self, devid):
-        if not devid or devid not in {s["name"] for s in shakers.sinks()}:
-            return None  # never let PulseAudio fall back to the speakers
-        return subprocess.Popen(
-            ["pacat", "--playback", f"--device={devid}", "--format=s16le", f"--rate={RATE}", "--channels=8",
-             "--channel-map=" + ",".join(shakers.CHANNEL_MAP), "--volume=65536", "--client-name=simdash",
-             "--stream-name=shaker replay", "--latency-msec=60"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return _pacat(devid, "shaker replay")
 
     def _run(self, devid):
         self.proc = self._open(devid)
@@ -468,18 +600,8 @@ class Player:
                     s.phase = (s.phase + ff / RATE) % 1.0
                     s.pulse += 1 / RATE   # a kick lasts its duration in real time, whatever the replay speed
                 continue
-            f0, a0 = tl.state(k, t)
-            f1, a1 = tl.state(k, t_end)
-            if a0 <= 0 and a1 <= 0:
-                s.phase = 0.0
-                continue
-            for j in range(n):
-                u = j / n
-                f, a = f0 + (f1 - f0) * u, min(100.0, a0 + (a1 - a0) * u)
-                mix[8 * j + s.pan] += s.gain * a / 100 * math.sin(2 * math.pi * s.phase)
-                ff = f + (random.uniform(-1, 1) * s.noise if s.noise else 0)
-                s.phase = (s.phase + ff / RATE) % 1.0
-        return array("h", (int(max(-1.0, min(1.0, v)) * 32767) for v in mix)).tobytes()
+            s.glide(mix, n, *tl.state(k, t), *tl.state(k, t_end))
+        return _pcm(mix)
 
 
 player = Player()

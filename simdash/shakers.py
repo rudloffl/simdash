@@ -21,12 +21,17 @@ from . import store
 
 CONFIG = Path.home() / ".config/monocoque/monocoque.config"
 LAYOUT = store.DATA_DIR / "shakers.json"  # where each channel's shaker sits on the car (simdash only)
+OWN_EFFECTS = store.DATA_DIR / "effects.json"  # simdash's own effects (SIMDASH_EFFECTS)
 
 RATE = 44100
 CHANNEL_MAP = ["front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right", "side-left", "side-right"]
 CHANNEL_SHORT = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
-EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension"]
-WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"}
+EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack"]
+# played by simdash itself from AMS2's per-wheel terrain (monocoque has no surface effect), kept in
+# simdash's own file so monocoque never reads an effect it does not know
+SIMDASH_EFFECTS = {"Kerb", "OffTrack"}
+SURFACE_CLASS = {"Kerb": 1, "OffTrack": 2}  # pcars2.SURFACE class each one reacts to
+WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"} | SIMDASH_EFFECTS
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
 WHEELS = ["FL", "FR", "RL", "RR"]
 TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
@@ -224,6 +229,7 @@ def load():
             if g is not None:
                 groups[g] = e
         effects.append(e)
+    effects += simdash_devices()
     devid = next((e.get("devid") for e in effects if e.get("devid")), "")
     return {"effects": effects, "devid": devid, "path": str(CONFIG), "mtime": CONFIG.stat().st_mtime if CONFIG.exists() else 0}
 
@@ -296,6 +302,10 @@ def expand(effects, devid):
     layout = load_layout()
     cleaned, source = [], []
     for i, e in enumerate(effects):
+        if _norm_effect(e.get("effect")) in SIMDASH_EFFECTS:
+            cleaned.append(_clean_own(e))
+            source.append(i)
+            continue
         if _norm_effect(e.get("effect")) not in WHEEL_EFFECTS:
             cleaned.append(_clean(e, devid, layout))
             source.append(i)
@@ -313,10 +323,40 @@ def expand(effects, devid):
     return cleaned, source
 
 
+def _clean_own(e):
+    """One of simdash's own effects, with any wheel set (simdash plays it, so no splitting)."""
+    out = {"device": "Sound", "effect": _norm_effect(e.get("effect")),
+           "wheels": [w for w in WHEELS if w in (e.get("wheels") or [])]}
+    if not out["wheels"]:
+        raise ValueError(f"{out['effect']}: pick at least one wheel")
+    out["pan"] = max(0, min(7, int(e.get("pan", 0))))
+    for k, lo, hi in (("volume", 0, 100), ("frequency", 0, 200), ("frequencyMax", 0, 200),
+                      ("amplitude", 0, 100), ("amplitudeMax", 0, 100), ("noise", 0, 50)):
+        if e.get(k) not in (None, ""):
+            out[k] = max(lo, min(hi, int(round(float(e[k])))))
+    mod = str(e.get("modulation", "none")).lower()
+    out["modulation"] = mod if mod in MODULATIONS else "none"
+    return out
+
+
+def simdash_devices():
+    """simdash's own effects as saved (current settings: they have no history)."""
+    try:
+        return [_clean_own(e) for e in json.loads(OWN_EFFECTS.read_text())]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
 def save(effects, devid):
     if not devid:
         raise ValueError("choose the shaker sound card first")
     cleaned, _ = expand(effects, devid)
+    own = [d for d in cleaned if d["effect"] in SIMDASH_EFFECTS]
+    cleaned = [d for d in cleaned if d["effect"] not in SIMDASH_EFFECTS]
+    OWN_EFFECTS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = OWN_EFFECTS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(own, indent=1))
+    tmp.replace(OWN_EFFECTS)
     cfg = _read_cfg()
     entry = _default_entry(cfg)
     others = [d for d in entry.get("devices", []) if str(d.get("device", "")).lower() != "sound"]

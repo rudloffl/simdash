@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import replay, shakers, store, system
-from .pcars2 import TERRAINS
+from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
 log = logging.getLogger("simdash")
@@ -25,11 +25,6 @@ SAMPLE_COLS = ["ts", "lap", "lap_dist", "lap_time", "x", "z", "speed", "rpm", "g
                "brake", "steer", "clutch", "g_lat", "g_long", "slip_angle", "slip_fl", "slip_fr",
                "slip_rl", "slip_rr", "abs", "pos"]
 
-# Surface class of each terrain code: 0 track, 1 kerb, 2 off track (grass, gravel, runoff, walls...)
-KERBS = {"rumble strips", "exit rumble strips", "b1 rumbles", "b2 rumbles", "drains", "paint concrete"}
-TRACK = {"road", "low grip road", "bumpy road 1", "bumpy road 2", "bumpy road 3", "marbles", "pavement",
-         "cobbles", "bumpy cobbles", "damaged road 1", "train track road", "rally tarmac"}
-SURFACE = [0 if t in TRACK else 1 if t in KERBS else 2 for t in TERRAINS]
 
 
 class ShakerConfig(BaseModel):
@@ -225,6 +220,7 @@ def create_app(recorder=None):
         if row is None:
             raise HTTPException(404, "no such session")
         devices, path = shakers.devices_at(row[0])
+        devices += shakers.simdash_devices()  # simdash's own effects: today's settings, no history
         try:
             tl = replay.Timeline(ref, devices=devices)
         except LookupError:

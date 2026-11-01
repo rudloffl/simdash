@@ -60,7 +60,8 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   corner names and sector lines on the maps and traces, race replay of all cars (with the car seen from
   above showing which shaker played what at that moment), results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
-- **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque).
+- **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb and
+  off-track effects simdash plays itself.
   A top view of the car shows where each channel of the shaker sound card is mounted (seat,
   pedals, each wheel...) and which effects it gets. Each effect (engine, gear shift, wheelspin,
   lock-up, ABS, suspension) gets its shaker, wheels, modulation, frequency, strength, threshold
@@ -117,9 +118,24 @@ it starts: after saving, use **Restart monocoque** on the System tab, or start a
   on the car (one side, a diagonal, three wheels) is saved as one effect per part on the same
   shaker, each 3 Hz above the previous so the sines add up instead of cancelling, tagged with a
   `group` key that monocoque ignores so simdash shows them as one effect again.
+- **monocoque plays every effect at 8× its frequency on a 7.1 card** (as of monocoque `47d0c50`): its
+  PulseAudio callbacks advance the sine once per 16-bit value instead of once per frame of interleaved
+  channels, so a 30 Hz effect comes out at 240 Hz and gear kicks last 1/8 of their duration. The setup
+  this was written for runs monocoque with a local fix (one time step per frame, the sample copied to
+  every channel); without it, the Tests and the replay here feel lower than the car.
 - AMS2 notes shown per effect: wheelspin and lock-up need each car's tyre diameters, which simdash
   gives monocoque (below); ABS probably never fires and suspension gives nothing (simapi does not map
   AMS2's suspension, so kerbs cannot be felt through monocoque).
+
+### Kerbs and off track (played by simdash)
+
+monocoque has no effect for the track surface, and its Suspension effect gets nothing from AMS2, so simdash
+adds two effects of its own: **Kerb** (rumble strips, kerbs, drains) and **Off track** (grass, gravel,
+sand, runoff...). Each takes any set of wheels and plays while one of them is on that surface, from AMS2's
+raw terrain per wheel (`mTerrain`), with its pitch or strength rising with speed (full at 200 km/h).
+simdash plays them itself on the shaker card next to monocoque (PulseAudio mixes the two), so they need
+simdash running but no monocoque restart: they apply a few seconds after saving. They are saved in
+simdash's `effects.json`, never in `monocoque.config`, and show in the replay and on the small cars.
 
 ### Shakers on the Live and Sessions maps
 
@@ -163,6 +179,12 @@ simd runs as the systemd user service `simd`. **Start session** and **Restart AM
 `start-race`; **Quit AMS2** ends the game process and waits for `start-race` to clean up.
 Opening the page on the game PC while AMS2 runs moves the focus away from AMS2, which then loses
 the wheel: use it from a phone or tablet (`simdash --host 0.0.0.0`) during a race.
+
+A restarted simd deletes `/dev/shm/SIMAPI.DAT` and creates a new one, so a monocoque started before it
+keeps reading the old copy, which no longer changes, and plays nothing that follows the race.
+**Restart simd** therefore restarts a running monocoque too, and monocoque shows red ("reads an old simd")
+when it still maps a deleted `SIMAPI.DAT`. The `start-race` used here also stops such a monocoque after
+restarting simd, before starting its own.
 
 ## Data source
 

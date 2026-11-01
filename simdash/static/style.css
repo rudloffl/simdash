@@ -342,8 +342,8 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 
 /* shaker replay */
 .sh-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; align-self: stretch; }
-/* stays in view while the effects on the right are tuned */
-#rp-card { position: sticky; top: 8px; z-index: 2; max-height: calc(100vh - 16px); overflow: auto; }
+/* stays in view while the effects on the right are tuned; last in its column, so it covers nothing */
+#rp-card { position: sticky; top: 56px; max-height: calc(100vh - 64px); overflow: auto; }  /* below the sticky top bar */
 .rp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 #rp-session { max-width: 420px; min-width: 0; flex: 0 1 420px; }
 #rp-slider { flex: 1 1 160px; padding: 0; }
