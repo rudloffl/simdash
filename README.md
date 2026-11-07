@@ -281,6 +281,7 @@ Offsets of every field in `pcars2_offsets.json` are generated from simapi's `pca
 | Path | Contents |
 |---|---|
 | `days/YYYY-MM-DD.sqlite` | one database per day, every shared-memory field in its raw unit (layout below) |
+| `days/YYYY-MM-DD.sqlite.zst` + `.summary.sqlite` | a day older than 7 days, slimmed and compressed (below) |
 | `tracks/*.json` | track outline from your best clean lap, used for the live map |
 | `tracks/*.corners.json` | corner names you gave (AMS2 provides none), matched to corners by apex distance |
 | `wheels.json` | learned wheel ratios per car |
@@ -289,7 +290,7 @@ Offsets of every field in `pcars2_offsets.json` are generated from simapi's `pca
 A session belongs to the day it started on. A new session starts on a change of
 track, car or session type, on a restart, or after returning to the main menu.
 Sessions with under 15 s of driving and no completed lap are dropped.
-Size is roughly 40 to 100 MB per hour of driving.
+Size is roughly 40 to 100 MB per hour of driving while a day is recent.
 
 Tables, by how often their data changes (full column list in `simdash/store.py`):
 
@@ -303,13 +304,32 @@ Tables, by how often their data changes (full column list in `simdash/store.py`)
 | `telemetry` | player car at 20 Hz: inputs, engine, motion vectors, fluids, position |
 | `wheel` | 4 rows per 20 Hz tick: suspension, temperatures, pressure, wear, damage, terrain, slip |
 | `car_motion` | every car at 2 Hz: position, orientation, speed, lap, race position |
-| `player_state`, `player_timing`, `event_state`, `weather`, `car_status` | change logs: a row only when a value changes (flags, damage, settings, compounds, lap and sector times, rules, weather, each car's status) |
+| `player_state`, `player_timing`, `event_state`, `weather`, `car_status` | change logs: a row only when a value changes (flags, damage, settings, compounds, lap and sector times, rules, weather, each car's status). Values that move on every sample (running sector clocks, live gaps, engine damage) write a row only along with another change, when the car enters a new sector, or at most every 0.5 s (gaps) / 5 s (engine damage) |
 | `enum_name` | names of the enum codes (session type, race state, terrain...) |
 
 A change-log row is valid from its tick until the next row for the same session
 (and car, for `car_status`). The views `v_sessions`, `v_samples` and `v_results`
 join it all back into the shapes the web app uses. Databases from before this
 layout are renamed `YYYY-MM-DD.v1.sqlite` on first start and no longer listed.
+
+### Old days: slimmed and compressed
+
+Once a day is 7 days old, simdash slims it and compresses it (checked every hour, never while a
+session is being recorded; the System tab's Database card shows each day's state and can run it by
+hand):
+
+- **good laps keep every detail**: each session's best valid lap, valid laps within 1 % of it, and
+  every lap that was your best ever on its track layout with its car when you drove it;
+- **other laps** keep every 10th sample (2 Hz: speed, pedals, gear, line), without `wheel` rows;
+- **other cars** keep their results and their positions at 1 Hz (position chart and race replay
+  still work); change-log rows where only the always-moving values changed are dropped;
+- then the file is compressed with zstd into `YYYY-MM-DD.sqlite.zst`, next to a small
+  `YYYY-MM-DD.summary.sqlite` (sessions and laps, no samples) that the session list, Progress and
+  best-lap lookups read. Opening a session unpacks the day into `~/.cache/simdash/days/` (kept under
+  800 MB, least recently used first); deleting a session turns the day back into a plain file, and it
+  is compressed again on the next run.
+
+A day of about 500 MB ends up around 40 MB. Code: `simdash/slim.py`.
 
 ## Testing without the game
 

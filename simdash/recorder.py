@@ -47,6 +47,33 @@ TELEMETRY_ROW = row_maker(store.TELEMETRY)
 CAR_MOTION_ROW = row_maker(store.CAR_MOTION)
 CAR_STATUS_ROW = row_maker(store.CAR_STATUS)
 CHANGE_LOG_ROWS = {table: row_maker(spec) for table, spec in store.CHANGE_LOGS.items()}
+
+# Change-log columns that move on every sample (running sector clocks, live gaps, creeping engine
+# damage). Alone they write a row at most every `period` seconds (never for None); a row is also
+# written when the car enters a new sector, which keeps each finished sector's final time.
+VOLATILE = {"player_timing": ({"split_ahead", "split_behind", "s1", "s2", "s3"}, 0.5),
+            "player_state": ({"engine_damage"}, 5.0),
+            "car_status": ({"s1", "s2", "s3"}, None)}
+_SPECS = {**store.CHANGE_LOGS, "car_status": store.CAR_STATUS}
+VOLATILE_IDX = {t: (frozenset(i for i, (col, *_) in enumerate(_SPECS[t]) if col in cols), period)
+                for t, (cols, period) in VOLATILE.items()}
+
+
+def log_changed(prev, vals, table, sector, now):
+    """Whether a change-log row is due; prev is (values, sector, time) of the last row written."""
+    if prev is None:
+        return True
+    pvals, psector, pt = prev
+    idx, period = VOLATILE_IDX.get(table, (frozenset(), None))
+    if sector != psector:
+        return True
+    moved = False
+    for i, (a, b) in enumerate(zip(vals, pvals)):
+        if a != b:
+            if i not in idx:
+                return True
+            moved = True
+    return moved and period is not None and now - pt >= period
 WHEEL_FIELDS = [field for _, field in store.WHEEL]
 # insert order: ticks before the rows that point to them
 FLUSH_ORDER = ("tick", "telemetry", "wheel", *store.CHANGE_LOGS, "car_motion", "car_status")
@@ -417,16 +444,16 @@ class Recorder(threading.Thread):
             for w in range(4):
                 s.rows["wheel"].append((tid, w, *[raw[f][w] for f in WHEEL_FIELDS], sl[w]))
 
-        # change logs: a row only when something differs from the last one written
+        # change logs: a row only when something differs from the last one written (see VOLATILE)
         for table, make in CHANGE_LOG_ROWS.items():
             vals = make(raw, praw)
-            if s.changes.get(table) != vals:
-                s.changes[table] = vals
+            if log_changed(s.changes.get(table), vals, table, player["sector"], now):
+                s.changes[table] = (vals, player["sector"], now)
                 s.rows[table].append((self.tick_row(s, now), *vals))
         for c in snap["cars"]:
             vals = CAR_STATUS_ROW(raw, c["raw"])
-            if s.changes.get(c["idx"]) != vals:
-                s.changes[c["idx"]] = vals
+            if log_changed(s.changes.get(c["idx"]), vals, "car_status", c["sector"], now):
+                s.changes[c["idx"]] = (vals, c["sector"], now)
                 s.rows["car_status"].append((c["idx"], self.tick_row(s, now), *vals))
         self.sync_participants(s, snap)
 

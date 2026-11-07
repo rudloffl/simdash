@@ -361,10 +361,28 @@ def open_day(day):
 
 
 def read_day(day):
-    """Connection for the web app. Not opened read-only: WAL readers need the -shm file."""
+    """Connection for the web app. Not opened read-only: WAL readers need the -shm file.
+    A compressed day (slim.py) is unpacked into a cache first."""
     path = day_path(day)
     if not path.exists():
-        raise FileNotFoundError(day)
+        from . import slim
+        if not slim.zst_path(day).exists():
+            raise FileNotFoundError(day)
+        path = slim.cached_day(day)
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    _math(con)
+    return con
+
+
+def read_day_summary(day):
+    """Sessions and laps of a day without unpacking it: the day file itself, or a compressed day's summary."""
+    if day_path(day).exists():
+        return read_day(day)
+    from . import slim
+    path = slim.summary_path(day)
+    if not path.exists():
+        return read_day(day)
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     _math(con)
@@ -382,7 +400,10 @@ def delete_session(con, sid):
 def list_days():
     if not DAYS_DIR.exists():
         return []
-    return sorted((p.stem for p in DAYS_DIR.glob("*.sqlite") if DAY_RE.match(p.stem)), reverse=True)
+    # YYYY-MM-DD.sqlite, or YYYY-MM-DD.sqlite.zst once compressed (*.v1.sqlite and *.summary.sqlite don't match)
+    days = {p.name.removesuffix(".sqlite") for p in DAYS_DIR.glob("*.sqlite")}
+    days |= {p.name.removesuffix(".sqlite.zst") for p in DAYS_DIR.glob("*.sqlite.zst")}
+    return sorted((d for d in days if DAY_RE.match(d)), reverse=True)
 
 
 def parse_ref(ref):
@@ -394,7 +415,7 @@ def all_sessions():
     out = []
     for day in list_days():
         try:
-            con = read_day(day)
+            con = read_day_summary(day)
             rows = con.execute("SELECT * FROM v_sessions ORDER BY started_at DESC").fetchall()
             con.close()
         except sqlite3.Error:
@@ -407,12 +428,42 @@ def all_sessions():
     return out
 
 
+def stats():
+    """Totals over every day, from sessions and laps only (cheap: compressed days read their summary).
+    Distance = completed laps x track length, so out-laps and unfinished laps are not counted."""
+    out = {"days": 0, "sessions": 0, "laps": 0, "km": 0.0, "driving_s": 0.0, "cars": {}, "tracks": {}}
+    for day in list_days():
+        try:
+            con = read_day_summary(day)
+            rows = con.execute(
+                """SELECT v.car, v.car_class, v.track, v.variation, v.track_length, v.driving_s,
+                          (SELECT COUNT(*) FROM lap l WHERE l.session_id = v.id AND l.lap_time > 0) AS laps
+                   FROM v_sessions v""").fetchall()
+            con.close()
+        except sqlite3.Error:
+            continue
+        out["days"] += 1
+        for r in rows:
+            km = (r["laps"] or 0) * (r["track_length"] or 0) / 1000
+            out["sessions"] += 1
+            out["laps"] += r["laps"] or 0
+            out["km"] += km
+            out["driving_s"] += r["driving_s"] or 0
+            for key, name in (("cars", r["car"]), ("tracks", r["track"])):
+                e = out[key].setdefault(name, {"km": 0.0, "laps": 0, "sessions": 0})
+                e["km"] += km
+                e["laps"] += r["laps"] or 0
+                e["sessions"] += 1
+            out["cars"][r["car"]]["class"] = r["car_class"]
+    return out
+
+
 def best_laps(track, variation, car, exclude_ref=None, limit=15):
     """Best valid lap of every session on this track layout with this car, from every day, fastest first."""
     out = []
     for day in list_days():
         try:
-            con = read_day(day)
+            con = read_day_summary(day)
             rows = con.execute(
                 """SELECT s.id, s.session_type, s.started_at, l.lap, MIN(l.lap_time) AS lap_time
                    FROM lap l JOIN v_sessions s ON s.id = l.session_id
@@ -434,7 +485,7 @@ def progress(track, variation, car):
     out = []
     for day in list_days():
         try:
-            con = read_day(day)
+            con = read_day_summary(day)
             sessions = con.execute(
                 """SELECT id, session_type, started_at, driving_s, start_pos, final_pos, num_cars, result
                    FROM v_sessions WHERE track = ? AND variation = ? AND car = ?""", (track, variation, car)).fetchall()

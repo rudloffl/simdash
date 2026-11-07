@@ -506,3 +506,5 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .pf-replay #pf-session { flex: 1; min-width: 220px; }
 #pilot-pop { pointer-events: none; }
 .pf-stage .pilot-pop:not([hidden]) + span { display: none; }
+.st-lists { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 900px) { .st-lists { grid-template-columns: minmax(0, 1fr); } }

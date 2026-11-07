@@ -2722,6 +2722,58 @@ async function pollLeds() {
   if (st.live_max_rpm !== led.liveMax) { led.liveMax = st.live_max_rpm || null; shiftHint(); }
 }
 
+// ---------- storage: old days slimmed and compressed ----------
+const fmtMB = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB`);
+const ST_STATE = { full: "full detail", slim: "slimmed", compressed: "slimmed + compressed" };
+async function loadStorage() {
+  let d;
+  try { d = await (await fetch("/api/storage")).json(); } catch { return; }
+  renderStorage(d);
+}
+function renderStorage(d) {
+  const total = d.days.reduce((a, x) => a + x.bytes, 0);
+  $("#st-total").textContent = `${fmtMB(total)} in ${d.days.length} days`;
+  const st = d.stats;
+  if (st) {
+    const tile = (label, value, sub = "") => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+    const km = (v) => Math.round(v).toLocaleString();
+    const compressed = d.days.filter((x) => x.state === "compressed").length;
+    $("#st-tiles").innerHTML = [
+      tile("Days", st.days, compressed ? `${compressed} compressed` : ""),
+      tile("Size", fmtMB(total), d.cache_bytes ? `+ ${fmtMB(d.cache_bytes)} cache` : ""),
+      tile("Sessions", st.sessions),
+      tile("Laps", st.laps.toLocaleString(), "completed"),
+      tile("Distance", `${km(st.km)} km`, "completed laps"),
+      tile("Driving", fmtDur(st.driving_s)),
+      tile("Cars", Object.keys(st.cars).length),
+      tile("Tracks", Object.keys(st.tracks).length),
+    ].join("");
+    const rows = (o, cls) => Object.entries(o).sort((a, b) => b[1].km - a[1].km).map(([n, v]) => `<tr><td>${esc(n)}${cls && v.class ? ` <span class="muted">${esc(v.class)}</span>` : ""}</td>
+      <td class="r">${v.sessions}</td><td class="r">${v.laps}</td><td class="r num">${km(v.km)}</td></tr>`).join("");
+    $("#st-cars tbody").innerHTML = rows(st.cars, true);
+    $("#st-tracks tbody").innerHTML = rows(st.tracks, false);
+  }
+  $("#st-rule").textContent = `Days older than ${d.older_than} days are slimmed and compressed automatically (checked every hour, never during a session). `
+    + `Good laps keep every detail: each session's best lap, laps within ${Math.round((d.good_ratio - 1) * 100)} % of it, and every lap that was your best ever on its track with its car. `
+    + `Other laps keep 2 samples per second (speed, pedals, gear, line) without the per-wheel data; other cars keep their results and 1 position per second. `
+    + `A compressed day unpacks by itself when you open one of its sessions.`;
+  $("#st-days tbody").innerHTML = d.days.map((x) => `<tr><td>${x.day}</td>
+    <td>${ST_STATE[x.state] || x.state}${x.state === "full" && x.eligible ? ' <span class="muted">(due)</span>' : ""}</td>
+    <td class="r num">${fmtMB(x.bytes)}</td></tr>`).join("");
+  $("#st-run").disabled = d.busy || d.recording || !d.days.some((x) => x.eligible && x.state !== "compressed");
+  $("#st-msg").textContent = d.busy ? "Working…" : d.recording ? "Waiting: a session is being recorded." : "";
+}
+$("#st-run").onclick = async () => {
+  $("#st-run").disabled = true;
+  $("#st-msg").textContent = "Working… (a few seconds per day)";
+  const r = await fetch("/api/storage/run", { method: "POST" });
+  const d = await r.json();
+  if (!r.ok) { $("#st-msg").textContent = d.detail || "Failed"; loadStorage(); return; }
+  renderStorage(d);
+  const saved = d.done.reduce((a, x) => a + x.before - x.after, 0);
+  $("#st-msg").textContent = d.done.length ? `${d.done.length} day${d.done.length > 1 ? "s" : ""} done, ${fmtMB(saved)} freed.` : "Nothing to do.";
+};
+
 // ---------- system: telemetry chain status and restarts ----------
 const sys = { data: null, busy: null, timer: null };
 const fmtAge = (since, now) => {
@@ -2822,6 +2874,7 @@ function renderSystem() {
 }
 
 async function loadSystem() {
+  loadStorage();
   try {
     const r = await fetch("/api/system");
     if (r.ok) sys.data = await r.json();

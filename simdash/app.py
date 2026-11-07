@@ -5,6 +5,7 @@ import csv
 import io
 import logging
 import sqlite3
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import genie, leds, replay, shakers, store, system
+from . import genie, leds, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -69,10 +70,34 @@ class CornerName(BaseModel):
 def create_app(recorder=None):
     rec = recorder or Recorder()
 
+    storage_lock = threading.Lock()
+    recording = lambda: "session" in rec.snapshot()  # noqa: E731
+
+    def run_storage():
+        """Slim and compress the days old enough; never while a session is being recorded."""
+        if not storage_lock.acquire(blocking=False):
+            return None
+        try:
+            return slim.run(busy=recording)
+        finally:
+            storage_lock.release()
+
+    async def storage_loop():
+        await asyncio.sleep(120)  # let simdash settle after a start
+        while True:
+            if not recording():
+                try:
+                    await asyncio.to_thread(run_storage)
+                except Exception:
+                    logging.getLogger("simdash").exception("storage: slim/compress failed")
+            await asyncio.sleep(3600)
+
     @asynccontextmanager
     async def lifespan(app):
         rec.start()
+        storage_task = asyncio.create_task(storage_loop())
         yield
+        storage_task.cancel()
         rec.stop()
         await asyncio.to_thread(rec.join, 5)
 
@@ -338,6 +363,12 @@ def create_app(recorder=None):
     def delete_session(ref: str):
         if rec.snapshot().get("session", {}).get("ref") == ref:
             raise HTTPException(409, "session is being recorded")
+        try:
+            day, _ = store.parse_ref(ref)
+            with storage_lock:
+                slim.unpack(day)  # a compressed day becomes a normal file again (recompressed later)
+        except ValueError:
+            raise HTTPException(404, "no such session")
         con, sid = open_ref(ref)
         try:
             with con:
@@ -422,6 +453,22 @@ def create_app(recorder=None):
         except LookupError as e:
             raise HTTPException(409, str(e))
         return p.state()
+
+    # ---- storage: slimming and compressing old days ----
+
+    @app.get("/api/storage")
+    async def storage():
+        return {**await asyncio.to_thread(slim.overview), "stats": await asyncio.to_thread(store.stats),
+                "busy": storage_lock.locked(), "recording": recording()}
+
+    @app.post("/api/storage/run")
+    async def storage_run():
+        if recording():
+            raise HTTPException(409, "a session is being recorded: try again once it is over")
+        done = await asyncio.to_thread(run_storage)
+        if done is None:
+            raise HTTPException(409, "already running")
+        return {"done": done, **await asyncio.to_thread(slim.overview)}
 
     # ---- Corner Genie: corner recap popup settings ----
 
