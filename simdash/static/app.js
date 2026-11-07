@@ -708,6 +708,7 @@ async function openSession(ref) {
     <td class="r">${fmtLap(p.best_lap)}</td><td class="muted">${esc(p.race_state)}</td></tr>`).join("")
     || `<tr><td colspan="6" class="empty">No participant data.</td></tr>`;
   initReplay(d);
+  loadPositions(d);
 }
 
 function renderLaps() {
@@ -1274,7 +1275,7 @@ async function initReplay(d) {
   replay.timer = null;
   $("#replay-play").textContent = "Play";
   replay.cars = null;
-  if (!d.t0) { $("#replay-card").hidden = true; return; }
+  if (!d.t0) { $("#replay-pane").hidden = true; return; }
   const path = await (await fetch(`/api/sessions/${hist.ref}/path`)).json();
   const out = [];
   for (let i = 0; i < path.x.length; i++) {
@@ -1292,7 +1293,7 @@ async function initReplay(d) {
   sl.min = 0;
   sl.max = Math.max(1, d.t1 - d.t0);
   sl.value = 0;
-  $("#replay-card").hidden = false;
+  $("#replay-pane").hidden = false;
   seekReplay(0);
 }
 
@@ -1309,6 +1310,7 @@ async function seekReplay(offset) {
     replay.at = replay.t0 + o;
     paintSessionCar();
     drawReplay();
+    if (hist.positions) Plotly.relayout("positions-plot", { shapes: positionCursor() });
   }
   replay.busy = false;
 }
@@ -1324,6 +1326,151 @@ function paintSessionCar() {
 }
 function drawReplay() { drawMap($("#replay-map"), replay.outline, replay.cars || [], false, trackMarks(hist.lapData, hist.trackKey)); }
 $("#replay-slider").oninput = (e) => seekReplay(+e.target.value);
+
+// ---------- folding the session page's cards (state kept per card title) ----------
+const folded = new Set(pref.get("folded", []));
+function foldKey(card) { return card.querySelector(":scope > h3").firstChild.textContent.trim(); }
+for (const card of document.querySelectorAll("#session-detail .card")) {
+  const h = card.querySelector(":scope > h3");
+  if (!h) continue;
+  card.classList.toggle("folded", folded.has(foldKey(card)));
+  h.title = "Click to fold / unfold";
+  h.addEventListener("click", (e) => {
+    if (e.target.closest("select, input, button, a, label")) return;
+    const k = foldKey(card), now = card.classList.toggle("folded");
+    if (now) folded.add(k); else folded.delete(k);
+    pref.set("folded", [...folded]);
+    if (!now) {  // plots and canvases drawn while hidden have no size: redraw them
+      for (const el of card.querySelectorAll(".js-plotly-plot")) Plotly.Plots.resize(el);
+      if (card.id === "replay-card" && replay.outline) drawReplay();
+    }
+  });
+}
+
+// ---------- position over the session: one step line per car, the player's in blue ----------
+async function loadPositions(d) {
+  const ref = hist.ref;
+  hist.positions = null;
+  $("#positions-card").hidden = true;
+  if (!d.t0) return;
+  const r = await fetch(`/api/sessions/${ref}/positions`);
+  const cars = r.ok ? await r.json() : [];
+  if (hist.ref !== ref || cars.length < 2) return;
+  hist.positions = cars;
+  $("#positions-card").hidden = false;
+  drawPositions();
+}
+function positionCursor() {
+  if (replay.at == null) return [];
+  const x = (replay.at - hist.detail.t0) / 60;
+  return [{ type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: { color: css("--text-2"), width: 1, dash: "dot" } }];
+}
+// you in blue; the car that finished just ahead of you orange, just behind aqua, the next ahead (or behind) yellow.
+// Only these four hues stay apart for colour-blind readers; every other car is grey until hovered.
+const RIVAL_COLOURS = ["--s-spin", "--s-throttle", "--s-angle"];
+function positionColours(cars) {
+  const fin = (c) => c.pos[c.pos.length - 1];
+  const me = cars.find((c) => c.player), mine = me ? fin(me) : 0;
+  const others = cars.filter((c) => c !== me);
+  const at = (p) => others.find((c) => fin(c) === p);
+  const picks = me ? [at(mine - 1), at(mine + 1), at(mine - 2) || at(mine + 2)] : others.sort((x, y) => fin(x) - fin(y)).slice(0, 3);
+  const col = new Map(me ? [[me, css("--s-speed")]] : []);
+  picks.filter(Boolean).forEach((c, i) => col.set(c, css(RIVAL_COLOURS[i])));
+  return col;
+}
+// position of a car at time t, from its step series
+function posAt(c, t) {
+  let lo = 0, hi = c.ts.length - 1;
+  if (t < c.ts[0]) return null;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (c.ts[m] <= t) lo = m; else hi = m - 1; }
+  return c.pos[lo];
+}
+function drawPositions() {
+  const cars = hist.positions;
+  if (!cars) return;
+  const t0 = hist.detail.t0, n = Math.max(...cars.flatMap((c) => c.pos));
+  const colours = positionColours(cars), me = cars.find((c) => c.player);
+  const order = [...cars].sort((a, b) => (colours.has(a) - colours.has(b)) || (a.player - b.player));  // coloured on top, you last
+  const places = (d) => `${Math.abs(d)} place${Math.abs(d) > 1 ? "s" : ""}`;
+  const traces = order.map((c) => {
+    const start = c.pos[0];
+    // hover text per point: the stint at that position, places won/lost since the start, where you were
+    const text = c.ts.map((t, i) => {
+      let a = i, b = i;
+      while (a > 0 && c.pos[a - 1] === c.pos[i]) a--;
+      while (b < c.ts.length - 1 && c.pos[b + 1] === c.pos[i]) b++;
+      const end = b < c.ts.length - 1 ? c.ts[b + 1] : c.ts[b];
+      const d = start - c.pos[i];
+      const lines = [`<b>${esc(c.name)}</b>${c.player ? " (you)" : ""} · ${esc(c.car)}`,
+        `<b>P${c.pos[i]}</b> at ${fmtDur(t - t0)} · lap ${c.lap[i] ?? "–"}`,
+        `P${c.pos[i]} from ${fmtDur(c.ts[a] - t0)} to ${fmtDur(end - t0)} (${fmtDur(end - c.ts[a])})`,
+        `started P${start}: ${d === 0 ? "same place" : d > 0 ? `${places(d)} gained` : `${places(d)} lost`}`];
+      if (me && !c.player) {
+        const mp = posAt(me, t);
+        if (mp) lines.push(mp === c.pos[i] ? "" : `${places(mp - c.pos[i])} ${c.pos[i] < mp ? "ahead of" : "behind"} you (P${mp})`);
+      }
+      if (c.pits.length) lines.push(`pit stops: ${c.pits.map((p) => fmtDur(p - t0)).join(", ")}`);
+      return lines.filter(Boolean).join("<br>");
+    });
+    const col = colours.get(c);
+    return {
+      type: "scatter", mode: "lines", name: c.name, x: c.ts.map((t) => (t - t0) / 60), y: c.pos, text,
+      line: { shape: "hv", width: c.player ? 3 : col ? 2 : 1.2, color: col || css("--muted") },
+      opacity: col ? 1 : 0.45, hovertemplate: "%{text}<extra></extra>",
+      meta: { colour: col, player: c.player },
+    };
+  });
+  // pit stops: a down triangle on the car's line, in its colour
+  const pits = order.flatMap((c) => c.pits.map((p) => ({ c, p, pos: posAt(c, p) ?? c.pos[0] })));
+  if (pits.length) traces.push({
+    type: "scatter", mode: "markers", name: "pit stops", x: pits.map((q) => (q.p - t0) / 60), y: pits.map((q) => q.pos),
+    marker: { symbol: "triangle-down", size: 9, color: pits.map((q) => colours.get(q.c) || css("--muted")), line: { color: css("--surface"), width: 1.5 } },
+    text: pits.map((q) => `<b>${esc(q.c.name)}</b> pits at ${fmtDur(q.p - t0)}`), hovertemplate: "%{text}<extra></extra>",
+  });
+  hist.positionTraces = order.length;
+  // names at the right end of each line; the coloured ones get a swatch, the text stays in text colours
+  const labels = order.map((c) => {
+    const col = colours.get(c), p = c.pos[c.pos.length - 1];
+    return {
+      x: (c.ts[c.ts.length - 1] - t0) / 60, y: p, xanchor: "left", xshift: 4, showarrow: false,
+      text: `${col ? `<span style="color:${col}">━</span> ` : ""}P${p} ${c.player ? `<b>${esc(c.name)}</b>` : esc(c.name)}`,
+      font: { size: col ? 11 : 10, color: col ? css("--text") : css("--muted") },
+    };
+  });
+  Plotly.react("positions-plot", traces, plotLayout({
+    showlegend: false, hovermode: "closest", hoverdistance: 12, margin: { l: 40, r: 160, t: 8, b: 36 },
+    xaxis: { ...axisStyle(), title: { text: "minutes", font: { size: 11 } }, zeroline: false },
+    yaxis: { ...axisStyle(), range: [n + 0.5, 0.5], dtick: n > 16 ? 2 : 1, tick0: 1, zeroline: false, title: { text: "position", font: { size: 11 } } },
+    annotations: labels, shapes: positionCursor(),
+  }), { displaylogo: false, responsive: true });
+  const el = $("#positions-plot");
+  if (!el.dataset.wired) {
+    el.dataset.wired = "1";
+    el.on("plotly_click", (ev) => {
+      const sl = $("#replay-slider"), v = Math.min(+sl.max, Math.max(0, ev.points[0].x * 60));
+      sl.value = v;
+      seekReplay(v);
+    });
+    // hovering a line brings it forward: full opacity, thicker, grey cars in the text colour
+    el.on("plotly_hover", (ev) => {
+      const i = ev.points[0].curveNumber;
+      if (i >= hist.positionTraces || el.dataset.hot == i) return;
+      unhot(el);
+      const m = el.data[i].meta;
+      el.dataset.hot = i;
+      Plotly.restyle(el, { opacity: 1, "line.width": m.player ? 3.5 : 2.5, "line.color": m.colour || css("--text") }, [i]);
+    });
+    el.on("plotly_unhover", () => unhot(el));
+  }
+}
+function unhot(el) {
+  const i = el.dataset.hot;
+  if (i == null || i === "") return;
+  el.dataset.hot = "";
+  const m = el.data[+i]?.meta;
+  if (m) Plotly.restyle(el, { opacity: m.colour ? 1 : 0.45, "line.width": m.player ? 3 : m.colour ? 2 : 1.2, "line.color": m.colour || css("--muted") }, [+i]);
+}
+
 $("#replay-play").onclick = () => {
   if (replay.timer) {
     clearInterval(replay.timer);

@@ -210,6 +210,54 @@ def create_app(recorder=None):
         con.close()
         return {"ts": [r[0] for r in rows], "x": [r[1] for r in rows], "z": [r[2] for r in rows]}
 
+    @app.get("/api/sessions/{ref}/positions")
+    def session_positions(ref: str):
+        """Race position of every car over the session: a point on each change and at least every 5 s
+        (so hovering anywhere on a step finds one), with the lap, plus each pit stop's entry time."""
+        con, sid = open_ref(ref)
+        with con:
+            t_lo, t_hi = con.execute("SELECT MIN(id), MAX(id) FROM tick WHERE session_id=?", (sid,)).fetchone()
+            rows = con.execute(
+                """SELECT m.idx, t.ts, m.race_pos, m.lap FROM car_motion m JOIN tick t ON t.id=m.tick_id
+                   WHERE t.session_id=? AND m.race_pos > 0 ORDER BY m.idx, t.ts""", (sid,)).fetchall()
+            names = {r[0]: tuple(r[1:]) for r in con.execute(
+                """SELECT p.idx, d.name, v.name, p.is_player FROM participant p JOIN driver d ON d.id=p.driver_id
+                   JOIN vehicle v ON v.id=p.vehicle_id WHERE p.session_id=?""", (sid,))}
+            pit_rows = con.execute(
+                """SELECT cs.idx, t.ts, cs.pit_mode FROM car_status cs JOIN tick t ON t.id=cs.tick_id
+                   WHERE cs.tick_id BETWEEN ? AND ? ORDER BY cs.idx, cs.tick_id""", (t_lo or 0, t_hi or 0)).fetchall()
+        con.close()
+        cars, skip = {}, set()
+        for idx, ts, pos, lap in rows:
+            if idx in skip:
+                continue
+            c = cars.get(idx)
+            if c is None:
+                name, car, player = names.get(idx, (f"Car {idx}", "", 0))
+                if name == "Safety Car":  # AMS2 counts it as the last car
+                    skip.add(idx)
+                    continue
+                c = cars[idx] = {"idx": idx, "name": name, "car": car, "player": bool(player),
+                                 "ts": [], "pos": [], "lap": [], "pits": [], "_last": None}
+            ts = round(ts, 2)
+            if not c["pos"] or c["pos"][-1] != pos or ts - c["ts"][-1] >= 5:
+                c["ts"].append(ts)
+                c["pos"].append(pos)
+                c["lap"].append(lap)
+            c["_last"] = (ts, pos, lap)
+        for c in cars.values():  # close each step line at the car's last sample
+            ts, pos, lap = c.pop("_last")
+            if c["ts"][-1] != ts:
+                c["ts"].append(ts)
+                c["pos"].append(pos)
+                c["lap"].append(lap)
+        prev = {}
+        for idx, ts, mode in pit_rows:  # pit_mode is a change log: a stop starts when it leaves 0
+            if idx in cars and mode in (1, 2) and not prev.get(idx):
+                cars[idx]["pits"].append(round(ts, 2))
+            prev[idx] = mode
+        return list(cars.values())
+
     @app.get("/api/sessions/{ref}/shakers")
     def session_shakers(ref: str):
         """What each shaker played, per tick, with the monocoque settings in force when the session started."""

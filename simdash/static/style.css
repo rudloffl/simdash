@@ -230,6 +230,7 @@ td.invalid { color: var(--muted); text-decoration: line-through; }
 #traces-zoom { margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 #traces-zoom a { color: var(--s-speed); cursor: pointer; margin-left: 6px; }
 #lap-traces { height: 640px; }
+#positions-plot { height: 360px; }
 #replay-map { height: 420px; }
 .replay-controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .replay-controls input[type=range] { flex: 1; padding: 0; }
@@ -404,3 +405,18 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
   .map-car { grid-template-columns: minmax(0, 1fr) 80px; }
   .map-car .shaker-car { width: 80px; }
 }
+
+/* session page: click a card title to fold it */
+#session-detail .card > h3 { cursor: pointer; user-select: none; }
+#session-detail .card > h3::before {
+  content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px 0 1px;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg); transition: transform 0.15s;
+}
+#session-detail .card.folded > h3::before { transform: rotate(-45deg); }
+#session-detail .card.folded > h3 { margin-bottom: 0; }
+#session-detail .card.folded > h3 .right { display: none; }
+#session-detail .card.folded > :not(h3) { display: none; }
+.sub-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 2px 0 6px;
+  display: flex; align-items: center; gap: 8px; }
+.sub-title .right { margin-left: auto; text-transform: none; letter-spacing: 0; }

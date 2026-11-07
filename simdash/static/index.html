@@ -139,17 +139,16 @@
       </div>
     </div>
     <div class="tiles" id="d-tiles"></div>
-    <div class="detail-grid">
-      <div class="card">
-        <h3>Laps <span class="right muted">click a lap to analyse it</span></h3>
-        <div class="table-wrap" style="max-height:420px">
+    <div class="card">
+      <h3>Laps and lap map <span class="right muted">click a lap to analyse it</span></h3>
+      <div class="detail-grid">
+        <div class="table-wrap" style="max-height:470px">
           <table id="laps-table"><thead><tr>
             <th class="r">Lap</th><th class="r">Time</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th class="r">Pos</th><th class="r">Top km/h</th><th class="r">Fuel l</th>
           </tr></thead><tbody></tbody></table>
         </div>
-      </div>
-      <div class="card">
-        <h3>Lap map <span class="right"><select id="map-color">
+        <div>
+          <div class="sub-title">Lap map <span class="right"><select id="map-color">
           <option value="speed">Colour by speed</option>
           <option value="pedals">Colour by throttle / brake</option>
           <option value="slip">Colour by wheel slip</option>
@@ -157,12 +156,13 @@
           <option value="terrain">Colour by surface (raw)</option>
           <option value="sectors">Colour by sector ranking</option>
           <option value="lap">Colour by lap</option>
-        </select></span></h3>
-        <div class="map-wrap">
-          <div id="lap-map"></div>
-          <div class="map-laps" id="map-laps"></div>
+        </select></span></div>
+          <div class="map-wrap">
+            <div id="lap-map"></div>
+            <div class="map-laps" id="map-laps"></div>
+          </div>
+          <div class="map-hint muted">Drag a box or scroll to zoom into a corner: the lap traces follow. Double-click to zoom out.</div>
         </div>
-        <div class="map-hint muted">Drag a box or scroll to zoom into a corner: the lap traces follow. Double-click to zoom out.</div>
       </div>
     </div>
     <div class="card">
@@ -177,25 +177,31 @@
       <h3>Lap traces <span class="muted num" id="traces-zoom"></span><span class="right">compare with <select id="compare"><option value="">none</option></select></span></h3>
       <div id="lap-traces"></div>
     </div>
-    <div class="detail-grid">
-      <div class="card" id="replay-card">
-        <h3>Race replay <span class="right muted num" id="replay-time"></span></h3>
-        <div class="map-car"><canvas id="replay-map"></canvas>
-          <svg id="sess-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Shakers at the replay time"><title>What each shaker played at the replay time, with the monocoque settings of that day</title></svg></div>
-        <div class="replay-controls">
-          <button id="replay-play">Play</button>
-          <select id="replay-speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="16">16×</option></select>
-          <input type="range" id="replay-slider" min="0" max="1" step="0.5" value="0">
+    <div class="card" id="replay-card">
+      <h3>Race replay and results <span class="right muted num" id="replay-time"></span></h3>
+      <div class="detail-grid">
+        <div id="replay-pane">
+          <div class="map-car"><canvas id="replay-map"></canvas>
+            <svg id="sess-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Shakers at the replay time"><title>What each shaker played at the replay time, with the monocoque settings of that day</title></svg></div>
+          <div class="replay-controls">
+            <button id="replay-play">Play</button>
+            <select id="replay-speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="16">16×</option></select>
+            <input type="range" id="replay-slider" min="0" max="1" step="0.5" value="0">
+          </div>
+        </div>
+        <div>
+          <div class="sub-title">Results / participants</div>
+          <div class="table-wrap">
+            <table id="results-table"><thead><tr>
+              <th class="r">P</th><th>Driver</th><th>Car</th><th class="r">Laps</th><th class="r">Best</th><th>State</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
         </div>
       </div>
-      <div class="card">
-        <h3>Results / participants</h3>
-        <div class="table-wrap">
-          <table id="results-table"><thead><tr>
-            <th class="r">P</th><th>Driver</th><th>Car</th><th class="r">Laps</th><th class="r">Best</th><th>State</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
-      </div>
+    </div>
+    <div class="card" id="positions-card" hidden>
+      <h3>Position over the session <span class="right muted">click to move the race replay there</span></h3>
+      <div id="positions-plot"></div>
     </div>
   </div>
 </section>
