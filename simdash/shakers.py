@@ -153,7 +153,7 @@ def _fmt(v, ind):
 
 
 def dump(cfg):
-    head = ("// Written by simdash (Shakers tab). Effects: one PulseAudio stream each, on channel `pan` of\n"
+    head = ("// Written by simdash (Shakers and Wheel LEDs tabs). Effects: one PulseAudio stream each, on channel `pan` of\n"
             "// sink `devid`. 8-channel order: 0 FL, 1 FR, 2 FC, 3 LFE, 4 RL, 5 RR, 6 SL, 7 SR.\n")
     return head + "\n".join(f"{k} = {_fmt(v, 0)};" for k, v in cfg.items()) + "\n"
 
@@ -361,6 +361,12 @@ def save(effects, devid):
     entry = _default_entry(cfg)
     others = [d for d in entry.get("devices", []) if str(d.get("device", "")).lower() != "sound"]
     entry["devices"] = others + cleaned
+    write_cfg(cfg)
+    return load()
+
+
+def write_cfg(cfg):
+    """Write monocoque.config, keeping a timestamped backup of the previous one."""
     text = dump(cfg)
     parse(text)  # never write something we cannot read back
     if CONFIG.exists():
@@ -369,7 +375,6 @@ def save(effects, devid):
     tmp = CONFIG.with_suffix(".tmp")
     tmp.write_text(text)
     tmp.replace(CONFIG)
-    return load()
 
 
 # ---------- tyre diameters for monocoque's wheelspin / lock-up ----------

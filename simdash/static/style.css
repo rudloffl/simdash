@@ -420,3 +420,30 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .sub-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 2px 0 6px;
   display: flex; align-items: center; gap: 8px; }
 .sub-title .right { margin-left: auto; text-transform: none; letter-spacing: 0; }
+
+/* Wheel LEDs tab */
+.leds-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.leds-grid > .card:last-child { grid-column: 1 / -1; }
+@media (max-width: 900px) { .leds-grid { grid-template-columns: minmax(0, 1fr); } }
+.led-strip { display: flex; gap: 8px; justify-content: center; padding: 14px 0 6px; }
+.led-strip span { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); transition: background 0.05s; }
+.led-strip span.on { border-color: transparent; box-shadow: 0 0 10px var(--c); background: var(--c); }
+.led-now { text-align: center; color: var(--text-2); font-size: 13px; min-height: 18px; font-variant-numeric: tabular-nums; }
+.led-now.shift { color: var(--critical); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; color: var(--text-2); padding: 5px 14px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.led-axes { display: grid; grid-template-columns: auto auto 1fr auto; gap: 4px 10px; align-items: center; margin: 10px 0 6px; font-size: 13px; }
+.led-axes .track { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.led-axes .track div { height: 100%; background: var(--s-speed); border-radius: 4px; }
+.led-axes .v { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3.5em; text-align: right; }
+.led-check { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--text-2); margin: 8px 0; }
+.led-btns { margin-top: 8px; }
+.led-btns button.on { border-color: var(--s-speed); color: var(--text); }
+.led-car-add { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.led-car-add input { padding: 3px 8px; }
+.led-car-add #led-car-name { flex: 1; min-width: 180px; }
+.led-car-add #led-car-rpm { width: 90px; }
+.led-cars { width: 100%; }
+.led-cars td button { padding: 1px 8px; color: var(--muted); }

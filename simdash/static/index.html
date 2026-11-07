@@ -13,6 +13,7 @@
     <button data-tab="live" class="active">Live</button>
     <button data-tab="history">Sessions</button>
     <button data-tab="shakers">Shakers</button>
+    <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
@@ -339,6 +340,57 @@
       <option value="crewchief">CrewChief</option><option value="simdash">simdash</option>
     </select></span></h3>
     <pre class="sys-logbox" id="sys-logbox"></pre>
+  </div>
+</section>
+
+<section id="tab-leds" class="tab">
+  <div class="leds-grid">
+    <div class="card">
+      <h3>Wheel LEDs <span class="right muted" id="led-port"></span></h3>
+      <div class="led-strip" id="led-strip" role="img" aria-label="What the wheel LEDs show now"></div>
+      <div class="led-now" id="led-now">–</div>
+      <h3 class="sub-h">Who drives the LEDs</h3>
+      <div class="seg" id="led-driver">
+        <button data-d="simdash">simdash</button><button data-d="monocoque">monocoque</button><button data-d="off">Off</button>
+      </div>
+      <div class="fx-hint" id="led-driver-hint"></div>
+      <div class="fx-hint">On the rim, boxflat's wheel page → RPM → <b>RPM Indicator Mode</b> must be <b>RPM</b>
+        (“On” is the static rainbow and ignores everything sent here). The LED colours are the ones set in boxflat.
+        Close boxflat while driving: it uses the same port.</div>
+    </div>
+
+    <div class="card">
+      <h3>Test without the game</h3>
+      <div class="fx-hint" style="margin-top:0">Pick the pedal: its travel stands for the RPM, so the bar fills as you press and
+        the LEDs flash past the shift point, exactly as in the car. Press each pedal to see which line moves.</div>
+      <div class="led-axes" id="led-axes"></div>
+      <label class="led-check"><input type="checkbox" id="led-invert"> Reverse the selected pedal (it reads 100 % when released)</label>
+      <div class="sys-btns led-btns">
+        <button id="led-test-pedal">Test with the pedal</button>
+        <button id="led-test-sweep">Sweep</button>
+        <button id="led-test-stop">Stop</button>
+      </div>
+      <div class="fx-hint" id="led-test-hint"></div>
+    </div>
+
+    <div class="card">
+      <h3>Shift light <span class="right muted">used when simdash drives the LEDs</span></h3>
+      <div class="fx-fields">
+        <label>Shift at (% of max RPM)<div class="row"><input type="range" id="led-shift" min="60" max="100" step="1"><input type="number" id="led-shift-n" min="60" max="100" step="1"></div></label>
+        <label>First LED at (% of shift point)<div class="row"><input type="range" id="led-start" min="0" max="98" step="1"><input type="number" id="led-start-n" min="0" max="98" step="1"></div></label>
+        <label>Flashes per second<div class="row"><input type="range" id="led-blink" min="1" max="15" step="0.5"><input type="number" id="led-blink-n" min="1" max="15" step="0.5"></div></label>
+      </div>
+      <label class="led-check"><input type="checkbox" id="led-topgear"> Flash in top gear too</label>
+      <div class="fx-hint" id="led-shift-hint"></div>
+      <h3 class="sub-h">Shift point per car</h3>
+      <div class="fx-hint" style="margin-top:0">Overrides the percentage for one car. The car on track now is offered first.</div>
+      <div class="led-car-add">
+        <input id="led-car-name" placeholder="Car name" list="led-car-list"><datalist id="led-car-list"></datalist>
+        <input id="led-car-rpm" type="number" min="1000" max="25000" step="50" placeholder="RPM">
+        <button id="led-car-save">Set</button>
+      </div>
+      <table class="led-cars"><thead><tr><th>Car</th><th class="r">Shift RPM</th><th></th></tr></thead><tbody id="led-cars"></tbody></table>
+    </div>
   </div>
 </section>
 </main>

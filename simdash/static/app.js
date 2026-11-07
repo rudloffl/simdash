@@ -56,8 +56,9 @@ function showTab(name) {
   if (name === "history") loadSessions();
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
+  if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, shakers: /^#shakers$/, system: /^#system$/ }[name];
+  const own = { history: /^#session=/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -2126,6 +2127,152 @@ $("#rp-lap").onchange = (ev) => {
 };
 (function replayLoop() { drawReplayFrame(); requestAnimationFrame(replayLoop); })();
 
+// ---------- wheel LEDs (Moza shift light) ----------
+const led = { setup: null, timer: null, saveTimer: null, axesKey: "", test: null };
+const LED_COLOUR = (i) => (i < 3 ? "--good" : i < 7 ? "--warning" : "--critical");
+const fmtRpm = (v) => (v == null ? "–" : Math.round(v).toLocaleString());
+
+async function loadLeds() {
+  const r = await fetch("/api/leds");
+  if (!r.ok) return;
+  led.setup = await r.json();
+  renderLeds();
+  clearInterval(led.timer);
+  led.timer = setInterval(pollLeds, 100);
+}
+function stopLeds() {
+  clearInterval(led.timer);
+  led.timer = null;
+  if (led.test) ledTest("stop");
+}
+function renderLeds() {
+  const d = led.setup, s = d.settings;
+  if (!$("#led-strip").children.length)
+    $("#led-strip").innerHTML = Array.from({ length: d.n_leds }, (_, i) => `<span style="--c:var(${LED_COLOUR(i)})"></span>`).join("");
+  $("#led-port").textContent = d.port ? "Moza base found on USB" : "no Moza base on USB";
+  document.querySelectorAll("#led-driver button").forEach((b) => b.classList.toggle("on", b.dataset.d === s.driver));
+  const stale = d.monocoque_running && ((s.driver === "monocoque") !== d.monocoque_entry || s.driver === "simdash");
+  $("#led-driver-hint").innerHTML = {
+    simdash: "simdash lights the LEDs from the live RPM, with the shift light below. monocoque's Moza device is taken out of its config, so only one program writes to the port.",
+    monocoque: "monocoque lights the LEDs in its fixed steps: 10 % to 92 % of max RPM, flashing from 94 %. The shift light settings below don't apply.",
+    off: "Nothing lights the LEDs during races; the rim shows its idle animation. The tests below still work.",
+  }[s.driver] + (stale ? ` <span class="warn">monocoque is running with its previous config: restart it (System tab) or start a new session.</span>` : "");
+  for (const [id, v] of [["shift", Math.round(s.shift * 100)], ["start", Math.round(s.start * 100)], ["blink", s.blink_hz]]) {
+    if (document.activeElement !== $(`#led-${id}`)) $(`#led-${id}`).value = v;
+    if (document.activeElement !== $(`#led-${id}-n`)) $(`#led-${id}-n`).value = v;
+  }
+  $("#led-topgear").checked = !!s.top_gear_blink;
+  $("#led-invert").checked = !!s.axis_inverts[s.axis];
+  led.axesKey = "";  // names or reversal may have changed: rebuild the pedal rows
+  const cars = Object.entries(s.cars).sort(([a], [b]) => a.localeCompare(b));
+  $("#led-cars").innerHTML = cars.map(([c, v]) => `<tr><td>${esc(c)}</td><td class="r num">${fmtRpm(v.shift_rpm)}</td>
+    <td class="r"><button data-del="${esc(c)}" title="Back to the percentage">Remove</button></td></tr>`).join("")
+    || `<tr><td colspan="3" class="empty">No car of its own: every car shifts at ${Math.round(s.shift * 100)} % of its max RPM.</td></tr>`;
+  shiftHint();
+}
+function shiftHint(max = led.liveMax) {
+  const s = led.setup?.settings;
+  if (!s) return;
+  const ex = max || 8000, top = s.shift * ex;
+  $("#led-shift-hint").textContent = `${max ? "For the car on track" : "With 8,000 max RPM"}: first LED at ${fmtRpm(s.start * top)} rpm, `
+    + `all ${led.setup.n_leds} lit just before ${fmtRpm(top)} rpm, then they flash until you change gear`
+    + (s.top_gear_blink ? "." : " (not in top gear).");
+}
+async function saveLeds(patch) {
+  const r = await fetch("/api/leds", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+  if (!r.ok) { alert((await r.json()).detail || "Save failed"); return; }
+  led.setup.settings = await r.json();
+  renderLeds();
+}
+function scheduleLedSave() {
+  clearTimeout(led.saveTimer);
+  led.saveTimer = setTimeout(() => saveLeds({
+    shift: +$("#led-shift-n").value / 100, start: +$("#led-start-n").value / 100,
+    blink_hz: +$("#led-blink-n").value, top_gear_blink: $("#led-topgear").checked,
+  }), 300);
+}
+for (const id of ["shift", "start", "blink"]) {
+  $(`#led-${id}`).oninput = (e) => { $(`#led-${id}-n`).value = e.target.value; scheduleLedSave(); };
+  $(`#led-${id}-n`).oninput = (e) => { $(`#led-${id}`).value = e.target.value; scheduleLedSave(); };
+}
+$("#led-topgear").onchange = scheduleLedSave;
+$("#led-invert").onchange = (e) => {
+  const s = led.setup.settings;
+  saveLeds({ axis_inverts: { ...s.axis_inverts, [s.axis]: e.target.checked } });
+};
+$("#led-driver").onclick = async (e) => {
+  const b = e.target.closest("button[data-d]");
+  if (!b || b.dataset.d === led.setup?.settings.driver) return;
+  const r = await fetch("/api/leds/driver", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ driver: b.dataset.d }) });
+  if (!r.ok) { alert((await r.json()).detail || "Failed"); return; }
+  led.setup = await r.json();
+  renderLeds();
+};
+async function ledTest(mode) {
+  await fetch("/api/leds/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+}
+$("#led-test-pedal").onclick = () => ledTest("pedal");
+$("#led-test-sweep").onclick = () => ledTest("sweep");
+$("#led-test-stop").onclick = () => ledTest("stop");
+$("#led-axes").onchange = (e) => { if (e.target.name === "led-axis") saveLeds({ axis: +e.target.value }); };
+$("#led-car-save").onclick = () => {
+  const name = $("#led-car-name").value.trim(), rpm = Math.round(+$("#led-car-rpm").value);
+  if (!name || !(rpm >= 1000)) { alert("Give a car name and a shift RPM (1000 or more)."); return; }
+  saveLeds({ cars: { ...led.setup.settings.cars, [name]: { shift_rpm: rpm } } });
+  $("#led-car-rpm").value = "";
+};
+$("#led-cars").onclick = (e) => {
+  const c = e.target.closest("button[data-del]")?.dataset.del;
+  if (!c) return;
+  const cars = { ...led.setup.settings.cars };
+  delete cars[c];
+  saveLeds({ cars });
+};
+async function pollLeds() {
+  let st;
+  try { st = await (await fetch("/api/leds/state")).json(); } catch { return; }
+  if (currentTab !== "leds") return;
+  led.test = st.test;
+  [...$("#led-strip").children].forEach((el, i) => el.classList.toggle("on", !!(st.mask >> i & 1)));
+  const now = $("#led-now");
+  now.classList.toggle("shift", st.phase === "shift");
+  const pct = (f) => `${Math.round(f * 100)} %`;
+  now.textContent = st.error ? st.error
+    : st.source === "game" ? `${fmtRpm(st.rpm)} rpm · shift at ${fmtRpm(st.shift_rpm)} · ${st.car}${st.phase === "shift" ? " · SHIFT" : ""}`
+    : st.source === "pedal" ? `pedal ${pct(st.fraction)}${st.phase === "shift" ? " · SHIFT" : ""}`
+    : st.source === "sweep" ? `sweep ${pct(st.fraction)}${st.phase === "shift" ? " · SHIFT" : ""}`
+    : led.setup?.settings.driver === "simdash" ? "waiting for the car on track" : "idle";
+  $("#led-test-pedal").classList.toggle("on", st.test === "pedal");
+  $("#led-test-sweep").classList.toggle("on", st.test === "sweep");
+  $("#led-test-hint").textContent = st.test ? `Testing: the LEDs follow the ${st.test === "pedal" ? "pedal" : "sweep"}. It stops by itself after 2 minutes or when you leave this tab.` : "";
+  // pedal axes: rows built once, bars updated
+  const axes = st.axes || [], key = axes.map((a) => a.code).join(",");
+  if (key !== led.axesKey) {
+    led.axesKey = key;
+    const lab = led.setup?.settings.axis_labels || {}, inv = led.setup?.settings.axis_inverts || {};
+    $("#led-axes").innerHTML = axes.length ? axes.map((a) => `<input type="radio" name="led-axis" value="${a.code}" id="led-ax-${a.code}">
+      <label for="led-ax-${a.code}">${lab[a.code] ? `<b>${esc(lab[a.code])}</b> <span class='muted'>(${esc(a.name)}${inv[a.code] ? ", reversed" : ""})</span>`
+        : `<span class='muted'>${esc(a.name)}${a.code === 0 ? " (steering)" : ""}</span>`}</label>
+      <div class="track"><div id="led-axv-${a.code}"></div></div><span class="v" id="led-axn-${a.code}"></span>`).join("")
+      : `<span class="muted" style="grid-column:1/-1">No Moza input device found.</span>`;
+  }
+  for (const a of axes) {
+    const v = led.setup?.settings.axis_inverts?.[a.code] ? 1 - a.value : a.value;
+    $(`#led-axv-${a.code}`).style.width = `${(v * 100).toFixed(1)}%`;
+    $(`#led-axn-${a.code}`).textContent = pct(v);
+    const r = $(`#led-ax-${a.code}`);
+    if (r) r.checked = led.setup?.settings.axis === a.code;
+  }
+  // per-car shift point: offer the car on track
+  if (st.live_car) {
+    if (!$("#led-car-name").value && document.activeElement !== $("#led-car-name")) $("#led-car-name").value = st.live_car;
+    const names = [st.live_car, ...Object.keys(led.setup?.settings.cars || {})];
+    const html = [...new Set(names)].map((n) => `<option value="${esc(n)}">`).join("");
+    if ($("#led-car-list").innerHTML !== html) $("#led-car-list").innerHTML = html;
+  }
+  if (st.live_max_rpm !== led.liveMax) { led.liveMax = st.live_max_rpm || null; shiftHint(); }
+}
+
 // ---------- system: telemetry chain status and restarts ----------
 const sys = { data: null, busy: null, timer: null };
 const fmtAge = (since, now) => {
@@ -2274,4 +2421,4 @@ loadShakerCars();
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
-else if (location.hash === "#shakers" || location.hash === "#system") showTab(location.hash.slice(1));
+else if (["#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));

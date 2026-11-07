@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import replay, shakers, store, system
+from . import leds, replay, shakers, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -49,6 +49,14 @@ class ReplayControl(BaseModel):
     ts: float | None = None
     speed: float = 1.0
     devid: str = ""
+
+
+class LedDriver(BaseModel):
+    driver: str
+
+
+class LedTest(BaseModel):
+    mode: str  # pedal | sweep | stop
 
 
 class CornerName(BaseModel):
@@ -409,6 +417,49 @@ def create_app(recorder=None):
         except LookupError as e:
             raise HTTPException(409, str(e))
         return p.state()
+
+    # ---- wheel RPM LEDs (Moza) ----
+
+    @app.get("/api/leds")
+    async def led_setup():
+        return await asyncio.to_thread(leds.setup)
+
+    @app.put("/api/leds")
+    def led_save(patch: dict):
+        try:
+            s = leds.save_settings(patch)
+        except (TypeError, ValueError, KeyError) as e:
+            raise HTTPException(400, f"bad setting: {e}")
+        leds.driver_thread.reload()
+        return s
+
+    @app.post("/api/leds/driver")
+    def led_driver(d: LedDriver):
+        try:
+            leds.set_driver(d.driver)
+        except (OSError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        leds.driver_thread.reload()
+        return leds.setup()
+
+    @app.post("/api/leds/test")
+    def led_test(t: LedTest):
+        try:
+            if t.mode == "stop":
+                leds.driver_thread.stop_test()
+            else:
+                leds.driver_thread.start_test(t.mode)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.get("/api/leds/state")
+    def led_state():
+        st = leds.driver_thread.snapshot()
+        live = rec.snapshot()
+        st["live_car"] = (live.get("session") or {}).get("car")
+        st["live_max_rpm"] = (live.get("car") or {}).get("max_rpm")
+        return st
 
     # ---- system: telemetry chain status and restarts ----
 

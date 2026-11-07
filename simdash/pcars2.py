@@ -345,6 +345,7 @@ def decode(buf):
         "clutch": r["mClutch"],
         "steering": r["mSteering"],
         "gear": r["mGear"],
+        "num_gears": r["mNumGears"],
         "abs": r["mAntiLockActive"],
         "orientation": r["mOrientation"],
         "local_vel": r["mLocalVelocity"],
