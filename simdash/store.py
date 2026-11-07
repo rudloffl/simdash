@@ -429,6 +429,25 @@ def best_laps(track, variation, car, exclude_ref=None, limit=15):
     return sorted(out, key=lambda r: r["lap_time"])[:limit]
 
 
+def progress(track, variation, car):
+    """Every session on this track layout with this car, from every day, oldest first, with all its laps."""
+    out = []
+    for day in list_days():
+        try:
+            con = read_day(day)
+            sessions = con.execute(
+                """SELECT id, session_type, started_at, driving_s, start_pos, final_pos, num_cars, result
+                   FROM v_sessions WHERE track = ? AND variation = ? AND car = ?""", (track, variation, car)).fetchall()
+            for srow in sessions:
+                laps = con.execute("SELECT lap, lap_time, valid, s1, s2, s3, position FROM lap "
+                                   "WHERE session_id = ? AND lap_time > 0 ORDER BY lap", (srow["id"],)).fetchall()
+                out.append({**dict(srow), "ref": f"{day}:{srow['id']}", "day": day, "laps": [dict(r) for r in laps]})
+            con.close()
+        except sqlite3.Error:
+            continue
+    return sorted(out, key=lambda r: r["started_at"])
+
+
 def track_key(track, variation):
     raw = f"{track}__{variation}".lower()
     return re.sub(r"[^a-z0-9_]+", "-", raw).strip("-") or "unknown"

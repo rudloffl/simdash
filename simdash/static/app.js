@@ -54,11 +54,14 @@ function showTab(name) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "history") loadSessions();
+  if (name === "progress") loadProgress();
+  if (name === "genie") loadPilotTab();
+  if (name !== "genie" && pf.replay) stopPilotReplay();
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
+  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -186,10 +189,11 @@ function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/live`);
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.type === "backlog") { live.trace = m.trace; m.trace.forEach(focusRow); }
+    if (m.type === "backlog") { live.trace = m.trace; m.trace.forEach((r) => { focusRow(r); pilotRow(r, false); }); }
     else {
       live.data = m.live;
-      for (const r of m.trace) { live.trace.push(r); focusRow(r); }
+      if (m.live?.session && m.live.lap) refreshFocusRef(m.live);  // the corner recap works from any tab
+      for (const r of m.trace) { live.trace.push(r); focusRow(r); pilotRow(r, true); }
       const last = live.trace.length ? live.trace[live.trace.length - 1][0] : 0;
       let cut = 0;
       while (cut < live.trace.length && live.trace[cut][0] < last - 60) cut++;
@@ -666,6 +670,7 @@ async function openSession(ref) {
   $("#d-title").textContent = `${s.session_type} · ${s.track} ${s.variation}`;
   $("#d-sub").textContent = `${s.car} (${s.car_class}) · ${new Date(s.started_at * 1000).toLocaleString()}${d.live ? " · recording now" : ""}`;
   $("#d-csv").href = `/api/sessions/${ref}/samples.csv`;
+  $("#d-progress").href = `#progress=${encodeURIComponent(comboKey(s))}`;
   const tile = (label, value, sub = "") => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
   $("#d-tiles").innerHTML = [
     tile("Best lap", fmtLap(s.best_lap)),
@@ -1161,7 +1166,7 @@ function drawTraces() {
 // A corner is a speed dip of more than CORNER_DIP km/h on the analysed lap. Its segment runs from the
 // speed peak before it to the peak after it (the first from the lap start, the last to the lap end),
 // so the segments add up to the whole lap and each carries the straight that its exit leads onto.
-const CORNER_DIP = 10, BRAKING = 0.2;
+const CORNER_DIP = 10, BRAKING = 0.2, FULL_THROTTLE = 0.95;
 function findCorners(L) {
   const v = L.speed, peaks = [], apexes = [];
   let hi = 0, lo = 0, falling = false;
@@ -1194,13 +1199,19 @@ function timeAt(L, dd) {
 }
 
 function cornerStats(L, c) {
-  let minI = -1, gear = Infinity;
+  let minI = -1;
   L.lap_dist.forEach((dd, i) => {
     if (dd < c.s || dd > c.e) return;
     if (minI < 0 || L.speed[i] < L.speed[minI]) minI = i;
-    if (L.gear[i] > 0) gear = Math.min(gear, L.gear[i]);
   });
   if (minI < 0) return null;
+  // gear at the slowest point: the most common forward gear within 30 m of it. Mid-shift samples read
+  // 0 (neutral) or a passing gear (1st at 140 km/h), so the lowest gear seen would be wrong.
+  const near = {};
+  for (let i = 0; i < L.lap_dist.length; i++) {
+    if (Math.abs(L.lap_dist[i] - L.lap_dist[minI]) <= 30 && L.gear[i] > 0) near[L.gear[i]] = (near[L.gear[i]] || 0) + 1;
+  }
+  const gear = Object.keys(near).length ? +Object.entries(near).sort((x, y) => y[1] - x[1])[0][0] : Infinity;
   const apex = L.lap_dist[minI];
   // braking point: first press after the speed peak before the corner (at most 600 m before the apex).
   // BRAKING is well above the 6-10 % the brake can read with the foot resting on the pedal.
@@ -1209,8 +1220,19 @@ function cornerStats(L, c) {
     const dd = L.lap_dist[i];
     if (dd >= c.s && dd >= apex - 600 && L.brake[i] > BRAKING) { brake = dd; break; }
   }
+  // braking and full-throttle distances are measured from one fixed spot, the corner's apex (as found on the
+  // lap the corners come from), so two laps compare only where they braked or floored it, not where their
+  // own slowest points fell
+  const mark = c.apex ?? apex;
+  let full = null;
+  if (L.throttle) {
+    for (let i = minI; i < L.lap_dist.length && L.lap_dist[i] <= c.e; i++) {
+      if (L.throttle[i] >= FULL_THROTTLE) { full = L.lap_dist[i] - mark; break; }
+    }
+  }
   return {
     brake, gear: gear === Infinity ? null : gear, min: L.speed[minI],
+    brakeToApex: brake != null ? mark - brake : null, full,
     entry: L.speed[sampleAt(L, brake ?? Math.max(c.s, 0))],
     exit: L.speed[sampleAt(L, Math.min(c.apex + 100, c.e))],
     time: timeAt(L, c.e) - timeAt(L, c.s),
@@ -2127,6 +2149,433 @@ $("#rp-lap").onchange = (ev) => {
 };
 (function replayLoop() { drawReplayFrame(); requestAnimationFrame(replayLoop); })();
 
+// ---------- Corner Genie: corner recap popup ----------
+// As each corner is left, the live lap is compared with the reference lap (focus.ref: best lap on this
+// track with this car) over that corner, up to the trigger point just after its apex.
+// used until the server's settings arrive (or if this simdash is older than the settings API)
+const PILOT_DEFAULTS = { enabled: true, duration: 4, position: "top", size: "screen", only: "all", min_delta: 0.05,
+  fields: { time: true, brake: true, throttle: true, entry: true, min: true, exit: true, gear: true } };
+const pf = { s: PILOT_DEFAULTS, saveT: null, replay: null, saved: true };
+const pilot = { lap: null, rows: [], next: null, corners: null };
+const pilotTrigger = (c) => Math.min(c.e, c.apex + 120);
+
+async function loadPilotSettings() {
+  try {
+    const r = await fetch("/api/genie");
+    pf.saved = r.ok;
+    if (r.ok) pf.s = await r.json();
+  } catch { /* keep the last ones */ }
+}
+loadPilotSettings();
+setInterval(() => { if (currentTab !== "genie") loadPilotSettings(); }, 15000);
+
+// the card waits for full throttle after the apex: at least 120 m past it, at most 250 m (or the corner's end)
+const PILOT_MIN_AFTER = 120, PILOT_MAX_AFTER = 250;
+function pilotTriggerFor(L, c) {
+  const late = Math.min(c.e, c.apex + PILOT_MAX_AFTER);
+  for (let i = sampleAt(L, c.apex); i < L.lap_dist.length && L.lap_dist[i] <= late; i++) {
+    if (L.throttle[i] >= FULL_THROTTLE) return Math.min(late, Math.max(L.lap_dist[i], c.apex + PILOT_MIN_AFTER));
+  }
+  return late;
+}
+function pilotRecap(L, ref, c, k, tk, trig = pilotTriggerFor(L, c)) {
+  const a = cornerStats(L, { ...c, e: trig });
+  const b = cornerStats(ref, { ...c, e: Math.min(c.e, c.apex + PILOT_MAX_AFTER) });
+  if (!a || !b) return null;
+  const dt = (timeAt(L, trig) - timeAt(L, c.s)) - (timeAt(ref, trig) - timeAt(ref, c.s));
+  return { name: cornerName(tk, c, k), dt, a, b, c, trig };
+}
+function pilotWanted(rec, s = pf.s) {
+  if (!s) return false;
+  if (s.only === "lost") return rec.dt >= s.min_delta;
+  if (s.only === "gained") return rec.dt <= -s.min_delta;
+  return true;
+}
+// line icons (24 × 24, drawn with the text colour); the corner ones share one bend so they read as a set
+const PILOT_ICON_PATHS = {
+  time: '<circle cx="12" cy="13" r="8"/><path d="M12 13V9M9 2h6M12 2v3"/>',
+  brake: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M5 5.5A9.5 9.5 0 0 1 12 2.5" stroke-width="4"/>',
+  entry: '<path d="M3 5h8q8 0 8 8v8" opacity=".3"/><path d="M3 5h8"/><path d="M8 2l3 3-3 3"/>',
+  min: '<path d="M3 5h8q8 0 8 8v8" opacity=".3"/><circle cx="16.7" cy="7.3" r="2.6" fill="currentColor"/>',
+  exit: '<path d="M3 5h8q8 0 8 8v8" opacity=".3"/><path d="M19 13v8"/><path d="M16 18l3 3 3-3"/>',
+  gear: '<path d="M6 4v16M12 4v16M18 4v8M6 12h12"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="12" cy="20" r="1.5" fill="currentColor"/>',
+  throttle: '<path d="M8 3h8l1.5 13h-11z"/><path d="M9.5 7h5M9 10.5h6"/><path d="M12 16v5M8 21h8"/>',
+};
+const PILOT_ICON_NAMES = { time: "Time gained or lost in the corner", brake: "Braking point: metres before the apex",
+  throttle: "Full throttle: metres after the apex", entry: "Entry speed",
+  min: "Slowest speed", exit: "Exit speed", gear: "Gear at the slowest point" };
+const pilotIcon = (k) => `<svg class="pp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${PILOT_ICON_NAMES[k]}"><title>${PILOT_ICON_NAMES[k]}</title>${PILOT_ICON_PATHS[k]}</svg>`;
+
+function pilotHtml(rec, s) {
+  const f = s.fields, { a, b } = rec;
+  const item = (k, body) => `<span class="pp-item">${pilotIcon(k)}${body}</span>`;
+  const sp = (k, va, vb) => {
+    const d = Math.round(va) - Math.round(vb);
+    return item(k, `<b>${Math.round(va)}</b><span class="${d > 0 ? "pp-good" : d < 0 ? "pp-bad" : "pp-same"}">${fmtDiff(d)}</span>`);
+  };
+  // distances: blue when better than the best lap (braking later, full throttle sooner), orange when worse
+  const dist = (k, va, vb) => {
+    if (va == null) return item(k, `<b class="pp-strike" title="${k === "brake" ? "no braking" : "not back to full throttle"}">—</b>`);
+    const d = Math.round(va) - Math.round(vb ?? va);
+    const cls = vb == null || Math.abs(d) < 3 ? "pp-same" : d < 0 ? "pp-good" : "pp-bad";
+    return item(k, `<b>${Math.round(va)} m</b>${vb == null ? "" : `<span class="${cls}">${Math.abs(d) < 3 ? "✓" : fmtDiff(d)}</span>`}`);
+  };
+  // a grid: columns in driving order (entry | apex | exit), one row per kind of value (distances, speeds, gear)
+  const rows = [
+    [f.brake && (a.brakeToApex != null || b.brakeToApex != null) ? dist("brake", a.brakeToApex, b.brakeToApex) : "", "",
+      f.throttle ? dist("throttle", a.full, b.full) : ""],
+    [f.entry ? sp("entry", a.entry, b.entry) : "", f.min ? sp("min", a.min, b.min) : "", f.exit ? sp("exit", a.exit, b.exit) : ""],
+    ["", f.gear && a.gear != null ? item("gear", `<b>${a.gear}</b>${b.gear != null && b.gear !== a.gear ? `<span class="pp-same">best ${b.gear}</span>` : ""}`) : "", ""],
+  ].filter((r) => r.some(Boolean));
+  const dtCls = rec.dt < -0.02 ? "pp-good" : rec.dt > 0.02 ? "pp-bad" : "";
+  const dt = f.time ? `<span class="pp-dt ${dtCls}">${pilotIcon("time")}${rec.dt > 0 ? "+" : rec.dt < 0 ? "−" : "±"}${Math.abs(rec.dt).toFixed(2)} s</span>` : "";
+  const cls = ["pp-in", "pp-apex", "pp-out"];
+  return `<div class="pp-head"><span class="pp-name">${esc(rec.name)}</span>${dt}</div>`
+    + (rows.length ? `<div class="pp-grid">${rows.map((r) => r.map((c, i) => `<div class="pp-cell ${cls[i]}">${c}</div>`).join("")).join("")}</div>` : "");
+}
+function showPilot(el, rec, s = pf.s, stay = false) {
+  if (!s) return;
+  el.className = `pilot-pop pp-${s.size} pp-${s.position} ${rec.dt < -0.02 ? "pp-gain" : rec.dt > 0.02 ? "pp-loss" : ""}`;
+  el.innerHTML = pilotHtml(rec, s);
+  el.hidden = false;
+  clearTimeout(el._fade);
+  clearTimeout(el._hide);
+  if (stay) return;  // the preview box keeps its card
+  el._fade = setTimeout(() => el.classList.add("fade"), s.duration * 1000);
+  el._hide = setTimeout(() => { el.hidden = true; }, s.duration * 1000 + 400);
+}
+// every live trace row; backlog rows (fresh = false) only fill the lap buffer
+function pilotRow(r, fresh) {
+  if (r.length <= LT.gear) return;
+  if (r[LT.lap] !== pilot.lap) { pilot.lap = r[LT.lap]; pilot.rows = []; pilot.next = null; }
+  pilot.rows.push(r);
+  const corners = focus.corners;
+  if (!corners.length || !focus.ref) return;
+  if (pilot.corners !== corners) { pilot.corners = corners; pilot.next = null; }  // new reference lap
+  const d = r[LT.dist];
+  if (pilot.next == null) {  // joined mid-lap: skip the corners already left
+    pilot.next = corners.findIndex((c) => pilotTrigger(c) > d);
+    if (pilot.next < 0) pilot.next = corners.length;
+  }
+  const ready = (c) => d >= Math.min(c.e, c.apex + PILOT_MAX_AFTER)
+    || (d >= c.apex + PILOT_MIN_AFTER && r[2] >= FULL_THROTTLE);
+  while (pilot.next < corners.length && ready(corners[pilot.next])) {
+    const k = pilot.next++, c = corners[k];
+    if (!fresh || !pf.s?.enabled) continue;
+    if (pilot.rows[0][LT.dist] > Math.max(c.s, 0) + 100) continue;  // not seen from the corner's start
+    const rec = pilotRecap(rowsAsLap(pilot.rows), focus.ref, c, k, focus.trackKey, Math.min(d, c.e));
+    if (rec && pilotWanted(rec)) showPilot($("#pilot-pop"), rec);
+  }
+}
+
+// ---- the Corner Genie tab ----
+async function loadPilotTab() {
+  await loadPilotSettings();
+  renderPilotForm();
+  pilotPreview();
+  if (!$("#pf-session").options.length) loadPilotSessions();
+}
+function renderPilotForm() {
+  const s = pf.s;
+  if (!s) return;
+  $("#pf-enabled").checked = s.enabled;
+  $("#pf-duration").value = $("#pf-duration-n").value = s.duration;
+  $("#pf-position").value = s.position;
+  $("#pf-size").value = s.size;
+  $("#pf-only").value = s.only;
+  $("#pf-min").value = s.min_delta;
+  $("#pf-min").disabled = s.only === "all";
+  document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => (i.checked = !!s.fields[i.dataset.f]));
+}
+function pilotFormValues() {
+  const fields = {};
+  document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => (fields[i.dataset.f] = i.checked));
+  return { enabled: $("#pf-enabled").checked, duration: +$("#pf-duration-n").value, position: $("#pf-position").value,
+    size: $("#pf-size").value, only: $("#pf-only").value, min_delta: +$("#pf-min").value, fields };
+}
+function schedulePilotSave() {
+  pf.s = { ...pf.s, ...pilotFormValues() };  // the preview follows at once
+  $("#pf-min").disabled = pf.s.only === "all";
+  pilotPreview();
+  clearTimeout(pf.saveT);
+  pf.saveT = setTimeout(async () => {
+    const r = await fetch("/api/genie", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pilotFormValues()) });
+    if (r.ok) pf.s = await r.json();
+    else if (r.status === 404) $("#pf-save-note").textContent = "Not saved: restart simdash once (it predates these settings). The popup uses them until you reload the page.";
+    else alert((await r.json()).detail || "Save failed");
+  }, 300);
+}
+$("#pf-duration").oninput = (e) => { $("#pf-duration-n").value = e.target.value; schedulePilotSave(); };
+$("#pf-duration-n").oninput = (e) => { $("#pf-duration").value = e.target.value; schedulePilotSave(); };
+for (const id of ["#pf-enabled", "#pf-position", "#pf-size", "#pf-only", "#pf-min"]) $(id).onchange = schedulePilotSave;
+$(".pf-fields").onchange = schedulePilotSave;
+document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => i.insertAdjacentHTML("afterend", pilotIcon(i.dataset.f)));
+
+const PILOT_SAMPLE = { name: "C6 Hawthorn", dt: 0.12,
+  a: { brake: 2290, brakeToApex: 97, full: 52, entry: 149, min: 93, exit: 127, gear: 3 },
+  b: { brake: 2302, brakeToApex: 85, full: 38, entry: 153, min: 91, exit: 130, gear: 3 } };
+// tests show the card twice: in the preview box, and as the real popup over the page
+const pilotTest = (rec) => { pilotPreview(rec); showPilot($("#pilot-pop"), rec); };
+// the preview box always shows a card: the latest test or replay one, else the sample
+function pilotPreview(rec = pf.last || PILOT_SAMPLE) { pf.last = rec; showPilot($("#pf-pop"), rec, pf.s, true); }
+$("#pf-sample").onclick = () => pilotTest(PILOT_SAMPLE);
+
+async function loadPilotSessions() {
+  const all = (await (await fetch("/api/sessions")).json()).filter((s) => s.best_lap).slice(0, 60);
+  $("#pf-session").innerHTML = all.map((s) => `<option value="${s.ref}" data-track="${esc(s.track)}" data-variation="${esc(s.variation)}">`
+    + `${new Date(s.started_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`
+    + ` · ${esc(s.session_type)} · ${esc(s.track)} · ${esc(s.car)}</option>`).join("");
+  if (all.length) loadPilotLaps();
+}
+// replay map: the replayed lap's line, corner names from the reference, the car and the corner just reported
+const pfMap = { L: null, R: null, tk: "", rec: null, raf: null };
+function drawPilotMap(t = 0) {
+  const L = pfMap.L, canvas = $("#pf-map");
+  if (!L?.x?.length) { drawMap(canvas, [], [], false); return; }
+  const outline = [];
+  for (let i = 0; i < L.x.length; i += 3) outline.push([L.x[i], L.z[i]]);
+  let i = 0;
+  while (i < L.lap_time.length - 1 && L.lap_time[i + 1] <= t) i++;
+  const marks = trackMarks(pfMap.R || L, pfMap.tk);
+  const rec = pfMap.rec, R = pfMap.R;
+  if (rec && R) {
+    const j = sampleAt(R, rec.c.apex);
+    marks.marks = [{ p: mapXY(R.x[j], R.z[j]), color: css(rec.dt < -0.02 ? "--s-speed" : rec.dt > 0.02 ? "--s-spin" : "--muted") }];
+  }
+  drawMap(canvas, outline, [{ x: L.x[i], z: L.z[i], player: true, pos: "" }], true, marks);
+}
+async function previewPilotLap() {
+  const opt = $("#pf-session").selectedOptions[0], lapNo = +$("#pf-lap").value;
+  if (!opt || !lapNo) return;
+  pfMap.L = await fetchLap(lapNo, opt.value);
+  pfMap.R = null;
+  pfMap.rec = null;
+  pfMap.tk = `${opt.dataset.track}|${opt.dataset.variation}`;
+  await loadCornerNames(opt.dataset.track, opt.dataset.variation);
+  drawPilotMap(0);
+}
+$("#pf-lap").onchange = previewPilotLap;
+
+async function loadPilotLaps() {
+  const ref = $("#pf-session").value;
+  const d = await (await fetch(`/api/sessions/${ref}`)).json();
+  const timed = d.laps.filter((l) => l.lap_time);
+  $("#pf-lap").innerHTML = timed.map((l) => `<option value="${l.lap}">Lap ${l.lap} · ${fmtLap(l.lap_time)}${l.valid ? "" : " (invalid)"}</option>`).join("");
+  if (timed.length) $("#pf-lap").value = timed[timed.length - 1].lap;
+  previewPilotLap();
+}
+$("#pf-session").onchange = loadPilotLaps;
+
+function stopPilotReplay(msg = "") {
+  const r = pf.replay;
+  if (r) { r.timers.forEach(clearTimeout); clearInterval(r.tick); cancelAnimationFrame(pfMap.raf); }
+  pf.replay = null;
+  $("#pf-play").textContent = "Play";
+  $("#pf-replay-state").textContent = msg;
+}
+$("#pf-play").onclick = async () => {
+  if (pf.replay) { stopPilotReplay("Stopped."); return; }
+  const opt = $("#pf-session").selectedOptions[0], ref = $("#pf-session").value, lapNo = +$("#pf-lap").value;
+  if (!opt || !lapNo) return;
+  $("#pf-replay-state").textContent = "Loading…";
+  // reference: the fastest valid lap on this track with this car, this session included
+  const [others, detail] = await Promise.all([(await fetch(`/api/sessions/${ref}/references`)).json(), (await fetch(`/api/sessions/${ref}`)).json()]);
+  const own = detail.laps.filter((l) => l.valid && l.lap_time).sort((x, y) => x.lap_time - y.lap_time)[0];
+  const best = [...others.map((o) => ({ ref: o.ref, lap: o.lap, t: o.lap_time })), ...(own ? [{ ref, lap: own.lap, t: own.lap_time }] : [])]
+    .sort((x, y) => x.t - y.t)[0];
+  if (!best) { $("#pf-replay-state").textContent = "No valid lap on this track with this car to compare with."; return; }
+  const tk = `${opt.dataset.track}|${opt.dataset.variation}`;
+  const [L, R] = await Promise.all([fetchLap(lapNo, ref), fetchLap(best.lap, best.ref), loadCornerNames(opt.dataset.track, opt.dataset.variation)]);
+  const corners = findCorners(R), speed = +$("#pf-speed").value, total = L.lap_time[L.lap_time.length - 1];
+  Object.assign(pfMap, { L, R, tk, rec: null });
+  const r = pf.replay = { timers: [], t0: performance.now() };
+  $("#pf-play").textContent = "Stop";
+  corners.forEach((c, k) => {
+    const rec = pilotRecap(L, R, c, k, tk);
+    if (!rec || !pilotWanted(rec)) return;
+    r.timers.push(setTimeout(() => { pfMap.rec = rec; pilotTest(rec); }, timeAt(L, rec.trig) / speed * 1000));
+  });
+  r.timers.push(setTimeout(() => stopPilotReplay(`Lap ${lapNo} done, against ${fmtLap(best.t)}${best.ref === ref && best.lap === lapNo ? " (this very lap: everything matches)" : ""}.`), total / speed * 1000 + 500));
+  const vs = `against ${fmtLap(best.t)}${best.ref === ref ? ` (lap ${best.lap} of this session)` : ""}`;
+  const anim = () => {
+    if (pf.replay !== r) return;
+    drawPilotMap((performance.now() - r.t0) / 1000 * speed);
+    pfMap.raf = requestAnimationFrame(anim);
+  };
+  pfMap.raf = requestAnimationFrame(anim);
+  r.tick = setInterval(() => {
+    const t = Math.min(total, (performance.now() - r.t0) / 1000 * speed);
+    $("#pf-replay-state").textContent = `Lap ${lapNo}: ${fmtDur(t)} / ${fmtDur(total)} · ${vs}`;
+  }, 250);
+};
+
+// ---------- progress: one track layout + car over every session ----------
+const pg = { combos: [], data: null, key: null, laps: {} };
+const comboKey = (s) => `${s.track}|${s.variation}|${s.car}`;
+const median = (a) => { const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length ? (b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2) : null; };
+const fmtDelta = (v) => (v == null ? "–" : `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(3)}`);
+
+async function loadProgress() {
+  const all = await (await fetch("/api/sessions")).json();
+  const by = new Map();
+  for (const s of all) {
+    const k = comboKey(s);
+    const c = by.get(k) || { key: k, track: s.track, variation: s.variation, car: s.car, n: 0, last: 0, best: null };
+    c.n++;
+    c.last = Math.max(c.last, s.started_at);
+    if (s.best_lap && (c.best == null || s.best_lap < c.best)) c.best = s.best_lap;
+    by.set(k, c);
+  }
+  pg.combos = [...by.values()].sort((a, b) => b.last - a.last);
+  const linked = location.hash.startsWith("#progress=") ? decodeURIComponent(location.hash.slice(10)) : null;
+  const keep = linked && by.has(linked) ? linked : pg.key && by.has(pg.key) ? pg.key : pref.get("progressCombo", null);
+  pg.key = keep && by.has(keep) ? keep : pg.combos[0]?.key;
+  $("#pg-combo").innerHTML = pg.combos.map((c) => `<option value="${esc(c.key)}">${esc(c.track)}${c.variation && c.variation !== c.track ? ` ${esc(c.variation)}` : ""} · ${esc(c.car)} (${c.n} session${c.n > 1 ? "s" : ""})</option>`).join("");
+  if (!pg.key) { $("#pg-tiles").innerHTML = `<div class="empty">No session recorded yet.</div>`; return; }
+  $("#pg-combo").value = pg.key;
+  await showProgress();
+}
+$("#pg-combo").onchange = (e) => {
+  pg.key = e.target.value;
+  pref.set("progressCombo", pg.key);
+  history.replaceState(null, "", `#progress=${encodeURIComponent(pg.key)}`);
+  showProgress();
+};
+
+// per-session figures from its laps
+function sessionStats(s) {
+  const valid = s.laps.filter((l) => l.valid && l.lap_time > 0);
+  const best = valid.reduce((a, l) => (!a || l.lap_time < a.lap_time ? l : a), null);
+  const clean = best ? valid.filter((l) => l.lap_time <= best.lap_time * 1.05).map((l) => l.lap_time) : [];
+  const mean = clean.reduce((a, v) => a + v, 0) / (clean.length || 1);
+  const spread = clean.length > 1 ? Math.sqrt(clean.reduce((a, v) => a + (v - mean) ** 2, 0) / (clean.length - 1)) : null;
+  const sec = (k) => { const v = valid.map((l) => l[k]).filter((x) => x > 0); return v.length ? Math.min(...v) : null; };
+  const [s1, s2, s3] = [sec("s1"), sec("s2"), sec("s3")];
+  return { valid, best, median: median(clean), spread, s1, s2, s3, theo: s1 && s2 && s3 ? s1 + s2 + s3 : null };
+}
+
+async function showProgress() {
+  const c = pg.combos.find((x) => x.key === pg.key);
+  if (!c) return;
+  const key = pg.key;
+  const q = new URLSearchParams({ track: c.track, variation: c.variation, car: c.car });
+  const data = await (await fetch(`/api/progress?${q}`)).json();
+  if (pg.key !== key) return;
+  data.forEach((s) => (s.st = sessionStats(s)));
+  pg.data = data;
+  const timed = data.filter((s) => s.st.best);
+  const pb = timed.reduce((a, s) => (!a || s.st.best.lap_time < a.st.best.lap_time ? s : a), null);
+  const bestSec = (k) => { const v = timed.map((s) => s.st[k]).filter(Boolean); return v.length ? Math.min(...v) : null; };
+  const theo = ["s1", "s2", "s3"].map(bestSec);
+  const theoAll = theo.every(Boolean) ? theo[0] + theo[1] + theo[2] : null;
+  const day = (t) => new Date(t * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const last = timed[timed.length - 1];
+  const tile = (label, value, sub = "") => `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  $("#pg-tiles").innerHTML = [
+    tile("Best lap ever", pb ? fmtLap(pb.st.best.lap_time) : "–", pb ? `${day(pb.started_at)}, ${esc(pb.session_type)}` : ""),
+    tile("Best sectors", theoAll ? fmtLap(theoAll) : "–", theoAll && pb ? `${(pb.st.best.lap_time - theoAll).toFixed(3)} s to find` : "your best S1 + S2 + S3"),
+    tile("Last session", last ? fmtLap(last.st.best.lap_time) : "–", last && pb ? (last === pb ? "your best ever" : `${fmtDelta(last.st.best.lap_time - pb.st.best.lap_time)} s vs best`) : ""),
+    tile("Sessions", data.length, ((n) => `${n} race${n === 1 ? "" : "s"}`)(data.filter((s) => s.session_type === "Race").length)),
+    tile("Valid laps", data.reduce((a, s) => a + s.st.valid.length, 0), `of ${data.reduce((a, s) => a + s.laps.length, 0)}`),
+    tile("Driving", fmtDur(data.reduce((a, s) => a + (s.driving_s || 0), 0))),
+  ].join("");
+  drawProgressChart(data, pb);
+  renderProgressTable(data, pb);
+  drawProgressCorners(c, data, pb);
+}
+
+function drawProgressChart(data, pb) {
+  const ss = data.filter((s) => s.st.best);
+  if (!ss.length) { Plotly.purge("pg-chart"); $("#pg-chart").innerHTML = `<div class="empty">No valid lap yet.</div>`; return; }
+  $("#pg-chart").innerHTML = "";
+  $("#pg-chart-note").textContent = ss.length < 2 ? "Only one session with a valid lap on this track with this car so far: the trend shows from the second one." : "";
+  const label = (s) => `${new Date(s.started_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}<br>${s.session_type}`;
+  const x = ss.map(label);
+  let run = Infinity;
+  const pbSoFar = ss.map((s) => (run = Math.min(run, s.st.best.lap_time)));
+  const line = (name, y, colour, extra = {}) => ({
+    type: "scatter", mode: "lines+markers", name, x, y, customdata: y.map((v) => (v == null ? "" : fmtLap(v))),
+    line: { color: css(colour), width: 2, ...extra.line }, marker: { size: 8, color: css(colour), line: { color: css("--surface"), width: 2 } },
+    hovertemplate: `${name}: %{customdata}<extra></extra>`, connectgaps: true, ...extra.trace,
+  });
+  const traces = [
+    line("Best so far", pbSoFar, "--muted", { line: { shape: "hv", dash: "dot", width: 1.5 }, trace: { mode: "lines" } }),
+    line("Median lap", ss.map((s) => s.st.median), "--s-spin"),
+    line("Best sectors", ss.map((s) => s.st.theo), "--s-throttle", { line: { dash: "dash" } }),
+    line("Best lap", ss.map((s) => s.st.best.lap_time), "--s-speed", { line: { width: 2.5 } }),
+  ];
+  const ys = traces.flatMap((t) => t.y).filter((v) => v != null);
+  const lo = Math.min(...ys), hi = Math.max(...ys), step = hi - lo > 6 ? 2 : hi - lo > 2.5 ? 1 : 0.5;
+  const tickvals = [];
+  for (let v = Math.floor(lo / step) * step; v <= hi + step; v += step) tickvals.push(+v.toFixed(3));
+  Plotly.react("pg-chart", traces, plotLayout({
+    hovermode: "x unified", margin: { l: 70, r: 12, t: 8, b: 56 },
+    legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11, color: css("--text-2") } },
+    xaxis: { ...axisStyle(), type: "category", tickfont: { size: 10, color: css("--muted") } },
+    yaxis: { ...axisStyle(), tickvals, ticktext: tickvals.map((v) => fmtLap(v)), zeroline: false },
+  }), { displaylogo: false, responsive: true });
+  const el = $("#pg-chart");
+  if (!el.dataset.wired) {
+    el.dataset.wired = "1";
+    el.on("plotly_click", (ev) => { const s = pg.data.filter((q) => q.st.best)[ev.points[0].pointIndex]; if (s) openFromProgress(s.ref); });
+  }
+}
+
+function renderProgressTable(data, pb) {
+  const pbt = pb?.st.best.lap_time;
+  let run = Infinity;
+  const rows = data.map((s) => {
+    const t = s.st.best?.lap_time, isPb = t != null && t < run;
+    if (t != null) run = Math.min(run, t);
+    return `<tr data-ref="${s.ref}" class="${s === pb ? "player" : ""}">
+      <td>${new Date(s.started_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+      <td><span class="pill ${s.session_type.toLowerCase().replace(/ /g, "-")}">${esc(s.session_type)}</span></td>
+      <td class="r">${s.st.valid.length} / ${s.laps.length}</td>
+      <td class="r ${s === pb ? "best" : ""}">${t != null ? fmtLap(t) : "–"}${isPb && s !== data[0] ? " <span class='muted' title='new best at the time'>PB</span>" : ""}</td>
+      <td class="r num">${t != null && pbt != null ? (s === pb ? "best" : fmtDelta(t - pbt)) : "–"}</td>
+      <td class="r">${s.st.theo ? fmtLap(s.st.theo) : "–"}</td>
+      <td class="r">${s.st.median ? fmtLap(s.st.median) : "–"}</td>
+      <td class="r">${s.st.spread != null ? `±${s.st.spread.toFixed(2)} s` : "–"}</td>
+      <td class="r">${s.final_pos ? `P${s.final_pos}` : ""}${s.start_pos && s.session_type === "Race" ? ` <span class="muted">from P${s.start_pos}</span>` : ""}</td></tr>`;
+  });
+  $("#pg-sessions tbody").innerHTML = rows.reverse().join("") || `<tr><td colspan="9" class="empty">No session.</td></tr>`;
+}
+$("#pg-sessions tbody").onclick = (e) => { const tr = e.target.closest("tr[data-ref]"); if (tr) openFromProgress(tr.dataset.ref); };
+function openFromProgress(ref) { showTab("history"); openSession(ref); }
+
+async function drawProgressCorners(c, data, pb) {
+  const key = pg.key, tk = `${c.track}|${c.variation}`;
+  const body = $("#pg-corners tbody"), head = $("#pg-corners thead");
+  if (!pb) { head.innerHTML = ""; body.innerHTML = `<tr><td class="empty">No valid lap yet.</td></tr>`; return; }
+  body.innerHTML = `<tr><td class="empty">Loading laps…</td></tr>`;
+  // the latest 10 sessions with a valid lap, plus the one holding the best lap ever
+  const ss = data.filter((s) => s.st.best);
+  const cols = [...new Set([...ss.slice(-10), pb])].sort((a, b) => a.started_at - b.started_at);
+  const get = (s) => (pg.laps[`${s.ref}/${s.st.best.lap}`] ??= fetchLap(s.st.best.lap, s.ref));
+  const [ref, laps] = await Promise.all([get(pb), Promise.all(cols.map(get)), loadCornerNames(c.track, c.variation)]);
+  if (pg.key !== key) return;
+  const corners = findCorners(ref);
+  const refStats = corners.map((k) => cornerStats(ref, k));
+  $("#pg-corners-ref").textContent = `best lap ${fmtLap(pb.st.best.lap_time)}, ${new Date(pb.started_at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+  head.innerHTML = `<tr><th>Corner</th><th class="r">Best ever</th>${cols.map((s) => `<th class="r" title="${esc(s.session_type)}">${new Date(s.started_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short" })}<br><span class="muted">${new Date(s.started_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></th>`).join("")}</tr>`;
+  const cell = (st, r, s) => {
+    if (!st || !r) return `<td class="r muted">–</td>`;
+    if (s === pb) return `<td class="r muted">best</td>`;
+    const d = st.time - r.time, f = Math.min(1, Math.abs(d) / 0.3);
+    const col = d < 0 ? "--s-speed" : "--s-spin";
+    const tip = `braking ${st.brake != null ? `at ${Math.round(st.brake)} m` : "–"}${st.brake != null && r.brake != null ? ` (${fmtDiff(st.brake - r.brake)} m)` : ""}`
+      + ` · entry ${Math.round(st.entry)} · slowest ${Math.round(st.min)} · exit ${Math.round(st.exit)} km/h`
+      + ` (best lap: ${Math.round(r.entry)} / ${Math.round(r.min)} / ${Math.round(r.exit)})`;
+    return `<td class="r num" title="${tip}" style="background:color-mix(in srgb, var(${col}) ${Math.round(f * 45)}%, transparent)">${fmtDelta(d)}</td>`;
+  };
+  body.innerHTML = corners.map((k, i) => {
+    const nm = namedCorner(tk, k);
+    return `<tr><td>${esc(nm ? nm.name : `C${i + 1}`)} <span class="muted">${Math.round(k.apex)} m</span></td>
+      <td class="r">${refStats[i] ? `${refStats[i].time.toFixed(2)} s` : "–"}</td>
+      ${cols.map((s, j) => cell(cornerStats(laps[j], k), refStats[i], s)).join("")}</tr>`;
+  }).join("") || `<tr><td class="empty">No corner found on the best lap.</td></tr>`;
+}
+
 // ---------- wheel LEDs (Moza shift light) ----------
 const led = { setup: null, timer: null, saveTimer: null, axesKey: "", test: null };
 const LED_COLOUR = (i) => (i < 3 ? "--good" : i < 7 ? "--warning" : "--critical");
@@ -2421,4 +2870,7 @@ loadShakerCars();
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
-else if (["#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
+else if (location.hash.startsWith("#progress")) showTab("progress");
+else if (["#genie", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
+// in-page links such as "Progress on this track"
+window.addEventListener("hashchange", () => { if (location.hash.startsWith("#progress")) showTab("progress"); });

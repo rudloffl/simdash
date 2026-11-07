@@ -447,3 +447,61 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .led-car-add #led-car-rpm { width: 90px; }
 .led-cars { width: 100%; }
 .led-cars td button { padding: 1px 8px; color: var(--muted); }
+#pg-chart { height: 340px; }
+
+/* Corner Genie: corner recap card */
+.pilot-pop { position: fixed; left: 50%; transform: translateX(-50%); z-index: 50; min-width: 260px; max-width: min(92vw, 720px);
+  background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--muted); border-radius: 12px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.35); padding: 10px 16px; transition: opacity 0.35s; color: var(--text); }
+.pilot-pop[hidden] { display: none; }
+.pilot-pop.fade { opacity: 0; }
+.pilot-pop.pp-top { top: 64px; } .pilot-pop.pp-middle { top: 50%; transform: translate(-50%, -50%); } .pilot-pop.pp-bottom { bottom: 24px; }
+.pilot-pop.pp-gain { border-left-color: var(--s-speed); } .pilot-pop.pp-loss { border-left-color: var(--s-spin); }
+.pilot-pop .pp-head { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
+.pilot-pop .pp-name { font-weight: 700; font-size: 1.25em; }
+.pilot-pop .pp-dt { margin-left: auto; font-weight: 700; font-size: 1.6em; font-variant-numeric: tabular-nums; }
+/* entry | apex | exit columns split by thin rules (entry reads from the left, exit from the right);
+   one row per kind of value: distances, speeds, gear */
+.pilot-pop .pp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0.35em;
+  color: var(--text-2); font-variant-numeric: tabular-nums; }
+.pilot-pop .pp-cell { display: flex; align-items: center; padding: 0.1em 0.7em; min-height: 1.3em; }
+.pilot-pop .pp-cell:not(.pp-in) { border-left: 1px solid var(--border); }
+.pilot-pop .pp-in { justify-content: flex-start; padding-left: 0; }
+.pilot-pop .pp-apex { justify-content: center; }
+.pilot-pop .pp-out { justify-content: flex-end; padding-right: 0; }
+.pilot-pop .pp-grid b { color: var(--text); }
+.pilot-pop .pp-item { display: inline-flex; align-items: center; gap: 0.3em; white-space: nowrap; }
+.pilot-pop .pp-item span { font-size: 0.85em; }
+.pilot-pop .pp-same { color: var(--muted); }
+.pilot-pop .pp-strike { color: var(--muted); }
+.pp-icon { width: 1.15em; height: 1.15em; flex: none; color: var(--text-2); vertical-align: -0.2em; }
+.pilot-pop .pp-dt { display: inline-flex; align-items: center; gap: 0.25em; }
+.pilot-pop .pp-dt.pp-good { color: var(--s-speed); } .pilot-pop .pp-dt.pp-bad { color: var(--s-spin); }
+.pilot-pop .pp-dt.pp-good .pp-icon, .pilot-pop .pp-dt.pp-bad .pp-icon { color: inherit; }
+.pilot-pop .pp-dt .pp-icon { width: 0.8em; height: 0.8em; }
+.pf-fields .pp-icon { width: 20px; height: 20px; }
+#pf-map { height: 300px; margin: 8px 0; }
+.pilot-pop .pp-grid .pp-good { color: var(--s-speed); } .pilot-pop .pp-grid .pp-bad { color: var(--s-spin); }
+.pilot-pop.pp-normal { font-size: 14px; } .pilot-pop.pp-large { font-size: 20px; } .pilot-pop.pp-huge { font-size: 30px; }
+/* about 75 % of the screen: sized from the viewport, details in a grid under the corner and the time */
+.pilot-pop.pp-screen { width: 75vw; max-width: 92vw; font-size: min(5.2vw, 7.5vh); padding: 0.45em 0.8em 0.55em;
+  border-left-width: 0.3em; border-radius: 0.4em; }
+.pilot-pop.pp-screen .pp-name { font-size: 1.15em; }
+.pilot-pop.pp-screen .pp-dt { font-size: 1.6em; }
+
+.pilot-pop.pp-screen.pp-top { top: max(56px, 4vh); }
+.pilot-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 900px) { .pilot-grid { grid-template-columns: minmax(0, 1fr); } }
+.pf-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.pf-fields .led-check { margin: 4px 0; }
+.pf-stage { position: relative; min-height: 180px; border: 1px dashed var(--border); border-radius: 10px; display: flex;
+  align-items: center; justify-content: center; overflow: hidden; padding: 12px; }
+.pf-stage .pilot-pop { position: static; transform: none; box-shadow: none; }
+/* the preview keeps one readable size whatever the popup's size */
+.pf-stage .pilot-pop.pp-normal, .pf-stage .pilot-pop.pp-large, .pf-stage .pilot-pop.pp-huge, .pf-stage .pilot-pop.pp-screen {
+  font-size: 18px; width: auto; max-width: 100%; padding: 10px 16px; border-left-width: 6px; border-radius: 12px; }
+.pf-note { font-size: 12px; align-self: center; }
+.pf-replay { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.pf-replay #pf-session { flex: 1; min-width: 220px; }
+#pilot-pop { pointer-events: none; }
+.pf-stage .pilot-pop:not([hidden]) + span { display: none; }

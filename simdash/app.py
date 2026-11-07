@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import leds, replay, shakers, store, system
+from . import genie, leds, replay, shakers, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -172,6 +172,11 @@ def create_app(recorder=None):
         if row is None:
             raise HTTPException(404, "no such session")
         return store.best_laps(row["track"], row["variation"], row["car"], exclude_ref=ref)
+
+    @app.get("/api/progress")
+    async def progress(track: str, variation: str, car: str):
+        """All sessions and laps on one track layout with one car, for the Progress tab."""
+        return await asyncio.to_thread(store.progress, track, variation, car)
 
     @app.get("/api/sessions/{ref}/lap/{lap}")
     def lap_samples(ref: str, lap: int):
@@ -417,6 +422,19 @@ def create_app(recorder=None):
         except LookupError as e:
             raise HTTPException(409, str(e))
         return p.state()
+
+    # ---- Corner Genie: corner recap popup settings ----
+
+    @app.get("/api/genie")
+    def genie_get():
+        return genie.load()
+
+    @app.put("/api/genie")
+    def genie_put(patch: dict):
+        try:
+            return genie.save(patch)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"bad setting: {e}")
 
     # ---- wheel RPM LEDs (Moza) ----
 

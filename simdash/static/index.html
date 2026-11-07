@@ -12,6 +12,8 @@
   <nav>
     <button data-tab="live" class="active">Live</button>
     <button data-tab="history">Sessions</button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="genie">Corner Genie</button>
     <button data-tab="shakers">Shakers</button>
     <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
@@ -135,6 +137,7 @@
     <div class="detail-head">
       <h2 id="d-title"></h2><span class="muted" id="d-sub"></span>
       <div class="actions">
+        <a id="d-progress" href="#progress"><button>Progress on this track</button></a>
         <a id="d-csv" href="#"><button>Export CSV</button></a>
         <button id="d-delete">Delete</button>
       </div>
@@ -203,6 +206,81 @@
     <div class="card" id="positions-card" hidden>
       <h3>Position over the session <span class="right muted">click to move the race replay there</span></h3>
       <div id="positions-plot"></div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-progress" class="tab">
+  <div class="card">
+    <h3>Progress <span class="right"><select id="pg-combo" aria-label="Track and car"></select></span></h3>
+    <div class="tiles" id="pg-tiles"></div>
+  </div>
+  <div class="card">
+    <h3>Lap times per session <span class="right muted">click a session to open it</span></h3>
+    <div id="pg-chart"></div>
+    <div class="fx-hint" id="pg-chart-note"></div>
+  </div>
+  <div class="card">
+    <h3>Sessions <span class="right muted">median and spread use the valid laps within 105 % of the session's best</span></h3>
+    <div class="table-wrap">
+      <table id="pg-sessions"><thead><tr>
+        <th>Date</th><th>Type</th><th class="r">Valid laps</th><th class="r">Best</th><th class="r">vs best ever</th>
+        <th class="r">Best sectors</th><th class="r">Median</th><th class="r">Spread</th><th class="r">Pos</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Corners <span class="muted" id="pg-corners-ref"></span><span class="right muted">time in each corner on each session's best lap, against your best lap ever</span></h3>
+    <div class="table-wrap"><table id="pg-corners"><thead></thead><tbody></tbody></table></div>
+    <div class="fx-hint">Blue: faster than on your best lap ever, orange: slower. Hover a cell for the braking point and the entry, slowest and exit speeds.</div>
+  </div>
+</section>
+
+<section id="tab-genie" class="tab">
+  <div class="pilot-grid">
+    <div class="card">
+      <h3>Corner Genie <span class="right muted">corner recap while you drive</span></h3>
+      <div class="fx-hint" style="margin-top:0">As you leave each corner, a card shows how it went against your best lap on this
+        track with this car, then fades. It shows over whatever simdash tab is open, so set things up here, leave simdash on a screen
+        you can see, and drive. It needs a best lap there (one valid lap is enough).</div>
+      <label class="led-check"><input type="checkbox" id="pf-enabled"> Show the corner recap while driving</label>
+      <div class="fx-fields">
+        <label>Stays on screen (s)<div class="row"><input type="range" id="pf-duration" min="1" max="15" step="0.5"><input type="number" id="pf-duration-n" min="1" max="15" step="0.5"></div></label>
+        <label>Position<select id="pf-position"><option value="top">Top</option><option value="middle">Middle</option><option value="bottom">Bottom</option></select></label>
+        <label>Size<select id="pf-size"><option value="screen">75 % of the screen</option><option value="huge">Huge</option><option value="large">Large</option><option value="normal">Normal</option></select></label>
+        <label>Show it<select id="pf-only"><option value="all">After every corner</option><option value="lost">Only where I lose time</option><option value="gained">Only where I gain time</option></select></label>
+        <label>Ignore differences under (s)<div class="row"><input type="number" id="pf-min" min="0" max="2" step="0.01"></div></label>
+      </div>
+      <h3 class="sub-h">What the card shows</h3>
+      <div class="pf-fields">
+        <label class="led-check"><input type="checkbox" data-f="time"> Time gained or lost in the corner</label>
+        <label class="led-check"><input type="checkbox" data-f="brake"> Braking point: metres before the apex</label>
+        <label class="led-check"><input type="checkbox" data-f="entry"> Entry speed</label>
+        <label class="led-check"><input type="checkbox" data-f="min"> Slowest speed</label>
+        <label class="led-check"><input type="checkbox" data-f="exit"> Exit speed</label>
+        <label class="led-check"><input type="checkbox" data-f="throttle"> Full throttle: metres after the apex (negative: before it)</label>
+        <label class="led-check"><input type="checkbox" data-f="gear"> Gear</label>
+      </div>
+      <div class="fx-hint" id="pf-save-note"></div>
+    </div>
+    <div class="card">
+      <h3>Preview and test</h3>
+      <div class="pf-stage" id="pf-stage"><div class="pilot-pop" id="pf-pop" hidden></div><span class="muted" id="pf-stage-empty">The card appears here.</span></div>
+      <div class="sys-btns led-btns">
+        <button id="pf-sample">Show a sample</button>
+        <span class="muted pf-note">It also pops up over this page, as it will while you drive.</span>
+      </div>
+      <h3 class="sub-h">Replay a recorded lap</h3>
+      <div class="fx-hint" style="margin-top:0">Plays a lap from your sessions through the recap, at the moments you left each corner,
+        against your best lap ever on that track with that car.</div>
+      <canvas id="pf-map" aria-label="Track map of the replayed lap"></canvas>
+      <div class="pf-replay">
+        <select id="pf-session" aria-label="Session"></select>
+        <select id="pf-lap" aria-label="Lap"></select>
+        <select id="pf-speed" aria-label="Speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select>
+        <button id="pf-play">Play</button>
+      </div>
+      <div class="fx-hint num" id="pf-replay-state"></div>
     </div>
   </div>
 </section>
@@ -395,6 +473,7 @@
 </section>
 </main>
 
+<div id="pilot-pop" class="pilot-pop" hidden aria-live="polite"></div>
 <script src="/static/plotly.min.js" defer></script>
 <script src="/static/app.js" defer></script>
 </body>

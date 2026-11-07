@@ -60,6 +60,12 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   corner names and sector lines on the maps and traces, race replay of all cars (with the car seen from
   above showing which shaker played what at that moment), results, CSV export, delete.
   Links like `/#session=2026-10-25:3` open a session directly.
+- **Corner Genie**: a big card that pops up as you leave each corner, over whatever simdash tab
+  is open (you can't click while driving), then fades: time gained or lost in the corner and, in
+  an entry | apex | exit grid, the braking point, full-throttle point, entry / slowest / exit speed
+  and gear, each against your best lap on that track with that car. The tab sets what it shows,
+  how big, where and for how long, with a preview and a replay of any recorded lap on a track map.
+  Details below. Link: `/#genie`.
 - **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb and
   off-track effects simdash plays itself.
   A top view of the car shows where each channel of the shaker sound card is mounted (seat,
@@ -104,6 +110,35 @@ along its lap distance: the analysed lap in **Sessions**, your best lap on that 
   goes to the corner whose apex is within 80 m of it.
 - **Sectors:** where sector 2 and 3 start comes from the sector number AMS2 reports while you
   drive, recorded with every sample.
+
+## Corner Genie
+
+As you leave each corner, a card shows how it went against the **reference lap**: your best valid lap
+on this track layout with this car, from any day (the same one Live's corner focus uses; it updates
+when you set a new best). Corners are those of the reference lap (see above). The card pops up over
+any simdash tab, so leave simdash on a screen you can see (a second monitor or a tablet: AMS2 full
+screen covers it) and drive.
+
+- **When:** once you are back at full throttle after the apex, at least 120 m and at most 250 m past
+  it (or at the next corner's start). A corner gets a card only if simdash saw it from its start, so
+  opening the page mid-lap skips the corners already behind you.
+- **Top line:** corner name and the time gained or lost from the corner's start to that point.
+- **Grid**, columns in driving order *entry | apex | exit*, one row per kind of value:
+  - distances: **braking point** in metres before the apex | | **full throttle** (throttle ≥ 95 %)
+    in metres after it. Both are measured from the reference lap's apex, so two laps compare only
+    where they braked or floored it. ✓ = within 3 m.
+  - speeds: **entry** (at the braking point) | **slowest** | **exit** (100 m past the apex), km/h.
+  - gear: | the gear held at the slowest point (the most common one within 30 m, since mid-shift
+    samples read neutral or a passing gear) |.
+- **Colours:** blue = better than the reference (faster, braked later, full throttle sooner), orange =
+  worse; the card's edge and the time take the same colour.
+- **Settings** (tab *Corner Genie*, saved in `~/.local/share/simdash/genie.json`, shared by every
+  screen): on/off, time on screen, position (top / middle / bottom), size (up to about 75 % of the
+  screen, text scaled to it), every corner or only where you lose / gain time above a threshold,
+  and which values to show (icons double as the legend).
+- **Test:** *Show a sample*, or replay a recorded lap at 1×, 2× or 4×: the cards pop up at the moments
+  you left each corner, against your best lap ever there, while a track map follows the car and rings
+  the corner just reported. The preview box keeps the latest card.
 
 ## Bass shakers (Shakers tab)
 
