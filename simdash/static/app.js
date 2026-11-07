@@ -2213,7 +2213,7 @@ function pilotHtml(rec, s) {
     const d = Math.round(va) - Math.round(vb);
     return item(k, `<b>${Math.round(va)}</b><span class="${d > 0 ? "pp-good" : d < 0 ? "pp-bad" : "pp-same"}">${fmtDiff(d)}</span>`);
   };
-  // distances: blue when better than the best lap (braking later, full throttle sooner), orange when worse
+  // distances: green when better than the best lap (braking later, full throttle sooner), red when worse
   const dist = (k, va, vb) => {
     if (va == null) return item(k, `<b class="pp-strike" title="${k === "brake" ? "no braking" : "not back to full throttle"}">—</b>`);
     const d = Math.round(va) - Math.round(vb ?? va);
@@ -2340,7 +2340,7 @@ function drawPilotMap(t = 0) {
   const rec = pfMap.rec, R = pfMap.R;
   if (rec && R) {
     const j = sampleAt(R, rec.c.apex);
-    marks.marks = [{ p: mapXY(R.x[j], R.z[j]), color: css(rec.dt < -0.02 ? "--s-speed" : rec.dt > 0.02 ? "--s-spin" : "--muted") }];
+    marks.marks = [{ p: mapXY(R.x[j], R.z[j]), color: css(rec.dt < -0.02 ? "--good" : rec.dt > 0.02 ? "--critical" : "--muted") }];
   }
   drawMap(canvas, outline, [{ x: L.x[i], z: L.z[i], player: true, pos: "" }], true, marks);
 }

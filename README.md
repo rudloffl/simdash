@@ -15,6 +15,9 @@ pages below.
 ![Live dashboard while driving](docs/live.png)
 *Live: the dashboard while on track, with the track map focused on one corner and each pass compared with the reference lap (here fed by the built-in fake game, `simdash.fake_ams2`).*
 
+![Corner Genie: the corner recap card popping up during a lap replay, over its settings](docs/genie.png)
+*Corner Genie: Paddock Hill (C1) at Brands Hatch, replayed from a race against the best lap ever there: 0.05 s gained, braked 17 m later and back to full throttle 5 m later, 5 km/h slower in but faster at the apex and out, 3rd gear. Green is better, red worse. On track the card pops up the same way over whatever tab is open.*
+
 ![Shakers: replay of a recorded lap with the map, a small car showing the shakers playing, RPM, surface and wheel slip, next to the effects being tuned](docs/shakers.png)
 *Shakers: a lap at Laguna Seca replayed on the shakers while the effects are tuned on the right: braking with the front-left wheel locked (its puck lit violet), the front-right on a kerb, the engine on the BST1 under the seat.*
 
@@ -130,8 +133,9 @@ screen covers it) and drive.
   - speeds: **entry** (at the braking point) | **slowest** | **exit** (100 m past the apex), km/h.
   - gear: | the gear held at the slowest point (the most common one within 30 m, since mid-shift
     samples read neutral or a passing gear) |.
-- **Colours:** blue = better than the reference (faster, braked later, full throttle sooner), orange =
-  worse; the card's edge and the time take the same colour.
+- **Colours:** the classic timing ones: green = better than the reference (gaining time, faster,
+  braked later, full throttle sooner), red = worse (losing time); the card's edge and the time take
+  the same colour.
 - **Settings** (tab *Corner Genie*, saved in `~/.local/share/simdash/genie.json`, shared by every
   screen): on/off, time on screen, position (top / middle / bottom), size (up to about 75 % of the
   screen, text scaled to it), every corner or only where you lose / gain time above a threshold,

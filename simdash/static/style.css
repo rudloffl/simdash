@@ -456,7 +456,8 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .pilot-pop[hidden] { display: none; }
 .pilot-pop.fade { opacity: 0; }
 .pilot-pop.pp-top { top: 64px; } .pilot-pop.pp-middle { top: 50%; transform: translate(-50%, -50%); } .pilot-pop.pp-bottom { bottom: 24px; }
-.pilot-pop.pp-gain { border-left-color: var(--s-speed); } .pilot-pop.pp-loss { border-left-color: var(--s-spin); }
+/* classic timing colours: green = better than the reference, red = worse */
+.pilot-pop.pp-gain { border-left-color: var(--good); } .pilot-pop.pp-loss { border-left-color: var(--critical); }
 .pilot-pop .pp-head { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
 .pilot-pop .pp-name { font-weight: 700; font-size: 1.25em; }
 .pilot-pop .pp-dt { margin-left: auto; font-weight: 700; font-size: 1.6em; font-variant-numeric: tabular-nums; }
@@ -476,15 +477,15 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .pilot-pop .pp-strike { color: var(--muted); }
 .pp-icon { width: 1.15em; height: 1.15em; flex: none; color: var(--text-2); vertical-align: -0.2em; }
 .pilot-pop .pp-dt { display: inline-flex; align-items: center; gap: 0.25em; }
-.pilot-pop .pp-dt.pp-good { color: var(--s-speed); } .pilot-pop .pp-dt.pp-bad { color: var(--s-spin); }
+.pilot-pop .pp-dt.pp-good { color: var(--good); } .pilot-pop .pp-dt.pp-bad { color: var(--critical); }
 .pilot-pop .pp-dt.pp-good .pp-icon, .pilot-pop .pp-dt.pp-bad .pp-icon { color: inherit; }
 .pilot-pop .pp-dt .pp-icon { width: 0.8em; height: 0.8em; }
 .pf-fields .pp-icon { width: 20px; height: 20px; }
 #pf-map { height: 300px; margin: 8px 0; }
-.pilot-pop .pp-grid .pp-good { color: var(--s-speed); } .pilot-pop .pp-grid .pp-bad { color: var(--s-spin); }
+.pilot-pop .pp-grid .pp-good { color: var(--good); } .pilot-pop .pp-grid .pp-bad { color: var(--critical); }
 .pilot-pop.pp-normal { font-size: 14px; } .pilot-pop.pp-large { font-size: 20px; } .pilot-pop.pp-huge { font-size: 30px; }
 /* about 75 % of the screen: sized from the viewport, details in a grid under the corner and the time */
-.pilot-pop.pp-screen { width: 75vw; max-width: 92vw; font-size: min(5.2vw, 7.5vh); padding: 0.45em 0.8em 0.55em;
+.pilot-pop.pp-screen { width: 75vw; max-width: 92vw; font-size: min(3.5vw, 7vh); padding: 0.45em 0.8em 0.55em;
   border-left-width: 0.3em; border-radius: 0.4em; }
 .pilot-pop.pp-screen .pp-name { font-size: 1.15em; }
 .pilot-pop.pp-screen .pp-dt { font-size: 1.6em; }
