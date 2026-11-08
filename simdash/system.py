@@ -241,10 +241,10 @@ def _quit_ams2(timeout=40):
     return bool(pids)
 
 
-def _start_session():
+def _start_session(*args):
     if _session_running():
         raise RuntimeError("a start-race session is still running")
-    subprocess.Popen([str(BIN / "start-race")], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    subprocess.Popen([str(BIN / "start-race"), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
@@ -253,6 +253,13 @@ def start_ams2():
         raise RuntimeError("AMS2 is already running")
     _start_session()
     _note("session started (start-race: simd, CrewChief, AMS2, monocoque)")
+
+
+def start_ams2_mapping():
+    if _pids("^AMS2AVX"):
+        raise RuntimeError("AMS2 is already running")
+    _start_session("--map")
+    _note("session started for track edge mapping (start-race --map: no CrewChief)")
 
 
 def quit_ams2():
@@ -274,6 +281,7 @@ ACTIONS = {
     "monocoque/restart": restart_monocoque,
     "monocoque/stop": stop_monocoque,
     "ams2/start": start_ams2,
+    "ams2/start-map": start_ams2_mapping,
     "ams2/quit": quit_ams2,
     "ams2/restart": restart_ams2,
 }

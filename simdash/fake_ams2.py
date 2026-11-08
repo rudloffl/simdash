@@ -38,6 +38,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--laps", type=int, default=3)
     ap.add_argument("--cars", type=int, default=6)
+    ap.add_argument("--edges", action="store_true",
+                    help="the player weaves across a 12 m wide track (6 m each side), tyres going off: for track edge mapping")
     ap.add_argument("--speedup", type=float, default=1.0, help="run the clock faster than real time")
     args = ap.parse_args()
     path = os.environ.get("SIMDASH_SHM", "/dev/shm/simdash-fake")
@@ -148,6 +150,23 @@ def main():
                 put("mLastLapTimes", "f", last[i], idx=i)
                 put("mSpeeds", "f", speed[i], idx=i)
                 put("mRaceStates", "I", 2, idx=i)
+
+            if args.edges:
+                # weave from 7.5 m left to 7.5 m right of the centre line; tyres beyond 6 m are on the grass
+                x0, z0, _ = at(pos_d[0])
+                x1, z1, _ = at(pos_d[0] + 1)
+                fl = math.hypot(x1 - x0, z1 - z0) or 1
+                fx, fz = (x1 - x0) / fl, (z1 - z0) / fl
+                lx, lz = -fz, fx          # AMS2: left of travel (see edges.py)
+                lat = 7.5 * math.sin(pos_d[0] / 60)
+                p = OFF["mParticipantInfo"]
+                struct.pack_into("<3f", mm, p + OFF["p_mWorldPosition"], x0 + lx * lat, 0.0, z0 + lz * lat)
+                put("mOrientation", "3f", 0.0, math.atan2(-fx, -fz), 0.0)
+                terr = []
+                for side in (1, -1, 1, -1):   # FL FR RL RR
+                    w = abs(lat + 0.8 * side)
+                    terr.append(7 if w > 6 else 10 if w > 5 else 0)  # grass, rumble strips, road
+                put("mTerrain", "4I", *terr)
 
             v = speed[0]
             acc = (v - prev_v) / dt

@@ -56,12 +56,13 @@ function showTab(name) {
   if (name === "history") loadSessions();
   if (name === "progress") loadProgress();
   if (name === "genie") loadPilotTab();
+  if (name === "edges") loadEdges(true);
   if (name !== "genie" && pf.replay) stopPilotReplay();
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
+  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -77,6 +78,18 @@ function mapXY(x, z) {
   for (let k = 0; k < mapRot; k++) [X, Y] = [-Y, X];
   return [X, Y];
 }
+// natural colours (grass, gravel, kerbs, tarmac) on the canvas maps that have mapped track edges
+let mapNatural = pref.get("edNatural", true);
+function setMapNatural(on) {
+  mapNatural = on;
+  pref.set("edNatural", on);
+  if (typeof ed !== "undefined") ed.natural = on;
+  $("#map-natural").classList.toggle("on", on);
+  if (typeof renderEdgeLook === "function") renderEdgeLook();
+  redrawMaps();
+}
+$("#map-natural").onclick = () => setMapNatural(!mapNatural);
+$("#map-natural").classList.toggle("on", mapNatural);
 $("#map-mirror").onclick = () => { mapMirror = !mapMirror; pref.set("mapMirror", mapMirror); redrawMaps(); };
 $("#map-rotate").onclick = () => { mapRot = (mapRot + 1) % 4; pref.set("mapRot", mapRot); redrawMaps(); };
 function redrawMaps() {
@@ -84,6 +97,7 @@ function redrawMaps() {
   if (hist.lapData) drawLapMap();
   if (replay.cars) drawReplay();
   rp.lastDraw = -1;
+  if (currentTab === "edges") drawEdgeMap();
 }
 
 // view (optional), in map coordinates: { bounds: [x0, x1, y0, y1], marks: [{ p: [X, Y], color }],
@@ -107,14 +121,20 @@ function drawMap(canvas, outline, cars, startLine, view = null) {
   const sc = Math.min((w - 2 * pad) / Math.max(x1 - x0, 1), (h - 2 * pad) / Math.max(y1 - y0, 1));
   const ox = (w - (x1 - x0) * sc) / 2, oy = (h - (y1 - y0) * sc) / 2;
   const S = ([X, Y]) => [ox + (X - x0) * sc, oy + (Y - y0) * sc];
+  canvas.mapS = S;  // for hover lookups (track edges map)
 
+  if (view?.natural && view.edges) drawNatural(ctx, S, sc, pts, view.edges, w, h);
   if (pts.length > 1) {
     ctx.lineJoin = ctx.lineCap = "round";
     ctx.strokeStyle = css("--neutral");
     ctx.lineWidth = 9;
     ctx.beginPath();
+    if (view?.edges) ctx.lineWidth = view.natural ? 1 : view.edges.colours ? 3 : 4;
+    if (view?.natural) { ctx.strokeStyle = css("--text-2"); ctx.setLineDash([4, 6]); }
     pts.forEach((p, i) => { const [a, b] = S(p); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); });
     ctx.stroke();
+    ctx.setLineDash([]);
+    if (view?.edges && !view.natural) drawEdges(ctx, S, view.edges);
     if (startLine && pts.length > 3) {
       const [ax, ay] = S(pts[0]), [bx, by] = S(pts[3]);
       const len = Math.hypot(bx - ax, by - ay) || 1;
@@ -152,6 +172,7 @@ function drawMap(canvas, outline, cars, startLine, view = null) {
       ctx.fillText(l.text, x, y);
     }
   }
+  if (view?.missing && pts.length > 1) drawMissing(ctx, S, outline, view.missing, view.length, sc);
   for (const m of view?.marks || []) {
     const [a, b] = S(m.p);
     ctx.beginPath();
@@ -182,8 +203,124 @@ function drawMap(canvas, outline, cars, startLine, view = null) {
   ctx.globalAlpha = 1;
 }
 
+// edges: { left: [[[x, z, d], ...], ...], right: [...], colours } — the track's mapped borders
+function drawEdges(ctx, S, edges) {
+  ctx.lineWidth = edges.colours ? 2 : 1.5;
+  for (const side of ["left", "right"]) {
+    ctx.strokeStyle = edges.colours ? css(side === "left" ? "--s-spin" : "--s-speed") : css("--text-2");
+    for (const seg of edges[side] || []) {
+      ctx.beginPath();
+      seg.forEach((p, i) => { const [a, b] = S(mapXY(p[0], p[1])); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); });
+      ctx.stroke();
+    }
+  }
+}
+
+// Natural colours: grass everywhere, what lies beyond each mapped edge (gravel, run-off...) as a band
+// outside it, tarmac between the edges (or the racing line widened where an edge is missing),
+// red and white kerbs where tyres ran on them. Edge point: [x, z, d, y, kerb, beyond].
+const NAT_BEYOND_M = 10, NAT_KERB_M = 1.2;
+function drawNatural(ctx, S, sc, pts, edges, w, h) {
+  const P = (x, z) => S(mapXY(x, z));
+  ctx.fillStyle = css("--nat-grass");
+  ctx.fillRect(0, 0, w, h);
+  // track width where both edges are known, for the stretches with one edge or none
+  const byD = { left: new Map(), right: new Map() };
+  for (const side of ["left", "right"]) for (const seg of edges[side] || []) for (const p of seg) byD[side].set(p[2], p);
+  const widths = [];
+  for (const [dd, l] of byD.left) { const r = byD.right.get(dd); if (r) widths.push(Math.hypot(l[0] - r[0], l[1] - r[1])); }
+  widths.sort((a, b) => a - b);
+  const width = widths.length > 20 ? widths[widths.length >> 1] : 11;
+  if (pts.length > 1) {
+    ctx.lineJoin = ctx.lineCap = "round";
+    ctx.strokeStyle = css("--nat-road");
+    ctx.lineWidth = Math.max(width * sc, 2);
+    ctx.beginPath();
+    pts.forEach((p, i) => { const [a, b] = S(p); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); });
+    ctx.stroke();
+  }
+  const quad = (a, b, c, d, fill) => {
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = fill;  // closes the hairline seams between quads
+    ctx.lineWidth = 0.6;
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.lineTo(...c); ctx.lineTo(...d); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  };
+  const beyondCol = { grass: css("--nat-grass"), gravel: css("--nat-gravel"), runoff: css("--nat-runoff"), wall: css("--nat-wall"), other: css("--nat-other") };
+  const normals = (seg, out) => seg.map((p, i) => {
+    const a = seg[Math.max(i - 1, 0)], b = seg[Math.min(i + 1, seg.length - 1)];
+    const fx = b[0] - a[0], fz = b[1] - a[1], n = Math.hypot(fx, fz) || 1;
+    return [(-fz / n) * out, (fx / n) * out];  // left of travel is (-fz, fx) in AMS2's x/z
+  });
+  const layers = [];
+  for (const side of ["left", "right"]) {
+    const out = side === "left" ? 1 : -1;
+    for (const seg of edges[side] || []) layers.push({ seg, nm: normals(seg, out) });
+  }
+  // 1. beyond the edges (also hides the widened racing line where it spills past a real edge)
+  for (const { seg, nm } of layers) for (let i = 0; i + 1 < seg.length; i++) {
+    const p = seg[i], q = seg[i + 1], col = beyondCol[p[5]] || beyondCol.grass;
+    quad(P(p[0], p[1]), P(q[0], q[1]), P(q[0] + nm[i + 1][0] * NAT_BEYOND_M, q[1] + nm[i + 1][1] * NAT_BEYOND_M),
+      P(p[0] + nm[i][0] * NAT_BEYOND_M, p[1] + nm[i][1] * NAT_BEYOND_M), col);
+  }
+  // 2. tarmac between the two edges
+  const road = css("--nat-road");
+  for (const [dd, l] of byD.left) {
+    const r = byD.right.get(dd), l2 = byD.left.get(dd + BIN_M), r2 = byD.right.get(dd + BIN_M);
+    if (r && l2 && r2) quad(P(l[0], l[1]), P(l2[0], l2[1]), P(r2[0], r2[1]), P(r[0], r[1]), road);
+  }
+  // 3. kerbs, just inside the edge
+  const k1 = css("--nat-kerb"), k2 = css("--nat-kerb-2");
+  for (const { seg, nm } of layers) for (let i = 0; i + 1 < seg.length; i++) {
+    const p = seg[i], q = seg[i + 1];
+    if (!p[4] || !q[4]) continue;
+    quad(P(p[0], p[1]), P(q[0], q[1]), P(q[0] - nm[i + 1][0] * NAT_KERB_M, q[1] - nm[i + 1][1] * NAT_KERB_M),
+      P(p[0] - nm[i][0] * NAT_KERB_M, p[1] - nm[i][1] * NAT_KERB_M), (p[2] / BIN_M) % 2 ? k1 : k2);
+  }
+}
+const BIN_M = 3;  // edges.py BIN
+
+// red dots where an edge is still missing, on that side of the track (missing: { left: [[from_m, to_m]], right })
+// lap distance of each outline point: distance along the outline, scaled to the track length
+function outlineDist(outline, length) {
+  const cum = [0];
+  for (let i = 1; i < outline.length; i++) cum.push(cum[i - 1] + Math.hypot(outline[i][0] - outline[i - 1][0], outline[i][1] - outline[i - 1][1]));
+  const k = length && cum[cum.length - 1] ? length / cum[cum.length - 1] : 1;
+  return cum.map((c) => c * k);
+}
+
+function drawMissing(ctx, S, outline, missing, length, sc) {
+  const pts = outline.map((p) => mapXY(p[0], p[1]));
+  const cum = outlineDist(outline, length), k = 1;
+  const off = Math.max(7, 5.5 * sc);  // px: about half the track width, never closer than 7 px to the line
+  ctx.fillStyle = css("--critical");
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  for (const side of ["left", "right"]) {
+    const gaps = missing[side] || [];
+    let next = -Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dd = cum[i] * k;
+      if (dd < next || !gaps.some(([a, b]) => dd >= a && dd <= b)) continue;
+      next = dd + 15;  // one dot every 15 m
+      // that side of the car, in AMS2's x/z: left of travel is (-fz, fx)
+      const a = outline[Math.max(i - 1, 0)], b = outline[Math.min(i + 1, outline.length - 1)];
+      const fx = b[0] - a[0], fz = b[1] - a[1], n = Math.hypot(fx, fz) || 1, sgn = side === "left" ? 1 : -1;
+      const [x0, y0] = S(pts[i]), [x1, y1] = S(mapXY(outline[i][0] - (fz / n) * sgn, outline[i][1] + (fx / n) * sgn));
+      const m = Math.hypot(x1 - x0, y1 - y0) || 1;
+      ctx.beginPath();
+      ctx.arc(x0 + (x1 - x0) / m * off, y0 + (y1 - y0) / m * off, 3.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+const ALL_MISSING = { left: [[0, 1e9]], right: [[0, 1e9]] };
+const edgeGaps = (e) => (e ? e.gaps : ALL_MISSING);
+
 // ---------- live ----------
-const live = { data: null, trace: [], dirty: false, trackRev: -1, outline: null, outlineSrc: "", lastTrackFetch: 0, lastTable: 0 };
+const live = { data: null, trace: [], dirty: false, trackRev: -1, outline: null, outlineSrc: "", lastTrackFetch: 0, lastTable: 0,
+  edges: null, edgesKey: "", edgesFetch: 0 };
 
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/live`);
@@ -224,15 +361,24 @@ async function refreshOutline() {
   } catch { /* retried on next frame */ }
 }
 
+async function refreshLiveEdges(s, key) {
+  live.edgesKey = key;
+  live.edgesFetch = performance.now();
+  try {
+    const r = await (await fetch(`/api/edges/track?track=${encodeURIComponent(s.track)}&variation=${encodeURIComponent(s.variation)}`)).json();
+    if (live.edgesKey === key) { live.edges = r.edges; live.dirty = true; }
+  } catch { /* next time */ }
+}
+
 function renderLive() {
   const d = live.data;
   if (!d) return;
   const st = d.status;
-  setStatus(st === "recording" ? "recording" : st === "paused" ? "paused" : "",
-    st === "recording" ? "Recording" : st === "paused" ? "Paused" : d.detail || st);
+  setStatus(st === "recording" ? "recording" : st === "mapping" ? "mapping" : st === "paused" ? "paused" : "",
+    st === "recording" ? "Recording" : st === "mapping" ? "Mapping edges (not recording)" : st === "paused" ? "Paused" : d.detail || st);
   const liveSh = {};
   for (const [ch, [a, fx]] of Object.entries(d.shakers || {})) liveSh[ch] = { a, fx };
-  paintShakerCar("#live-car .spot", liveSh, d.status === "recording");
+  paintShakerCar("#live-car .spot", liveSh, d.status === "recording" || d.status === "mapping");
   if (!d.car) {
     $("#session-line").innerHTML = `<span class="muted">${esc(d.detail || "Waiting for AMS2")}</span>`;
     drawTrace();
@@ -296,7 +442,13 @@ function renderLive() {
     if (performance.now() - live.lastTrackFetch > 1000) refreshOutline();
   }
   refreshFocusRef(d);
-  drawMap($("#map"), live.outline, d.cars, live.outlineSrc === "lap", liveMapView());
+  const ek = `${s.track}|${s.variation}`;
+  if (ek !== live.edgesKey || (d.mapping && performance.now() - live.edgesFetch > 5000)) refreshLiveEdges(s, ek);
+  const lv = liveMapView();
+  drawMap($("#map"), live.outline, d.cars, live.outlineSrc === "lap", live.edges || d.mapping
+    ? { ...(lv || {}), edges: live.edges, natural: mapNatural && !!live.edges,
+        ...(d.mapping ? { missing: edgeGaps(live.edges), length: live.edges?.length || d.lap?.length } : {}) }
+    : lv);
   if (focus.corners[focus.corner] && performance.now() - focus.lastDraw > 300) {
     focus.lastDraw = performance.now();
     drawCornerFocus();
@@ -660,6 +812,14 @@ async function openSession(ref) {
   hist.ref = ref;
   hist.detail = d;
   hist.trackKey = `${d.session.track}|${d.session.variation}`;
+  hist.edges = null;
+  fetch(`/api/edges/track?track=${encodeURIComponent(d.session.track)}&variation=${encodeURIComponent(d.session.variation)}`)
+    .then((r) => r.json()).then((t) => {
+      if (hist.ref !== ref || !t.edges) return;
+      hist.edges = t.edges;
+      if (hist.lapData) drawLapMap();
+      if (replay.cars) drawReplay();
+    }).catch(() => {});
   loadCornerNames(d.session.track, d.session.variation).then(() => {
     if (hist.ref === ref && hist.lapData) { drawCorners(); drawLapMap(); drawTraces(); if (replay.cars) drawReplay(); }
   });
@@ -989,6 +1149,18 @@ function drawLapMap() {
     traces.push({ x: o.x, y: o.y, customdata: o.customdata, text: o.text, mode: "markers", type: "scattergl",
       marker: { size: 6, color: o.color, cmin, cmax, colorscale: scale }, hovertemplate: "%{text}<extra></extra>" });
   }
+  // mapped track edges under everything (scattergl so the laps' scattergl markers stay on top)
+  const edgeTraces = ["left", "right"].map((side) => {
+    const x = [], y = [];
+    for (const seg of hist.edges?.[side] || []) {
+      for (const p of seg) { const [X, Y] = mapXY(p[0], p[1]); x.push(X); y.push(-Y); }
+      x.push(null); y.push(null);
+    }
+    return { x, y, mode: "lines", type: "scattergl", hoverinfo: "skip", showlegend: false,
+      line: { color: css("--text-2"), width: 1.5 } };
+  }).filter((t) => t.x.length);
+  traces.unshift(...edgeTraces);
+  hist.mapOffset = edgeTraces.length;
   traces.push({ x: [], y: [], mode: "markers", type: "scatter", hoverinfo: "skip", showlegend: false,
     marker: { size: 14, color: css("--s-speed"), line: { color: css("--surface"), width: 2 } } });
   hist.mapMarker = traces.length - 1;
@@ -1021,7 +1193,7 @@ function drawLapMap() {
 function onMapHover(ev) {
   const p = ev.points[0];
   // the surface overlay carries [lap, index]; every other trace is one lap
-  const [n, idx] = p.customdata ?? [hist.mapLaps[p.curveNumber], p.pointIndex];
+  const [n, idx] = p.customdata ?? [hist.mapLaps[p.curveNumber - (hist.mapOffset || 0)], p.pointIndex];
   const L = n != null && hist.loaded[n];
   if (!L || !$("#lap-traces").data) return;
   const dd = L.lap_dist[idx];
@@ -1347,7 +1519,10 @@ function paintSessionCar() {
   for (const [ch, v] of Object.entries(sd.channels)) chan[ch] = { a: v.a[lo], fx: v.fx[lo] };
   paintShakerCar("#sess-car .spot", chan, !!replay.timer);
 }
-function drawReplay() { drawMap($("#replay-map"), replay.outline, replay.cars || [], false, trackMarks(hist.lapData, hist.trackKey)); }
+function drawReplay() {
+  drawMap($("#replay-map"), replay.outline, replay.cars || [], false,
+    { ...trackMarks(hist.lapData, hist.trackKey), ...(hist.edges ? { edges: hist.edges, natural: mapNatural } : {}) });
+}
 $("#replay-slider").oninput = (e) => seekReplay(+e.target.value);
 
 // ---------- folding the session page's cards (state kept per card title) ----------
@@ -2264,7 +2439,8 @@ function pilotRow(r, fresh) {
     if (!fresh || !pf.s?.enabled) continue;
     if (pilot.rows[0][LT.dist] > Math.max(c.s, 0) + 100) continue;  // not seen from the corner's start
     const rec = pilotRecap(rowsAsLap(pilot.rows), focus.ref, c, k, focus.trackKey, Math.min(d, c.e));
-    if (rec && pilotWanted(rec)) showPilot($("#pilot-pop"), rec);
+    // no corner recap on the Track edges page or while mapping edges (the lap is not a real lap)
+    if (rec && pilotWanted(rec) && currentTab !== "edges" && !live.data?.mapping) showPilot($("#pilot-pop"), rec);
   }
 }
 
@@ -2786,7 +2962,7 @@ const fmtAge = (since, now) => {
 function chainStates(d) {
   const on = d.ams2.running;
   // the file outlives AMS2, with the last state in it
-  const shmLive = on && ["recording", "paused", "idle"].includes(d.shm.status);
+  const shmLive = on && ["recording", "mapping", "paused", "idle"].includes(d.shm.status);
   const st = {};
   st.ams2 = on ? ["ok", d.busy.ams2 || "running"] : [d.busy.ams2 ? "warn" : "off", d.busy.ams2 || "not running"];
   st.bridge = !on ? ["off", "–"] : d.bridge.running ? ["ok", "running"]
@@ -2812,6 +2988,8 @@ function dl(rows) {
 }
 const stDot = ([s]) => `<span class="dot st-${s}"></span>`;
 
+// System actions, also offered outside the System tab (Start AMS2 in the header, mapping start on Track edges)
+const SYS_BUTTONS = "#tab-system [data-act], .sys-act";
 function renderSystem() {
   const d = sys.data;
   if (!d) return;
@@ -2861,13 +3039,20 @@ function renderSystem() {
   // buttons that make no sense in the current state
   const can = {
     "ams2/start": !d.ams2.running && !d.session && !d.busy.ams2,
+    "ams2/start-map": !d.ams2.running && !d.session && !d.busy.ams2,
     "ams2/restart": !d.busy.ams2,
     "ams2/quit": d.ams2.running && !d.busy.ams2,
     "simd/restart": true,
     "monocoque/restart": true,
     "monocoque/stop": d.monocoque.running,
   };
-  document.querySelectorAll("#tab-system [data-act]").forEach((b) => {
+  // why the AMS2 start buttons are greyed out, next to the mapping one
+  const why = d.ams2.running ? "AMS2 is already running: press Start mapping (nothing is recorded from then on)."
+    : d.session ? "A session is starting: start-race is waiting for AMS2 to open. Once it is open, press Start mapping, or quit AMS2 to start again in mapping mode."
+    : d.busy.ams2 ? "Busy: " + d.busy.ams2 : "";
+  if ($("#ed-start-why")) $("#ed-start-why").textContent = why;
+  document.querySelectorAll(SYS_BUTTONS).forEach((b) => {
+    if (b.id === "hdr-start") b.hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;
     b.disabled = sys.busy === b.dataset.act || !can[b.dataset.act];
     b.classList.toggle("busy", sys.busy === b.dataset.act || (b.dataset.act.startsWith("ams2/") && !!d.busy.ams2));
   });
@@ -2891,7 +3076,7 @@ async function loadSystemLog() {
   if (atEnd) box.scrollTop = box.scrollHeight;
 }
 
-document.querySelectorAll("#tab-system [data-act]").forEach((b) => (b.onclick = async () => {
+document.querySelectorAll(SYS_BUTTONS).forEach((b) => (b.onclick = async () => {
   if (b.dataset.confirm && sys.data?.ams2.running && !confirm(b.dataset.confirm)) return;
   sys.busy = b.dataset.act;
   renderSystem();
@@ -2918,12 +3103,429 @@ setInterval(() => {
 setInterval(() => { if (currentTab !== "system") loadSystem(); }, 15000);
 loadSystem();
 
+// ---------- track edges ----------
+const ed = { data: null, sel: null, track: null, bounds: null, drag: null, updated: null, natural: mapNatural };
+
+function edKey(t) { return t ? `${t.track}|${t.variation}` : ""; }
+
+async function loadEdges(first = false) {
+  try {
+    ed.data = await (await fetch("/api/edges")).json();
+  } catch { return; }
+  const d = ed.data, m = d.mapping;
+  if (first && !ed.sel) ed.sel = d.live || (m.track ? { track: m.track, variation: m.variation } : d.tracks[0]) || null;
+  if (m.armed && m.track && edKey(ed.sel) !== `${m.track}|${m.variation}`) ed.sel = { track: m.track, variation: m.variation };
+  renderEdgesState();
+  const row = d.tracks.find((t) => edKey(t) === edKey(ed.sel));
+  if (ed.sel && (first || edKey(ed.track) !== edKey(ed.sel) || (row && row.updated !== ed.updated))) loadEdgeTrack();
+}
+
+function renderEdgesState() {
+  const d = ed.data, m = d.mapping;
+  const arm = $("#ed-arm");
+  arm.textContent = m.armed ? "Stop mapping" : "Start mapping";
+  arm.classList.toggle("on", m.armed);
+  $("#ed-speak").checked = m.speak;
+  $("#ed-live").textContent = d.live ? `AMS2: ${d.live.track} ${d.live.variation}` : "AMS2 not on track";
+  const w = m.wheels || "";
+  document.querySelectorAll("#ed-wheels span").forEach((el, i) => (el.className = w[i] != null && m.armed ? "s" + w[i] : ""));
+  $("#ed-count").textContent = m.armed ? `${m.samples} samples · ${m.crossings} edge crossings` + (m.track ? "" : " · waiting for AMS2") : "";
+  const tb = $("#ed-tracks tbody");
+  tb.innerHTML = d.tracks.map((t) => {
+    const cov = (side) => (t.coverage ? Math.round(t.coverage[side] * 100) + " %" : "–");
+    return `<tr class="${edKey(t) === edKey(ed.sel) ? "sel" : ""}" data-k="${esc(edKey(t))}"><td>${esc(t.track)} <span class="muted">${esc(t.variation === t.track ? "" : t.variation)}</span></td>`
+      + `<td class="r num">${t.length ? (t.length / 1000).toFixed(2) + " km" : "–"}</td><td class="r num">${cov("left")}</td><td class="r num">${cov("right")}</td><td class="r num">${t.samples || ""}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">No track yet: tracks appear after a full lap</td></tr>`;
+  tb.querySelectorAll("tr[data-k]").forEach((tr) => (tr.onclick = () => {
+    const t = d.tracks.find((x) => edKey(x) === tr.dataset.k);
+    ed.sel = { track: t.track, variation: t.variation };
+    ed.bounds = null;
+    renderEdgesState();
+    loadEdgeTrack();
+  }));
+}
+
+async function loadEdgeTrack() {
+  const sel = ed.sel;
+  const r = await fetch(`/api/edges/track?track=${encodeURIComponent(sel.track)}&variation=${encodeURIComponent(sel.variation)}`);
+  if (!r.ok || edKey(sel) !== edKey(ed.sel)) return;
+  const t = await r.json();
+  if (edKey(ed.track) !== edKey(sel)) ed.bounds = null;
+  const keepProfile = edKey(ed.track) === edKey(sel) ? ed.track.profile : undefined;
+  ed.track = { ...sel, ...t, profile: keepProfile, dist: outlineDist(t.outline || [], t.length) };
+  ed.updated = t.edges?.updated ?? null;
+  renderEdgeTrack();
+  if (keepProfile === undefined) loadAltitude(sel);
+}
+
+function renderEdgeTrack() {
+  const t = ed.track;
+  if (!t) return;
+  $("#ed-title").textContent = `Edges · ${t.track}${t.variation !== t.track ? " " + t.variation : ""}`;
+  const e = t.edges;
+  $("#ed-cov").innerHTML = ["left", "right"].map((side) => {
+    const v = e ? e.coverage[side] : 0;
+    return `<div class="row"><span>${side === "left" ? "Left" : "Right"}</span><div class="bar"><div style="width:${v * 100}%;--c:var(${side === "left" ? "--s-spin" : "--s-speed"})"></div></div><span class="num r">${Math.round(v * 100)} %</span></div>`;
+  }).join("");
+  const gapText = (side) => {
+    const g = e ? e.gaps[side] : [[0, Math.round(t.length || 0)]];
+    if (!g.length) return `<div><b>${side === "left" ? "Left" : "Right"}:</b> complete</div>`;
+    const total = g.reduce((a, [f, to]) => a + to - f, 0);
+    const list = g.slice(0, 8).map(([f, to]) => `${f}–${to} m`).join(", ") + (g.length > 8 ? `, and ${g.length - 8} more` : "");
+    return `<div><b>${side === "left" ? "Left" : "Right"}</b> <span class="muted">(${(total / 1000).toFixed(2)} km)</span>: <span class="num">${list}</span></div>`;
+  };
+  $("#ed-gaps").innerHTML = gapText("left") + gapText("right") + `<div class="muted">Distances from the start line, as on the lap distance.</div>`;
+  if (e) {
+    const sessions = e.sources.filter((s) => s !== "mapping").length;
+    $("#ed-src").innerHTML = `${e.samples} samples kept · ${e.kept} edge points`
+      + (e.dropped ? ` (${e.dropped} dropped: too far from the racing line or on the wrong side)` : "")
+      + (e.altitude ? `<br>Altitude ${e.altitude[0]} to ${e.altitude[1]} m (${(e.altitude[1] - e.altitude[0]).toFixed(1)} m of climb), kept for a 3D view` : "<br>No altitude yet: press Add from recorded sessions, or map again")
+      + `<br>From ${e.sources.includes("mapping") ? "mapping runs" : ""}${e.sources.includes("mapping") && sessions ? " and " : ""}${sessions ? sessions + " recorded session" + (sessions > 1 ? "s" : "") : ""}`;
+  } else $("#ed-src").textContent = "Nothing mapped yet.";
+  drawEdgeMap();
+  if (ed.track.profile !== undefined) drawAltitude();
+}
+
+// ---- altitude profile, linked to the map ----
+async function loadAltitude(sel) {
+  let p = null;
+  try { p = await (await fetch(`/api/edges/profile?track=${encodeURIComponent(sel.track)}&variation=${encodeURIComponent(sel.variation)}`)).json(); } catch { /* none */ }
+  if (edKey(ed.track) !== edKey(sel)) return;
+  ed.track.profile = p?.d ? p : null;
+  drawAltitude();
+  if (!ed.track.profile) return;
+  // corners (detected on that lap, with your names) and sector starts, for the 3D view
+  try {
+    const tk = `${sel.track}|${sel.variation}`;
+    const [L] = await Promise.all([fetchLap(p.lap, p.ref), loadCornerNames(sel.track, sel.variation)]);
+    if (edKey(ed.track) !== edKey(sel) || !L?.lap_dist?.length) return;
+    ed.track.marks = {
+      corners: findCorners(L).map((c, k) => ({ d: c.apex, name: cornerName(tk, c, k) })),
+      sectors: [0, ...(L.sectors || [])].map((dd, n) => ({ d: dd, name: `S${n + 1}` })),
+    };
+    drawTrack3D();
+  } catch { /* the 3D view stays without names */ }
+}
+
+function drawAltitude() {
+  const p = ed.track?.profile, el = $("#ed-alt");
+  drawTrack3D();
+  $("#ed-alt-src").textContent = p ? `from your ${p.valid ? "fastest" : "fastest (invalid)"} lap, ${fmtLap(p.lap_time)} in the ${p.car} · car height, about 0.4 m above the ground` : "";
+  if (!p) {
+    Plotly.purge(el);
+    el.innerHTML = '<div class="muted" style="padding:20px">No recorded lap on this track yet: drive one normal lap (not in mapping mode) to get the altitude.</div>';
+    return;
+  }
+  if (!el.data) el.innerHTML = "";
+  const lo = Math.min(...p.y), hi = Math.max(...p.y);
+  Plotly.react(el, [
+    { x: p.d, y: p.y, mode: "lines", type: "scatter", line: { color: css("--s-throttle"), width: 2 },
+      hovertemplate: "%{x:.0f} m · %{y:.1f} m<extra></extra>" },
+    { x: [], y: [], mode: "markers", type: "scatter", hoverinfo: "skip",
+      marker: { size: 11, color: css("--s-speed"), line: { color: css("--surface"), width: 2 } } },
+  ], plotLayout({
+    showlegend: false, hovermode: "x",
+    xaxis: { ...axisStyle(), title: { text: "lap distance (m)" }, range: [0, ed.track.length || p.d[p.d.length - 1]] },
+    yaxis: { ...axisStyle(), title: { text: "altitude (m)" }, range: [lo - (hi - lo) * 0.08 - 1, hi + (hi - lo) * 0.08 + 1] },
+    margin: { l: 52, r: 12, t: 8, b: 40 },
+  }), { displaylogo: false, responsive: true, displayModeBar: false });
+  if (!el.edHooked) {
+    el.edHooked = true;
+    el.on("plotly_hover", (ev) => setEdgeHover(ev.points[0].x, false));
+    el.on("plotly_unhover", () => setEdgeHover(null, false));
+  }
+}
+
+function altitudeAt(dd) {
+  const p = ed.track?.profile;
+  if (!p) return null;
+  let best = 0;
+  for (let i = 1; i < p.d.length; i++) if (Math.abs(p.d[i] - dd) < Math.abs(p.d[best] - dd)) best = i;
+  return Math.abs(p.d[best] - dd) <= 15 ? p.y[best] : null;
+}
+
+// one hovered spot shared by the map (dot on the track) and the profile (marker)
+function setEdgeHover(dd) {
+  ed.hoverD = dd;
+  const el = $("#ed-alt");
+  if (el.data) {
+    const y = dd == null ? null : altitudeAt(dd);
+    Plotly.restyle(el, { x: [y == null ? [] : [dd]], y: [y == null ? [] : [y]] }, [1]);
+  }
+  paint3DHover();
+  drawEdgeMap();
+}
+
+$("#ed-map").addEventListener("mousemove", (ev) => {
+  const t = ed.track, S = ev.currentTarget.mapS;
+  if (ed.drag || !t?.outline?.length || !S) return;
+  const rect = ev.currentTarget.getBoundingClientRect(), mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  let best = -1, bd = 14 * 14;  // within 14 px of the middle line
+  t.outline.forEach((q, i) => {
+    const [a, b] = S(mapXY(q[0], q[1])), dd = (a - mx) ** 2 + (b - my) ** 2;
+    if (dd < bd) { bd = dd; best = i; }
+  });
+  const dd = best < 0 ? null : t.dist[best];
+  if (dd !== ed.hoverD) setEdgeHover(dd);
+});
+$("#ed-map").addEventListener("mouseleave", () => { if (ed.hoverD != null) setEdgeHover(null); });
+
+// ---- 3D track (Plotly): road between the edges, edges, middle line coloured by altitude ----
+const ed3 = { exag: pref.get("ed3dExag", 3) };
+function altIndex(p) {
+  const m = new Map();
+  p.d.forEach((dd, i) => m.set(Math.floor(dd / BIN_M), p.y[i]));
+  return (dd) => {
+    const b = Math.floor(dd / BIN_M);
+    for (const k of [b, b - 1, b + 1, b - 2, b + 2]) if (m.has(k)) return m.get(k);
+    return null;
+  };
+}
+
+function drawTrack3D() {
+  const t = ed.track, el = $("#ed-3d");
+  if (!t) return;
+  const p = t.profile, alt = p ? altIndex(p) : () => null;
+  const ex = ed3.exag;
+  // edge point altitude: its own (car height while over the edge: keeps banking) or the fastest lap's at that distance
+  const yOf = (q) => (q[3] != null ? q[3] : alt(q[2]));
+  const P = (x, z) => { const [X, Y] = mapXY(x, z); return [X, -Y]; };
+  const traces = [];
+  // road surface: quads between left and right where both edges are mapped
+  const byD = { left: new Map(), right: new Map() };
+  for (const side of ["left", "right"]) for (const seg of t.edges?.[side] || []) for (const q of seg) byD[side].set(q[2], q);
+  const vx = [], vy = [], vz = [], I = [], J = [], K = [], idx = new Map();
+  const vert = (side, q) => {
+    const key = side + q[2];
+    if (!idx.has(key)) { const [X, Y] = P(q[0], q[1]); idx.set(key, vx.length); vx.push(X); vy.push(Y); vz.push(yOf(q) * ex); }
+    return idx.get(key);
+  };
+  for (const [dd, l] of byD.left) {
+    const r = byD.right.get(dd), l2 = byD.left.get(dd + BIN_M), r2 = byD.right.get(dd + BIN_M);
+    if (!r || !l2 || !r2 || [l, r, l2, r2].some((q) => yOf(q) == null)) continue;
+    // skip impossible pieces (start line wrap, pit lane): wider than 30 m, or an edge jumping more than 12 m
+    const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (dist(l, r) > 30 || dist(l2, r2) > 30 || dist(l, l2) > 12 || dist(r, r2) > 12) continue;
+    const a = vert("l", l), b = vert("r", r), c = vert("l", l2), d = vert("r", r2);
+    I.push(a, b); J.push(b, d); K.push(c, c);
+  }
+  if (I.length) traces.push({ type: "mesh3d", x: vx, y: vy, z: vz, i: I, j: J, k: K, color: css("--nat-road"),
+    flatshading: true, lighting: { ambient: 0.8, diffuse: 0.5 }, hoverinfo: "skip", name: "Track" });
+  // the two edges
+  for (const side of ["left", "right"]) {
+    const x = [], y = [], z = [];
+    for (const seg of t.edges?.[side] || []) {
+      for (const q of seg) { const h = yOf(q); if (h == null) continue; const [X, Y] = P(q[0], q[1]); x.push(X); y.push(Y); z.push(h * ex); }
+      x.push(null); y.push(null); z.push(null);
+    }
+    if (x.length) traces.push({ type: "scatter3d", mode: "lines", x, y, z, hoverinfo: "skip", name: side === "left" ? "Left edge" : "Right edge",
+      line: { color: css(side === "left" ? "--s-spin" : "--s-speed"), width: 3 } });
+  }
+  // middle line (fastest lap outline), coloured by altitude
+  const mx = [], my = [], mz = [], mc = [], mt = [];
+  (t.outline || []).forEach((q, i) => {
+    const h = alt(t.dist[i]);
+    if (h == null) return;
+    const [X, Y] = P(q[0], q[1]);
+    mx.push(X); my.push(Y); mz.push(h * ex + 0.3); mc.push(h); mt.push(`${Math.round(t.dist[i])} m · ${h.toFixed(1)} m`);
+  });
+  if (!mx.length && !I.length) {
+    Plotly.purge(el);
+    el.innerHTML = '<div class="muted" style="padding:20px">No altitude for this track yet: drive one normal lap (not in mapping mode).</div>';
+    return;
+  }
+  if (!el.data) el.innerHTML = "";
+  traces.push({ type: "scatter3d", mode: "lines", x: mx, y: my, z: mz, text: mt, hovertemplate: "%{text}<extra></extra>", name: "Middle line",
+    line: { color: mc, colorscale: [[0, css("--seq-lo")], [1, css("--seq-hi")]], width: 5,
+      colorbar: { title: { text: "m", side: "right" }, thickness: 10, len: 0.6, outlinewidth: 0, tickfont: { color: css("--muted") } } } });
+  // sector starts (posts with S1, S2, S3) and corner names, at their lap distance on the middle line
+  const at = (dd) => {
+    let i = -1;
+    t.dist.forEach((v, j) => { if (i < 0 || Math.abs(v - dd) < Math.abs(t.dist[i] - dd)) i = j; });
+    const h = i < 0 ? null : alt(t.dist[i]);
+    if (h == null || !t.outline[i]) return null;
+    const [X, Y] = P(t.outline[i][0], t.outline[i][1]);
+    return [X, Y, h * ex];
+  };
+  const zSpan = Math.max(...mz) - Math.min(...mz) || 10, post = Math.max(zSpan * 0.25, 12);
+  const sx = [], sy = [], sz = [], tx = [], ty = [], tz = [], tt = [];
+  for (const sct of t.marks?.sectors || []) {
+    const q = at(sct.d);
+    if (!q) continue;
+    sx.push(q[0], q[0], null); sy.push(q[1], q[1], null); sz.push(q[2], q[2] + post, null);
+    tx.push(q[0]); ty.push(q[1]); tz.push(q[2] + post * 1.1); tt.push(sct.name);
+  }
+  if (sx.length) {
+    traces.push({ type: "scatter3d", mode: "lines", x: sx, y: sy, z: sz, hoverinfo: "skip", name: "Sectors",
+      line: { color: css("--text"), width: 4 } });
+    traces.push({ type: "scatter3d", mode: "text", x: tx, y: ty, z: tz, text: tt, hoverinfo: "skip", name: "Sector names",
+      textfont: { size: 13, color: css("--text") } });
+  }
+  const cx = [], cy = [], cz = [], ct = [];
+  for (const c of t.marks?.corners || []) {
+    const q = at(c.d);
+    if (!q) continue;
+    cx.push(q[0]); cy.push(q[1]); cz.push(q[2] + post * 0.35); ct.push(c.name);
+  }
+  if (cx.length) traces.push({ type: "scatter3d", mode: "markers+text", x: cx, y: cy, z: cz, text: ct, textposition: "top center",
+    hovertemplate: "%{text}<extra></extra>", name: "Corners",
+    marker: { size: 3, color: css("--text-2") }, textfont: { size: 11, color: css("--text-2") } });
+  // hovered spot (map / altitude graph), drawn last
+  traces.push({ type: "scatter3d", mode: "markers", x: [], y: [], z: [], hoverinfo: "skip", name: "Here",
+    marker: { size: 7, color: css("--s-speed"), line: { color: css("--surface"), width: 2 } } });
+  ed3.marker = traces.length - 1;
+  const xs = vx.concat(mx), ys = vy.concat(my);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  const zs = vz.concat(mz), zr = (Math.max(...zs) - Math.min(...zs)) || 1;
+  const ax = { visible: false, showspikes: false };
+  Plotly.react(el, traces, plotLayout({
+    showlegend: false, margin: { l: 0, r: 0, t: 0, b: 0 }, uirevision: edKey(t),
+    scene: { xaxis: ax, yaxis: ax, zaxis: ax, bgcolor: css("--surface"), aspectmode: "manual",
+      aspectratio: { x: (Math.max(...xs) - Math.min(...xs)) / span, y: (Math.max(...ys) - Math.min(...ys)) / span, z: Math.max(zr / span, 0.02) },
+      camera: { eye: { x: 0.45, y: -0.6, z: 0.42 }, center: { x: 0, y: 0, z: -0.08 } } },
+  }), { displaylogo: false, responsive: true });
+  ed3.zs = { ex };
+  paint3DHover();
+}
+
+function paint3DHover() {
+  const el = $("#ed-3d"), t = ed.track;
+  if (!el.data || ed3.marker == null || !t) return;
+  let x = [], y = [], z = [];
+  if (ed.hoverD != null && t.profile) {
+    let i = 0;
+    t.dist.forEach((dd, j) => { if (Math.abs(dd - ed.hoverD) < Math.abs(t.dist[i] - ed.hoverD)) i = j; });
+    const h = altIndex(t.profile)(t.dist[i]);
+    if (h != null && t.outline[i]) { const [X, Y] = mapXY(t.outline[i][0], t.outline[i][1]); x = [X]; y = [-Y]; z = [h * ed3.exag + 1]; }
+  }
+  Plotly.restyle(el, { x: [x], y: [y], z: [z] }, [ed3.marker]);
+}
+
+document.querySelectorAll("#ed-3d-exag button").forEach((b) => (b.onclick = () => {
+  ed3.exag = +b.dataset.x;
+  pref.set("ed3dExag", ed3.exag);
+  render3DExag();
+  drawTrack3D();
+}));
+function render3DExag() { document.querySelectorAll("#ed-3d-exag button").forEach((b) => b.classList.toggle("on", +b.dataset.x === ed3.exag)); }
+render3DExag();
+
+function edMapInfo(canvas) {
+  const pts = (ed.track?.outline || []).map((p) => mapXY(p[0], p[1]));
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [X, Y] of pts) { x0 = Math.min(x0, X); x1 = Math.max(x1, X); y0 = Math.min(y0, Y); y1 = Math.max(y1, Y); }
+  if (x0 === Infinity) return null;
+  const b = ed.bounds || [x0 - 15, x1 + 15, y0 - 15, y1 + 15];
+  const w = canvas.clientWidth, h = canvas.clientHeight, pad = 22;
+  const sc = Math.min((w - 2 * pad) / Math.max(b[1] - b[0], 1), (h - 2 * pad) / Math.max(b[3] - b[2], 1));
+  const ox = (w - (b[1] - b[0]) * sc) / 2, oy = (h - (b[3] - b[2]) * sc) / 2;
+  // the bounds actually shown (the canvas is wider or taller than the box)
+  return { b: [b[0] - ox / sc, b[0] + (w - ox) / sc, b[2] - oy / sc, b[2] + (h - oy) / sc], w, h };
+}
+
+function drawEdgeMap() {
+  const canvas = $("#ed-map"), t = ed.track;
+  if (!t) return;
+  const info = edMapInfo(canvas);
+  const d = live.data, cars = [];
+  if (d?.car && d.session && edKey(d.session) === edKey(t)) cars.push({ x: d.car.x, z: d.car.z, player: true, pos: "" });
+  drawMap(canvas, t.outline, cars, true, {
+    ...(info ? { bounds: ed.bounds ? info.b : null } : {}),
+    edges: t.edges ? { left: t.edges.left, right: t.edges.right, colours: true } : null,
+    natural: ed.natural && !!t.edges,
+    missing: edgeGaps(t.edges), length: t.length,
+    marks: ed.hoverD == null ? [] : (() => {
+      let i = 0;
+      t.dist.forEach((dd, j) => { if (Math.abs(dd - ed.hoverD) < Math.abs(t.dist[i] - ed.hoverD)) i = j; });
+      return t.outline[i] ? [{ p: mapXY(t.outline[i][0], t.outline[i][1]), color: css("--s-speed") }] : [];
+    })(),
+  });
+}
+
+$("#ed-arm").onclick = async () => {
+  const on = !ed.data?.mapping.armed;
+  const r = await fetch("/api/edges/mapping", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on }) });
+  if (r.ok) ed.data.mapping = await r.json();
+  renderEdgesState();
+  loadEdges();
+};
+$("#ed-speak").onchange = async (ev) => {
+  const r = await fetch("/api/edges/mapping", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ speak: ev.target.checked }) });
+  if (r.ok) ed.data.mapping = await r.json();
+};
+$("#ed-harvest").onclick = async (ev) => {
+  if (!ed.sel) return;
+  const b = ev.currentTarget;
+  b.classList.add("busy");
+  b.disabled = true;
+  try {
+    const r = await (await fetch("/api/edges/harvest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ed.sel) })).json();
+    b.title = r.added ? `${r.added} new session(s) added` : "No new session on this layout";
+  } finally {
+    b.classList.remove("busy");
+    b.disabled = false;
+  }
+  ed.updated = -1;
+  loadEdges();
+};
+async function clearEdges(source, question) {
+  if (!ed.sel || !confirm(question)) return;
+  const q = `track=${encodeURIComponent(ed.sel.track)}&variation=${encodeURIComponent(ed.sel.variation)}` + (source ? `&source=${source}` : "");
+  await fetch(`/api/edges?${q}`, { method: "DELETE" });
+  ed.updated = -1;
+  loadEdges();
+}
+$("#ed-clear-map").onclick = () => clearEdges("mapping", "Forget the edges from mapping runs on this track? Edges from recorded sessions stay.");
+$("#ed-clear-all").onclick = () => clearEdges(null, "Forget all edges of this track?");
+document.querySelectorAll("#ed-look button").forEach((b) => (b.onclick = () => {
+  setMapNatural(b.dataset.look === "natural");
+}));
+function renderEdgeLook() {
+  document.querySelectorAll("#ed-look button").forEach((b) => b.classList.toggle("on", (b.dataset.look === "natural") === ed.natural));
+  $("#ed-legend-lines").hidden = ed.natural;
+  $("#ed-legend-nat").hidden = !ed.natural;
+}
+renderEdgeLook();
+$("#ed-zoom-reset").onclick = () => { ed.bounds = null; drawEdgeMap(); };
+
+// zoom with the wheel around the cursor, pan by dragging
+$("#ed-map").addEventListener("wheel", (ev) => {
+  const info = edMapInfo(ev.currentTarget);
+  if (!info) return;
+  ev.preventDefault();
+  const [x0, x1, y0, y1] = info.b, f = ev.deltaY > 0 ? 1.25 : 0.8;
+  const rect = ev.currentTarget.getBoundingClientRect();
+  const X = x0 + (ev.clientX - rect.left) / info.w * (x1 - x0), Y = y0 + (ev.clientY - rect.top) / info.h * (y1 - y0);
+  ed.bounds = [X - (X - x0) * f, X + (x1 - X) * f, Y - (Y - y0) * f, Y + (y1 - Y) * f];
+  drawEdgeMap();
+}, { passive: false });
+$("#ed-map").addEventListener("pointerdown", (ev) => {
+  const info = edMapInfo(ev.currentTarget);
+  if (!info) return;
+  ed.drag = { x: ev.clientX, y: ev.clientY, b: info.b, w: info.w, h: info.h };
+  ev.currentTarget.setPointerCapture(ev.pointerId);
+});
+$("#ed-map").addEventListener("pointermove", (ev) => {
+  const g = ed.drag;
+  if (!g) return;
+  const [x0, x1, y0, y1] = g.b, dx = (ev.clientX - g.x) / g.w * (x1 - x0), dy = (ev.clientY - g.y) / g.h * (y1 - y0);
+  ed.bounds = [x0 - dx, x1 - dx, y0 - dy, y1 - dy];
+  drawEdgeMap();
+});
+$("#ed-map").addEventListener("pointerup", () => (ed.drag = null));
+
+setInterval(() => {
+  if (currentTab !== "edges") return;
+  loadEdges();
+  drawEdgeMap();
+}, 1000);
+
 // ---------- start ----------
 loadShakerCars();
 connect();
 requestAnimationFrame(frame);
 if (location.hash.startsWith("#session=")) showTab("history");
 else if (location.hash.startsWith("#progress")) showTab("progress");
-else if (["#genie", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
+else if (["#genie", "#edges", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
 // in-page links such as "Progress on this track"
 window.addEventListener("hashchange", () => { if (location.hash.startsWith("#progress")) showTab("progress"); });

@@ -13,7 +13,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import leds, replay, shakers, store
+from . import edges, leds, replay, shakers, store
 from .pcars2 import (GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
                      PIT_MODES, RACE_STATES, SESSION_TYPES, Pcars2Reader, _name, derived)
 
@@ -196,6 +196,7 @@ class Recorder(threading.Thread):
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.wheels = WheelSlip()
+        self.mapper = edges.Mapper()  # track edge mapping, when armed on the Track edges tab
         self.shakers = replay.Live()  # what monocoque plays, for the live car
         self.sess = None
         self.con = None
@@ -247,6 +248,7 @@ class Recorder(threading.Thread):
                 self.stop_event.wait(delay)
         self.close_session()
         self.wheels.save()
+        self.mapper.flush(force=True)
 
     def set_live(self, live, trace_row=None):
         with self.lock:
@@ -258,6 +260,7 @@ class Recorder(threading.Thread):
         now = time.time()
         snap = self.reader.read()
         if snap is None:
+            self.mapper.no_game(now)
             self.close_session()
             self.set_live({"status": "no shared memory", "detail":
                            "/dev/shm/$pcars2$ not found: is simd running and AMS2 started with the bridge?"})
@@ -275,9 +278,10 @@ class Recorder(threading.Thread):
             return False
 
         key = (snap["track"], snap["variation"], snap["car"], snap["session_state"])
-        if self.sess and (self.sess.key != key or player["laps_completed"] < self.sess.laps_completed):
+        mapping = self.mapper.armed  # mapping track edges: nothing is recorded, the laps are not real laps
+        if self.sess and (mapping or self.sess.key != key or player["laps_completed"] < self.sess.laps_completed):
             self.close_session()
-        if self.sess is None:
+        if self.sess is None and not mapping:
             self.open_session(snap, player, key, now)
         self.load_track(snap)
 
@@ -288,7 +292,10 @@ class Recorder(threading.Thread):
 
         trace_row = None
         if gs == GAME_PLAYING:
-            self.record(snap, player, der, slips, now)
+            if mapping:
+                self.map_tick(snap, player, der, now)
+            else:
+                self.record(snap, player, der, slips, now)
             trace_row = [round(now, 3), round(speed_kmh, 1), round(snap["throttle"], 3),
                          round(snap["brake"], 3), round(snap["steering"], 3), round(der["g_lat"], 3),
                          round(der["g_long"], 3), round(der["slip_angle"], 2),
@@ -466,6 +473,19 @@ class Recorder(threading.Thread):
             s.last_flush = now
             self.flush(s)
 
+    def map_tick(self, snap, player, der, now):
+        """While mapping track edges: feed the mapper and the live trail, record nothing."""
+        if snap["pit_mode"] == PIT_IN_GARAGE and snap["speed"] < 0.5:
+            return
+        x, z = player["x"], player["z"]
+        if not self.trail or math.hypot(x - self.trail[-1][0], z - self.trail[-1][1]) > 4:
+            with self.lock:
+                self.trail.append((round(x, 1), round(z, 1)))
+        try:
+            self.mapper.feed(snap, player, der["slip_angle"], now)
+        except Exception:
+            log.exception("track edge mapping")
+
     def tick_row(self, s, now):
         """id of this tick's row, created on first use so idle ticks cost nothing."""
         if s.tick_id is None:
@@ -574,9 +594,10 @@ class Recorder(threading.Thread):
         cars.sort(key=lambda c: c["pos"] or 999)
         s = self.sess
         return {
-            "status": "recording" if gs == GAME_PLAYING else "paused",
+            "status": ("mapping" if self.mapper.armed else "recording") if gs == GAME_PLAYING else "paused",
             "detail": _name(GAME_STATES, gs),
             "track_rev": self.track_rev,
+            "mapping": self.mapper.armed,
             "session": {
                 "ref": s.ref if s else None,
                 "type": _name(SESSION_TYPES, snap["session_state"]),

@@ -14,10 +14,12 @@
     <button data-tab="history">Sessions</button>
     <button data-tab="progress">Progress</button>
     <button data-tab="genie">Corner Genie</button>
+    <button data-tab="edges">Track edges</button>
     <button data-tab="shakers">Shakers</button>
     <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
+  <button id="hdr-start" class="primary sys-act" data-act="ams2/start" hidden title="start-race: simd, CrewChief, AMS2 and the shakers">Start AMS2</button>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
 </header>
 
@@ -90,6 +92,7 @@
         <h3>Track map <span class="right map-tools">
           <span class="muted" id="map-src"></span>
           <select id="live-corner" title="Focus on one corner"><option value="">Whole track</option></select>
+          <button id="map-natural" title="Natural colours (grass, gravel, kerbs, tarmac) where the track edges are mapped">Natural</button>
           <button id="map-mirror" title="Flip the map left/right if it looks mirrored">Mirror</button>
           <button id="map-rotate" title="Rotate the map 90°">Rotate</button>
         </span></h3>
@@ -233,6 +236,67 @@
     <h3>Corners <span class="muted" id="pg-corners-ref"></span><span class="right muted">time in each corner on each session's best lap, against your best lap ever</span></h3>
     <div class="table-wrap"><table id="pg-corners"><thead></thead><tbody></tbody></table></div>
     <div class="fx-hint">Blue: faster than on your best lap ever, orange: slower. Hover a cell for the braking point and the entry, slowest and exit speeds.</div>
+  </div>
+</section>
+
+<section id="tab-edges" class="tab">
+  <div class="edges-grid">
+    <div class="card">
+      <h3>Mapping <span class="right muted" id="ed-live"></span></h3>
+      <div class="ed-arm">
+        <button class="primary sys-act" data-act="ams2/start-map" title="start-race --map: AMS2 and the shakers, no CrewChief, mapping on with spoken updates">Start AMS2 in mapping mode</button>
+        <button id="ed-arm">Start mapping</button>
+        <div class="ed-wheels" id="ed-wheels" title="Surface under each tyre: track, kerb, off track">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="muted num" id="ed-count"></div>
+      </div>
+      <div class="ed-why" id="ed-start-why"></div>
+      <label class="ed-speak"><input type="checkbox" id="ed-speak"> Spoken updates (speakers): mapping on, then each lap the coverage and where the next missing stretch is</label>
+      <ol class="ed-steps">
+        <li>Press <b>Start AMS2 in mapping mode</b> (or right-click the “AMS2 Race” icon → “Start in track edge mapping mode”). Mapping is on before the game opens: no need to come back to this page. With AMS2 already running, use <b>Start mapping</b>.</li>
+        <li>In AMS2, start a Practice or Time Trial on the track to map.</li>
+        <li>Drive one lap along the left edge with the left tyres just over it (on the grass or gravel), then one lap along the right edge. Weave a little: each time a tyre crosses the edge, that spot is saved.</li>
+        <li>Kerbs count as track. The pit lane, the garage and slides (more than 25° sideways) are ignored. Nothing is recorded while mapping (no session, no laps).</li>
+        <li>After each lap a voice reads the coverage and the next missing stretch. Mapping switches itself off when AMS2 closes.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>Tracks <span class="right muted">click a track to view its edges</span></h3>
+      <div class="table-wrap" style="max-height:300px">
+        <table id="ed-tracks"><thead><tr><th>Track</th><th class="r">Length</th><th class="r">Left</th><th class="r">Right</th><th class="r">Samples</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3><span id="ed-title">Edges</span>
+      <span class="right ed-legend"><span id="ed-legend-lines"><i style="--c:var(--s-spin)"></i>Left <i style="--c:var(--s-speed)"></i>Right <i style="--c:var(--neutral)"></i>Fastest lap</span>
+        <span id="ed-legend-nat"><b style="--c:var(--nat-road)"></b>Track <b class="kerb"></b>Kerb <b style="--c:var(--nat-grass)"></b>Grass <b style="--c:var(--nat-gravel)"></b>Gravel, sand <b style="--c:var(--nat-runoff)"></b>Run-off <b style="--c:var(--nat-wall)"></b>Wall</span>
+        <span><b class="miss"></b>Edge missing (on that side)</span>
+        <span class="seg" id="ed-look"><button data-look="natural">Natural</button><button data-look="lines">Lines</button></span></span></h3>
+    <div class="ed-view">
+      <div class="ed-mapbox"><canvas id="ed-map"></canvas>
+        <div class="map-tools"><button id="ed-zoom-reset" title="Show the whole track">Whole track</button></div>
+      </div>
+      <div class="ed-side">
+        <div class="ed-cov" id="ed-cov"></div>
+        <h3 class="sub-h">Still missing</h3>
+        <div id="ed-gaps" class="ed-gaps"></div>
+        <h3 class="sub-h">Data</h3>
+        <div id="ed-src" class="muted"></div>
+        <div class="sys-btns">
+          <button id="ed-harvest" title="Every time a tyre went off the track in your recorded sessions on this layout">Add from recorded sessions</button>
+          <button id="ed-clear-map">Clear mapping runs</button>
+          <button id="ed-clear-all">Clear all</button>
+        </div>
+        <div class="fx-hint">Scroll the map to zoom, drag it to move. Edge lines are averaged every 3 m of lap distance; holes shorter than 15 m are bridged. Natural view: what lies beyond an edge comes from the terrain under the tyres that went over it (shown 10 m wide; unknown is drawn as grass); where an edge is missing, the track is drawn as your fastest lap widened to the usual track width.</div>
+      </div>
+    </div>
+    <h3 class="sub-h ed-alt-h">Altitude <span class="muted" id="ed-alt-src"></span><span class="right muted">hover the middle of the track on the map, or the profile</span></h3>
+    <div id="ed-alt"></div>
+    <h3 class="sub-h ed-alt-h">3D <span class="muted">drag to turn, scroll to zoom, right-drag to move</span>
+      <span class="right">height <span class="seg" id="ed-3d-exag"><button data-x="1">×1</button><button data-x="3">×3</button><button data-x="5">×5</button></span></span></h3>
+    <div id="ed-3d"></div>
   </div>
 </section>
 
@@ -385,6 +449,7 @@
       <dl id="sys-ams2"></dl>
       <div class="sys-btns">
         <button data-act="ams2/start">Start session</button>
+        <button data-act="ams2/start-map" title="start-race --map: no CrewChief, track edge mapping on with spoken updates">Start for edge mapping</button>
         <button data-act="ams2/restart" data-confirm="Close AMS2 and start a new session (simd, CrewChief, AMS2, monocoque)? A race in progress ends.">Restart AMS2</button>
         <button data-act="ams2/quit" data-confirm="Close AMS2? A race in progress ends.">Quit AMS2</button>
       </div>

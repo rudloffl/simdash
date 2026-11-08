@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import genie, leds, replay, shakers, slim, store, system
+from . import edges, genie, leds, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -58,6 +58,11 @@ class LedDriver(BaseModel):
 
 class LedTest(BaseModel):
     mode: str  # pedal | sweep | stop
+
+
+class EdgeTrack(BaseModel):
+    track: str
+    variation: str
 
 
 class CornerName(BaseModel):
@@ -175,6 +180,40 @@ def create_app(recorder=None):
     @app.post("/api/corners")
     def set_corner_name(c: CornerName):
         return store.save_corner_name(c.track, c.variation, c.apex, c.name.strip()[:40])
+
+    # ---- track edges ----
+
+    @app.get("/api/edges")
+    def edges_state():
+        s = rec.snapshot().get("session") or {}
+        return {"mapping": rec.mapper.state(), "tracks": edges.all_tracks(),
+                "live": {"track": s.get("track"), "variation": s.get("variation")} if s.get("track") else None}
+
+    @app.get("/api/edges/track")
+    def edges_track(track: str, variation: str):
+        outline = store.load_track(track, variation)
+        return {"edges": edges.summary(track, variation),
+                "outline": outline["points"] if outline else [], "length": outline["length"] if outline else None}
+
+    @app.get("/api/edges/profile")
+    async def edges_profile(track: str, variation: str):
+        return await asyncio.to_thread(edges.profile, track, variation) or {}
+
+    @app.post("/api/edges/mapping")
+    def edges_mapping(body: dict):
+        rec.mapper.arm(bool(body.get("on", rec.mapper.armed)),
+                       None if body.get("speak") is None else bool(body["speak"]))
+        return rec.mapper.state()
+
+    @app.post("/api/edges/harvest")
+    async def edges_harvest(t: EdgeTrack):
+        n = await asyncio.to_thread(edges.harvest, t.track, t.variation)
+        return {"added": n, "edges": edges.summary(t.track, t.variation, with_lines=False)}
+
+    @app.delete("/api/edges")
+    def edges_clear(track: str, variation: str, source: str | None = None):
+        edges.clear(track, variation, source)
+        return {"ok": True}
 
     @app.get("/api/live/reference")
     def live_reference():

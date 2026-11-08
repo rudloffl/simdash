@@ -69,6 +69,9 @@ simdash --host 0.0.0.0     # also reachable from a phone/tablet on the LAN
   and gear, each against your best lap on that track with that car. The tab sets what it shows,
   how big, where and for how long, with a preview and a replay of any recorded lap on a track map.
   Details below. Link: `/#genie`.
+- **Track edges**: map where each track really ends, by driving over its edges, then see it in
+  natural colours (tarmac, kerbs, grass, gravel, run-off), with the altitude profile and a 3D view.
+  Edges also show on the Live, lap and replay maps. Details below. Link: `/#edges`.
 - **Shakers**: bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb and
   off-track effects simdash plays itself.
   A top view of the car shows where each channel of the shaker sound card is mounted (seat,
@@ -143,6 +146,34 @@ screen covers it) and drive.
 - **Test:** *Show a sample*, or replay a recorded lap at 1×, 2× or 4×: the cards pop up at the moments
   you left each corner, against your best lap ever there, while a track map follows the car and rings
   the corner just reported. The preview box keeps the latest card.
+
+## Track edges
+
+AMS2 gives no track boundaries, only the surface under each tyre. So simdash learns them: drive
+along each edge with the outside tyres just over it, and every time a tyre crosses between
+track/kerb and grass, gravel or run-off, that spot is saved as edge (one axle straddling the edge
+counts too, weighted less). Points are averaged every 3 m of lap distance into a left and a right line.
+
+- **Mapping mode**: *Start AMS2 in mapping mode* (Track edges tab), or `start-race --map`, starts AMS2
+  without CrewChief with mapping already on, so you never leave the game (switching window drops the
+  wheel). While mapping nothing is recorded (no session, no laps), the Corner Genie stays quiet, and a
+  voice (`spd-say`) reads after each lap the coverage of each side and where the next hole is, by corner
+  name when you named it. Mapping switches itself off 30 s after AMS2 closes. With AMS2 already running,
+  use *Start mapping*. The pit lane, the garage and slides over 25° are ignored.
+- **From your sessions**: *Add from recorded sessions* takes every off-track moment of your recorded
+  laps on that layout, so a track is partly mapped before you start.
+- **Views**: coverage per side and the missing stretches; red dots on the map on the side whose edge
+  is missing; a *Natural* view (also on the Live map) with grass everywhere, tarmac between the edges,
+  red and white kerbs where tyres ran on them and, beyond each edge, what the tyres found there (gravel,
+  run-off, wall; drawn 10 m wide); an altitude profile and a 3D view (height ×1 / ×3 / ×5, sectors and
+  corner names) from your fastest recorded lap, linked to the map by hover.
+- **Files**: `~/.local/share/simdash/tracks/<track>.edges.json` keeps the raw samples (lap distance,
+  position, heading, surface and terrain code under each tyre, altitude), so the lines can be rebuilt
+  as the method improves. Mapping on/off and the voice setting: `mapping.json`.
+- **Limits**: the car's size is assumed (tyres 0.8 m either side, axles 1.3 m from the centre), so
+  edges are good to about half a metre; altitude is the car's centre of mass, about 0.4 m above the
+  ground. On a track with no recorded lap yet, drive one normal lap first: the outline, altitude and
+  corners come from recorded laps.
 
 ## Bass shakers (Shakers tab)
 
@@ -337,6 +368,10 @@ A day of about 500 MB ends up around 40 MB. Code: `simdash/slim.py`.
 SIMDASH_SHM=/dev/shm/simdash-fake SIMDASH_DATA=/tmp/simdash-test .venv/bin/python -m simdash --port 8051 &
 SIMDASH_SHM=/dev/shm/simdash-fake .venv/bin/python -m simdash.fake_ams2 --laps 3
 ```
+
+`fake_ams2 --edges` makes your car weave across a 12 m wide track with the tyres going on the grass,
+to test track edge mapping (the edges come out 6 m either side of the centre line). Point
+`SIMDASH_DATA` at a fresh folder: the recorder writes there.
 
 ## Record at every login (optional)
 
