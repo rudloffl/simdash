@@ -10,7 +10,7 @@ from . import store
 
 SETTINGS = store.DATA_DIR / "genie.json"
 OLD_SETTINGS = store.DATA_DIR / "assistant.json"  # name used before "Corner Genie"
-FIELDS = ("time", "brake", "throttle", "entry", "min", "exit", "gear")
+FIELDS = ("time", "brake", "throttle", "entry", "min", "exit", "gear", "tip")
 DEFAULTS = {
     "enabled": True,
     "duration": 4.0,          # seconds on screen

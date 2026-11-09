@@ -499,6 +499,49 @@ def progress(track, variation, car):
     return sorted(out, key=lambda r: r["started_at"])
 
 
+def corner_passes(track, variation, start, end):
+    """Every completed lap on this track layout, any car, any day, cut to lap distances start..end
+    (one corner): the samples the Corner Genie needs to compare the passes, plus the lap's details."""
+    out = []
+    for day in list_days():
+        try:
+            con = read_day_summary(day)
+            laps = con.execute(
+                """SELECT s.id, s.session_type, s.started_at, s.car, s.car_class, l.lap, l.lap_time, l.valid
+                   FROM lap l JOIN v_sessions s ON s.id = l.session_id
+                   WHERE s.track = ? AND s.variation = ? AND l.lap_time > 0""", (track, variation)).fetchall()
+            con.close()
+            if not laps:
+                continue
+            con = read_day(day)  # the samples: a compressed day is unpacked (cached) here
+            for sid in {r["id"] for r in laps}:
+                trace = {}
+                for lap, *row in con.execute(
+                        """SELECT e.lap, e.lap_dist, e.current_time, e.speed * 3.6, e.throttle, e.brake, e.gear, e.x, e.z, e.steering,
+                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 0),
+                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 1),
+                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 2),
+                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 3)
+                           FROM tick t JOIN telemetry e ON e.tick_id = t.id
+                           WHERE t.session_id = ? AND e.lap_dist BETWEEN ? AND ? AND e.current_time >= 0
+                           ORDER BY t.ts""", (sid, start, end)):
+                    trace.setdefault(lap, []).append(row)
+                for r in laps:
+                    rows = trace.get(r["lap"]) if r["id"] == sid else None
+                    if not rows:
+                        continue
+                    out.append({"ref": f"{day}:{sid}", "day": day, "session_type": r["session_type"],
+                                "started_at": r["started_at"], "car": r["car"], "car_class": r["car_class"],
+                                "lap": r["lap"], "lap_time": r["lap_time"], "valid": bool(r["valid"]),
+                                "samples": {k: [x[i] for x in rows] for i, k in enumerate(
+                                    ("lap_dist", "lap_time", "speed", "throttle", "brake", "gear", "x", "z", "steer",
+                                     "tyre_fl", "tyre_fr", "tyre_rl", "tyre_rr"))}})
+            con.close()
+        except (sqlite3.Error, FileNotFoundError):
+            continue
+    return out
+
+
 def track_key(track, variation):
     raw = f"{track}__{variation}".lower()
     return re.sub(r"[^a-z0-9_]+", "-", raw).strip("-") or "unknown"

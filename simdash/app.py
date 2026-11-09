@@ -242,6 +242,11 @@ def create_app(recorder=None):
         """All sessions and laps on one track layout with one car, for the Progress tab."""
         return await asyncio.to_thread(store.progress, track, variation, car)
 
+    @app.get("/api/corner_passes")
+    async def corner_passes(track: str, variation: str, start: float, end: float):
+        """Every recorded pass through one corner (start..end in lap distance), any car, for the Corner Genie."""
+        return await asyncio.to_thread(store.corner_passes, track, variation, start, end)
+
     @app.get("/api/sessions/{ref}/lap/{lap}")
     def lap_samples(ref: str, lap: int):
         return read_lap(ref, lap)

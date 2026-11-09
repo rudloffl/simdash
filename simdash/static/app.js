@@ -58,6 +58,7 @@ function showTab(name) {
   if (name === "genie") loadPilotTab();
   if (name === "edges") loadEdges(true);
   if (name !== "genie" && pf.replay) stopPilotReplay();
+  if (name !== "genie" && typeof gp !== "undefined" && gp.playing) gcPlayStop();
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
@@ -98,6 +99,7 @@ function redrawMaps() {
   if (replay.cars) drawReplay();
   rp.lastDraw = -1;
   if (currentTab === "edges") drawEdgeMap();
+  if (currentTab === "genie" && typeof gc !== "undefined") { drawGcMap(); drawGcHeat(); }
 }
 
 // view (optional), in map coordinates: { bounds: [x0, x1, y0, y1], marks: [{ p: [X, Y], color }],
@@ -756,7 +758,7 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
-window.addEventListener("resize", () => { live.dirty = true; if (replay.cars) drawReplay(); });
+window.addEventListener("resize", () => { live.dirty = true; if (replay.cars) drawReplay(); if (currentTab === "genie" && typeof gc !== "undefined") { drawGcMap(); drawGcHeat(); } });
 
 // ---------- history ----------
 // cmp: compare lap number in this session, or null; a lap from another session has only cmpData / cmpLabel
@@ -2329,7 +2331,7 @@ $("#rp-lap").onchange = (ev) => {
 // track with this car) over that corner, up to the trigger point just after its apex.
 // used until the server's settings arrive (or if this simdash is older than the settings API)
 const PILOT_DEFAULTS = { enabled: true, duration: 4, position: "top", size: "screen", only: "all", min_delta: 0.05,
-  fields: { time: true, brake: true, throttle: true, entry: true, min: true, exit: true, gear: true } };
+  fields: { time: true, brake: true, throttle: true, entry: true, min: true, exit: true, gear: true, tip: true } };
 const pf = { s: PILOT_DEFAULTS, saveT: null, replay: null, saved: true };
 const pilot = { lap: null, rows: [], next: null, corners: null };
 const pilotTrigger = (c) => Math.min(c.e, c.apex + 120);
@@ -2375,11 +2377,53 @@ const PILOT_ICON_PATHS = {
   exit: '<path d="M3 5h8q8 0 8 8v8" opacity=".3"/><path d="M19 13v8"/><path d="M16 18l3 3 3-3"/>',
   gear: '<path d="M6 4v16M12 4v16M18 4v8M6 12h12"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="12" cy="20" r="1.5" fill="currentColor"/>',
   throttle: '<path d="M8 3h8l1.5 13h-11z"/><path d="M9.5 7h5M9 10.5h6"/><path d="M12 16v5M8 21h8"/>',
+  tip: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
 };
 const PILOT_ICON_NAMES = { time: "Time gained or lost in the corner", brake: "Braking point: metres before the apex",
   throttle: "Full throttle: metres after the apex", entry: "Entry speed",
-  min: "Slowest speed", exit: "Exit speed", gear: "Gear at the slowest point" };
+  min: "Slowest speed", exit: "Exit speed", gear: "Gear at the slowest point", tip: "Tip for the next lap" };
 const pilotIcon = (k) => `<svg class="pp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${PILOT_ICON_NAMES[k]}"><title>${PILOT_ICON_NAMES[k]}</title>${PILOT_ICON_PATHS[k]}</svg>`;
+
+// a one-line coaching tip from the corner's numbers (rules, no model): every difference with the best lap is
+// scored in rough "tenths" (10 m of braking or throttle, 3 km/h of speed) and the biggest one is put in words.
+// Lost time: what to change. Gained time: what to keep. Close: nothing to say unless one value stands out.
+const PILOT_TIP_MIN = 1;  // score under which a difference is noise
+function pilotTip(rec) {
+  const { a, b, dt } = rec, out = [];
+  const add = (score, lost, gained) => out.push({ score, lost, gained });
+  const kmh = (v) => `${Math.round(Math.abs(v))} km/h`, m = (v) => `${Math.round(Math.abs(v))} m`;
+  if (a.brakeToApex != null && b.brakeToApex != null) {
+    const d = a.brakeToApex - b.brakeToApex;  // > 0: braked earlier than the best lap
+    const slowApex = a.min - b.min <= -3;
+    if (d >= 0) add(d / 10, `Brake ${m(d)} later`, null);
+    // braked later but the apex got slower: overbraking, or turning in too hot
+    else add(-d / 10 * (slowApex ? 1.2 : 1), slowApex ? `Overbraked ${m(d)} late: brake earlier, roll more speed` : null, `Braked ${m(d)} later: keep it`);
+  } else if (a.brakeToApex == null && b.brakeToApex != null && a.min - b.min <= -3) {
+    add(1.5, "No braking but slower apex: a short brake beats a long lift", null);
+  } else if (a.brakeToApex != null && b.brakeToApex == null) {
+    add(1.5, "Your best took it flat: try a lift, no brake", null);
+  }
+  const dm = a.min - b.min;  // > 0: more speed at the apex
+  add(Math.abs(dm) / 3, dm < 0 ? `Carry ${kmh(dm)} more to the apex: release the brake sooner` : null, dm > 0 ? `${kmh(dm)} more at the apex: keep that` : null);
+  if (a.full == null && b.full != null) add(2, "Not back to full throttle: commit on exit", null);
+  else if (a.full != null && b.full != null) {
+    const d = a.full - b.full;  // > 0: full throttle later
+    add(Math.abs(d) / 10, d > 0 ? `Full throttle ${m(d)} sooner` : null, d < 0 ? `Full throttle ${m(d)} sooner: keep it` : null);
+  }
+  const de = a.exit - b.exit;
+  // a slow exit with a good apex: the line or the throttle pick-up, not the braking
+  add(Math.abs(de) / 3 * (dm >= -2 ? 1 : 0.5), de < 0 ? `Exit ${kmh(de)} slower: straighten the exit, open the wheel` : null, de > 0 ? `Exit ${kmh(de)} faster: keep that line` : null);
+  const den = a.entry - b.entry;
+  if (den < 0) add(-den / 3 * 0.7, `Entry ${kmh(den)} slower: more speed on the way in`, null);
+  if (a.gear != null && b.gear != null && a.gear !== b.gear) add(1.1, `Try gear ${b.gear} like your best`, null);
+
+  const side = dt > 0.02 ? "lost" : dt < -0.02 ? "gained" : null;
+  const pick = out.filter((t) => side && t[side] && t.score >= PILOT_TIP_MIN).sort((x, y) => y.score - x.score)[0];
+  if (pick) return { text: pick[side], cls: side === "lost" ? "pp-bad" : "pp-good" };
+  if (side === "lost") return { text: "Same inputs as your best: tidy the line", cls: "pp-same" };
+  if (side === "gained") return { text: "Nice one: same again", cls: "pp-good" };
+  return { text: "As fast as your best", cls: "pp-same" };
+}
 
 function pilotHtml(rec, s) {
   const f = s.fields, { a, b } = rec;
@@ -2406,7 +2450,8 @@ function pilotHtml(rec, s) {
   const dt = f.time ? `<span class="pp-dt ${dtCls}">${pilotIcon("time")}${rec.dt > 0 ? "+" : rec.dt < 0 ? "−" : "±"}${Math.abs(rec.dt).toFixed(2)} s</span>` : "";
   const cls = ["pp-in", "pp-apex", "pp-out"];
   return `<div class="pp-head"><span class="pp-name">${esc(rec.name)}</span>${dt}</div>`
-    + (rows.length ? `<div class="pp-grid">${rows.map((r) => r.map((c, i) => `<div class="pp-cell ${cls[i]}">${c}</div>`).join("")).join("")}</div>` : "");
+    + (rows.length ? `<div class="pp-grid">${rows.map((r) => r.map((c, i) => `<div class="pp-cell ${cls[i]}">${c}</div>`).join("")).join("")}</div>` : "")
+    + (f.tip !== false ? (({ text, cls: c }) => `<div class="pp-tip ${c}">${pilotIcon("tip")}<span>${esc(text)}</span></div>`)(pilotTip(rec)) : "");
 }
 function showPilot(el, rec, s = pf.s, stay = false) {
   if (!s) return;
@@ -2446,6 +2491,7 @@ function pilotRow(r, fresh) {
 
 // ---- the Corner Genie tab ----
 async function loadPilotTab() {
+  loadCornerPassesTab();
   await loadPilotSettings();
   renderPilotForm();
   pilotPreview();
@@ -2461,7 +2507,7 @@ function renderPilotForm() {
   $("#pf-only").value = s.only;
   $("#pf-min").value = s.min_delta;
   $("#pf-min").disabled = s.only === "all";
-  document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => (i.checked = !!s.fields[i.dataset.f]));
+  document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => (i.checked = s.fields[i.dataset.f] ?? PILOT_DEFAULTS.fields[i.dataset.f]));
 }
 function pilotFormValues() {
   const fields = {};
@@ -2584,6 +2630,642 @@ $("#pf-play").onclick = async () => {
     $("#pf-replay-state").textContent = `Lap ${lapNo}: ${fmtDur(t)} / ${fmtDur(total)} · ${vs}`;
   }, 250);
 };
+
+// ---- the Corner Genie tab: every recorded pass through one corner ----
+// Corners come from the fastest lap on the track layout (any car); each pass is that corner's stretch of a
+// recorded lap, with any car, measured like the popup does (cornerStats) and compared with the fastest pass.
+const gc = { tracks: [], tk: null, R: null, corners: [], k: null, passes: null, sel: null, cars: null, edges: null,
+  sort: pref.get("gcSort", { key: "time", dir: 1 }), req: 0 };
+const GC_MARGIN = 60;
+const GC_TYRES = ["tyre_fl", "tyre_fr", "tyre_rl", "tyre_rr"];
+const gcTyreTitle = (t) => (t?.length ? `FL ${Math.round(t[0])}° · FR ${Math.round(t[1])}° · RL ${Math.round(t[2])}° · RR ${Math.round(t[3])}°` : "");  // m fetched past each end of the corner, so times interpolate at its exact edges
+// [key, header, value of a pass's stats, better: -1 lower is better, 1 higher, 0 no best, format]
+const GC_COLS = [
+  ["time", "Corner", (p) => p.st.time, -1, (v) => `${v.toFixed(2)} s`],
+  ["delta", "Δ", (p) => p.dt, 0, (v) => (v < 0.005 ? "–" : `+${v.toFixed(2)}`)],
+  ["brake", "Brake", (p) => p.st.brakeToApex, -1, (v) => `${Math.round(v)} m`],
+  ["entry", "Entry", (p) => p.st.entry, 1, (v) => Math.round(v)],
+  ["min", "Min", (p) => p.st.min, 1, (v) => Math.round(v)],
+  ["exit", "Exit", (p) => p.st.exit, 1, (v) => Math.round(v)],
+  ["full", "Full thr.", (p) => p.st.full, -1, (v) => `${Math.round(v)} m`],
+  ["gear", "Gear", (p) => p.st.gear, 0, (v) => v],
+  ["tyres", "Tyres", (p) => p.tyreAvg, 0, (v) => `${Math.round(v)}°`],
+  ["car", "Car", (p) => p.car, 0, (v) => esc(v)],
+  ["when", "When", (p) => p.started_at, 0, (v) => new Date(v * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })],
+  ["lap", "Lap", (p) => p.lap_time, 0, (v) => fmtLap(v)],
+];
+const GC_TITLES = { time: "Time from the corner's start to its end", delta: "Slower than the fastest pass shown",
+  brake: "Braking point: metres before the apex", entry: "Entry speed (km/h)", min: "Slowest speed (km/h)",
+  exit: "Exit speed (km/h)", full: "Full throttle: metres after the apex", gear: "Gear at the slowest point",
+  tyres: "Tyre temperature as the corner starts: average of the four (°C), hover for each tyre" };
+
+async function loadCornerPassesTab() {
+  if (gc.tracks.length) { drawGcMap(); drawGcHeat(); return; }
+  const all = await (await fetch("/api/sessions")).json();
+  const by = new Map();
+  for (const x of all) {
+    const k = `${x.track}|${x.variation}`;
+    const t = by.get(k) || { key: k, track: x.track, variation: x.variation, last: 0, sessions: [] };
+    t.last = Math.max(t.last, x.started_at);
+    t.sessions.push(x);
+    by.set(k, t);
+  }
+  gc.tracks = [...by.values()].sort((a, b) => b.last - a.last);
+  $("#gc-track").innerHTML = gc.tracks.map((t) => `<option value="${esc(t.key)}">${esc(t.track)}${t.variation && t.variation !== t.track ? ` ${esc(t.variation)}` : ""}</option>`).join("");
+  if (!gc.tracks.length) { $("#gc-state").textContent = "No session recorded yet."; return; }
+  // the live track first, else the last one picked, else the latest driven
+  const want = [focus.trackKey, pref.get("gcTrack", null)].find((k) => k && by.has(k)) || gc.tracks[0].key;
+  $("#gc-track").value = want;
+  selectGcTrack(want);
+}
+
+// reference for the corners: the fastest lap on the layout, with any car, that was recorded in full detail
+async function selectGcTrack(tk) {
+  const t = gc.tracks.find((x) => x.key === tk);
+  if (!t) return;
+  const req = ++gc.req;
+  Object.assign(gc, { tk, R: null, corners: [], k: null, passes: null, sel: null, edges: null });
+  pref.set("gcTrack", tk);
+  $("#gc-state").textContent = "Loading…";
+  $("#gc-corner").innerHTML = "";
+  renderGcTable();
+  await loadCornerNames(t.track, t.variation);
+  // mapped track edges, drawn under the heatmap when there are some
+  fetch(`/api/edges/track?track=${encodeURIComponent(t.track)}&variation=${encodeURIComponent(t.variation)}`)
+    .then((r) => (r.ok ? r.json() : null)).then((d) => { if (gc.tk === tk) { gc.edges = d?.edges || null; drawGcHeat(); } }).catch(() => {});
+  const cands = t.sessions.filter((x) => x.best_lap > 0).sort((a, b) => a.best_lap - b.best_lap).slice(0, 6);
+  for (const x of cands) {
+    const d = await (await fetch(`/api/sessions/${x.ref}`)).json();
+    const best = d.laps.filter((l) => l.lap_time > 0).sort((a, b) => (b.valid - a.valid) || a.lap_time - b.lap_time)[0];
+    if (!best) continue;
+    const L = await fetchLap(best.lap, x.ref);
+    if (req !== gc.req) return;
+    // slimmed old days keep about one sample every 20 m: too coarse to find the corners
+    if (L.lap_dist.length < (x.track_length || 3000) / 4) continue;
+    gc.R = L;
+    gc.refLabel = `${fmtLap(best.lap_time)} · ${x.car}`;
+    break;
+  }
+  if (req !== gc.req) return;
+  if (!gc.R) { $("#gc-state").textContent = "No detailed lap on this track to find the corners from."; drawGcMap(); return; }
+  gc.corners = findCorners(gc.R);
+  const len = gc.R.lap_dist[gc.R.lap_dist.length - 1];
+  gc.corners.forEach((c) => { c.s = Math.max(c.s, 0); c.e = Math.min(c.e, len); });
+  $("#gc-corner").innerHTML = gc.corners.map((c, k) => `<option value="${k}">${esc(cornerName(tk, c, k))} · apex ${Math.round(c.apex)} m</option>`).join("");
+  const keep = pref.get("gcCorner", {})[tk];
+  selectGcCorner(keep != null && keep < gc.corners.length ? keep : 0);
+}
+
+async function selectGcCorner(k) {
+  const c = gc.corners[k];
+  if (!c) return;
+  const req = ++gc.req, [track, variation] = gc.tk.split("|");
+  Object.assign(gc, { k, passes: null, sel: null });
+  pref.set("gcCorner", { ...pref.get("gcCorner", {}), [gc.tk]: k });
+  $("#gc-corner").value = k;
+  $("#gc-state").textContent = "Loading the passes…";
+  drawGcMap();
+  renderGcTable();
+  const q = new URLSearchParams({ track, variation, start: c.s - GC_MARGIN, end: c.e + GC_MARGIN });
+  const r = await fetch(`/api/corner_passes?${q}`);
+  if (req !== gc.req) return;
+  if (!r.ok) {
+    const msg = r.status === 404 ? "This simdash was started before corner passes existed: restart it once (stop it, then start-race or ~/.local/bin/simdash)."
+      : "Could not load the passes.";
+    $("#gc-state").textContent = "";
+    $("#gc-table tbody").innerHTML = `<tr><td colspan="${GC_COLS.length + 1}" class="empty">${esc(msg)}</td></tr>`;
+    return;
+  }
+  const list = await r.json();
+  gc.passes = list.map((p) => {
+    const L = p.samples, st = L.lap_dist.length > 2 ? cornerStats(L, c) : null;
+    if (!st) return null;
+    // a pass is coarse when its samples are far apart (slimmed old days): its values are approximate
+    const span = L.lap_dist[L.lap_dist.length - 1] - L.lap_dist[0];
+    // tyre temperatures (°C, FL FR RL RR) as the corner starts, for context
+    const i0 = sampleAt(L, c.s), tyres = L.tyre_fl ? GC_TYRES.map((w) => L[w][i0]) : [];
+    const tyreAvg = tyres.length && tyres.every((v) => v != null) ? tyres.reduce((a, v) => a + v, 0) / 4 : null;
+    return { ...p, st, tyres, tyreAvg, coarse: span / L.lap_dist.length > 6, id: `${p.ref}/${p.lap}` };
+  }).filter(Boolean);
+  renderGcCars();
+  // the latest pass is the one shown first
+  gc.sel = [...gc.passes].sort((a, b) => b.started_at - a.started_at || b.lap - a.lap)[0]?.id ?? null;
+  renderGcTable();
+}
+
+function gcShown() {
+  const valid = $("#gc-valid").checked;
+  const shown = (gc.passes || []).filter((p) => (!gc.cars || gc.cars.has(p.car)) && (!valid || p.valid));
+  const fastest = shown.reduce((a, p) => (!a || p.st.time < a.st.time ? p : a), null);
+  shown.forEach((p) => (p.dt = p.st.time - fastest.st.time));
+  return { shown, fastest };
+}
+
+function renderGcTable() {
+  const head = $("#gc-table thead"), body = $("#gc-table tbody");
+  head.innerHTML = `<tr><th class="r">#</th>${GC_COLS.map(([k, h]) => `<th data-k="${k}" class="${["car", "when"].includes(k) ? "" : "r"}${gc.sort.key === k ? " sorted" : ""}"`
+    + `${GC_TITLES[k] ? ` title="${GC_TITLES[k]}"` : ""}>${h}${gc.sort.key === k ? (gc.sort.dir > 0 ? " ▴" : " ▾") : ""}</th>`).join("")}</tr>`;
+  if (!gc.passes) { body.innerHTML = ""; showGcCard(null); drawGcHeat(); return; }
+  const { shown, fastest } = gcShown();
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="${GC_COLS.length + 1}" class="empty">No pass${$("#gc-valid").checked ? " on a valid lap" : ""} for this choice.</td></tr>`;
+    $("#gc-state").textContent = "";
+    showGcCard(null);
+    drawGcHeat();
+    return;
+  }
+  // best value of each column, among the detailed passes (coarse ones are only approximate)
+  const best = {};
+  for (const [k, , get, dir] of GC_COLS) {
+    if (!dir) continue;
+    const vals = shown.filter((p) => !p.coarse && get(p) != null).map(get);
+    if (vals.length > 1) best[k] = dir < 0 ? Math.min(...vals) : Math.max(...vals);
+  }
+  const col = GC_COLS.find((x) => x[0] === gc.sort.key) || GC_COLS[0], get = col[2];
+  const rank = new Map([...shown].sort((a, b) => a.st.time - b.st.time).map((p, i) => [p.id, i + 1]));
+  const rows = [...shown].sort((a, b) => {
+    const va = get(a), vb = get(b);
+    if (va == null || vb == null) return (va == null) - (vb == null);
+    return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * gc.sort.dir;
+  });
+  body.innerHTML = rows.map((p) => `<tr data-id="${esc(p.id)}" class="${p.id === gc.sel ? "sel" : ""}${p.coarse ? " coarse" : ""}"`
+    + `${p.coarse ? ' title="Recorded on a slimmed day: few samples, values are approximate"' : ""}>`
+    + `<td class="r">${rank.get(p.id)}</td>`
+    + GC_COLS.map(([k, , g, , fmt]) => {
+      const v = g(p), cls = [!["car", "when"].includes(k) && "r", k === "car" && "gc-car", v != null && best[k] === v && !p.coarse && "best",
+        k === "lap" && !p.valid && "invalid"].filter(Boolean).join(" ");
+      const tip = k === "car" ? p.car : k === "tyres" ? gcTyreTitle(p.tyres) : "";
+      return `<td class="${cls}"${tip ? ` title="${esc(tip)}"` : ""}>${v == null ? "—" : fmt(v)}</td>`;
+    }).join("") + "</tr>").join("");
+  const coarse = shown.filter((p) => p.coarse).length;
+  $("#gc-state").textContent = `${shown.length} pass${shown.length > 1 ? "es" : ""}${coarse ? ` (${coarse} in italics: low detail)` : ""}`;
+  gcTableHeight();
+  if (!shown.some((p) => p.id === gc.sel)) gc.sel = shown[0].id;
+  showGcCard(shown.find((p) => p.id === gc.sel), fastest);
+  drawGcHeat();
+}
+
+// the popup's card for one pass, against the fastest one shown
+function showGcCard(p, fastest) {
+  const el = $("#gc-pop");
+  if (!p) { el.hidden = true; $("#gc-vs").textContent = ""; return; }
+  const c = gc.corners[gc.k];
+  showPilot(el, { name: cornerName(gc.tk, c, gc.k), dt: p.st.time - fastest.st.time, a: p.st, b: fastest.st, c }, pf.s, true);
+  const ty = (q) => (q.tyreAvg == null ? "" : ` (tyres ${Math.round(q.tyreAvg)}°)`);
+  $("#gc-vs").textContent = (p === fastest ? `This is the fastest pass shown${ty(p)}.`
+    : `Against the fastest pass: ${fastest.car}, ${new Date(fastest.started_at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" })}, lap ${fastest.lap}${ty(fastest)}.`
+      + (p.tyreAvg != null ? ` This pass started the corner on tyres at ${Math.round(p.tyreAvg)}°${fastest.tyreAvg != null
+        ? ` (${p.tyreAvg - fastest.tyreAvg >= 0 ? "+" : "−"}${Math.abs(Math.round(p.tyreAvg - fastest.tyreAvg))}°)` : ""}.` : ""));
+}
+
+function drawGcMap() {
+  const R = gc.R, canvas = $("#gc-map");
+  if (!R?.x?.length) { drawMap(canvas, [], [], false); return; }
+  const outline = [];
+  for (let i = 0; i < R.x.length; i += 3) outline.push([R.x[i], R.z[i]]);
+  const marks = trackMarks(R, gc.tk), c = gc.corners[gc.k];
+  if (c) marks.marks = [{ p: mapXY(R.x[sampleAt(R, c.apex)], R.z[sampleAt(R, c.apex)]), color: css("--s-speed") }];
+  drawMap(canvas, outline, [], true, marks);
+}
+
+$("#gc-track").onchange = (e) => selectGcTrack(e.target.value);
+$("#gc-corner").onchange = (e) => selectGcCorner(+e.target.value);
+$("#gc-valid").onchange = () => renderGcTable();
+
+// ---- cars: a dropdown of checkboxes (gc.cars null = every car) ----
+function renderGcCars() {
+  const count = {};
+  for (const p of gc.passes || []) count[p.car] = (count[p.car] || 0) + 1;
+  const cars = Object.keys(count).sort();
+  // keep the cars picked before that drive here too; none of them here: every car
+  if (gc.cars) { gc.cars = new Set(cars.filter((c) => gc.cars.has(c))); if (!gc.cars.size) gc.cars = null; }
+  $("#gc-cars .ms-list").innerHTML = cars.map((c) => `<label><input type="checkbox" value="${esc(c)}"${!gc.cars || gc.cars.has(c) ? " checked" : ""}>`
+    + `<span>${esc(c)}</span><span class="n">${count[c]}</span></label>`).join("");
+  const n = gc.cars ? gc.cars.size : cars.length;
+  $("#gc-cars .ms-btn").textContent = !gc.cars ? `All cars (${cars.length})` : n === 1 ? [...gc.cars][0] : n ? `${n} of ${cars.length} cars` : "No car";
+}
+$("#gc-cars .ms-btn").onclick = () => {
+  const pop = $("#gc-cars .ms-pop");
+  pop.hidden = !pop.hidden;
+  $("#gc-cars .ms-btn").setAttribute("aria-expanded", String(!pop.hidden));
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#gc-cars")) { $("#gc-cars .ms-pop").hidden = true; $("#gc-cars .ms-btn").setAttribute("aria-expanded", "false"); }
+});
+function gcCarsChanged() {
+  const boxes = [...document.querySelectorAll("#gc-cars .ms-list input")];
+  const on = boxes.filter((b) => b.checked).map((b) => b.value);
+  gc.cars = on.length === boxes.length ? null : new Set(on);
+  renderGcCars();
+  renderGcTable();
+}
+$("#gc-cars .ms-list").onchange = gcCarsChanged;
+$("#gc-cars .ms-quick").onclick = (e) => {
+  const all = e.target.dataset.all;
+  if (all == null) return;
+  document.querySelectorAll("#gc-cars .ms-list input").forEach((b) => (b.checked = all === "1"));
+  gcCarsChanged();
+};
+
+// ---- heatmap of the lines taken: the corner in a grid of small cells, in a Plotly chart (zoom, pan, reset).
+// A cell's opacity grows with the number of passes through it (the line most taken stands out), its colour
+// is their average speed there. The heat is an image laid on the track coordinates, so it scales with the zoom;
+// the selected pass is a line on top, the fastest one dashed. Low-detail passes are left out.
+const GC_CELL = 0.4, GC_RIBBON = 2, GC_HOVER = 4;  // m per cell; cells each side of a path (2 m band); cells per hover spot
+// the stretch drawn: the braking zone, the apex and the exit, not the straights around them
+const gcWindow = (c) => [Math.max(c.s, c.apex - 220), Math.min(c.e, c.apex + 160)];
+function gcHeatData() {
+  const c = gc.corners[gc.k];
+  if (!c || !gc.passes) return null;
+  const { shown, fastest } = gcShown();
+  const used = shown.filter((p) => !p.coarse && p.samples.x?.length);
+  const [w0, w1] = gcWindow(c);
+  const paths = new Map();  // pass id -> [[X, Y, speed, lap distance]] in map coordinates, over the corner window
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of shown) {
+    const L = p.samples, pts = [];
+    if (!L.x?.length) continue;
+    for (let i = 0; i < L.lap_dist.length; i++) {
+      if (L.lap_dist[i] < w0 || L.lap_dist[i] > w1) continue;
+      const [X, Y] = mapXY(L.x[i], L.z[i]);
+      pts.push([X, Y, L.speed[i], L.lap_dist[i]]);
+      if (!p.coarse) { x0 = Math.min(x0, X); x1 = Math.max(x1, X); y0 = Math.min(y0, Y); y1 = Math.max(y1, Y); }
+    }
+    paths.set(p.id, pts);
+  }
+  if (!used.length || x0 === Infinity) return { c, shown, fastest, paths, used, grid: null };
+  const pad = 15;
+  x0 -= pad; x1 += pad; y0 -= pad; y1 += pad;
+  const GW = Math.ceil((x1 - x0) / GC_CELL), GH = Math.ceil((y1 - y0) / GC_CELL);
+  const count = new Uint16Array(GW * GH), speed = new Float32Array(GW * GH), stamp = new Int32Array(GW * GH).fill(-1);
+  const r2 = GC_RIBBON * GC_RIBBON + 1;
+  used.forEach((p, n) => {
+    const pts = paths.get(p.id);
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay, av] = pts[i - 1], [bx, by, bv] = pts[i];
+      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (GC_CELL / 2)));
+      for (let k = 0; k <= steps; k++) {
+        const f = k / steps, gx = Math.floor((ax + (bx - ax) * f - x0) / GC_CELL), gy = Math.floor((ay + (by - ay) * f - y0) / GC_CELL);
+        const v = av + (bv - av) * f;
+        for (let dy = -GC_RIBBON; dy <= GC_RIBBON; dy++) for (let dx = -GC_RIBBON; dx <= GC_RIBBON; dx++) {
+          const X = gx + dx, Y = gy + dy;
+          if (dx * dx + dy * dy > r2 || X < 0 || Y < 0 || X >= GW || Y >= GH) continue;
+          const j = Y * GW + X;
+          if (stamp[j] === n) continue;  // each pass counts once per cell
+          stamp[j] = n;
+          count[j]++;
+          speed[j] += v;
+        }
+      }
+    }
+  });
+  let maxN = 0, total = 0;
+  const vals = [];
+  for (let j = 0; j < count.length; j++) {
+    if (!count[j]) continue;
+    speed[j] /= count[j];
+    maxN = Math.max(maxN, count[j]);
+    vals.push([speed[j], count[j]]);
+    total += count[j];
+  }
+  // colour scale over the 5th to 95th percentile, each spot weighted by its passes, so one spin at walking
+  // pace (a spot few passes go through) does not wash out the line everyone takes
+  vals.sort((a, b) => a[0] - b[0]);
+  const pct = (q) => { let acc = 0; for (const [v, n] of vals) { acc += n; if (acc >= q * total) return v; } return vals[vals.length - 1][0]; };
+  const lo = pct(0.05), hi = pct(0.95);
+  return { c, shown, fastest, paths, used, grid: { x0, x1, y0, y1, GW, GH, count, speed, maxN, lo, hi } };
+}
+
+// the heat as a PNG, track surface underneath: one pixel per cell
+function gcHeatImage(G, c) {
+  const off = document.createElement("canvas");
+  off.width = G.GW; off.height = G.GH;
+  const ctx = off.getContext("2d"), R = gc.R, [w0, w1] = gcWindow(c);
+  if (R?.x) {  // the reference lap's line widened to a track's width, a little past the stretch drawn
+    ctx.lineJoin = ctx.lineCap = "round";
+    ctx.strokeStyle = css("--neutral");
+    ctx.lineWidth = 12 / GC_CELL;
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i < R.lap_dist.length; i++) {
+      if (R.lap_dist[i] < w0 - 60 || R.lap_dist[i] > w1 + 60) continue;
+      const [X, Y] = mapXY(R.x[i], R.z[i]), a = (X - G.x0) / GC_CELL, b = (Y - G.y0) / GC_CELL;
+      first ? ctx.moveTo(a, b) : ctx.lineTo(a, b);
+      first = false;
+    }
+    ctx.stroke();
+  }
+  const heat = document.createElement("canvas");
+  heat.width = G.GW; heat.height = G.GH;
+  const img = heat.getContext("2d").createImageData(G.GW, G.GH);
+  const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16));
+  const [lo, hi] = [hex(css("--seq-lo")), hex(css("--seq-hi"))], span = Math.max(G.hi - G.lo, 1);
+  for (let j = 0; j < G.count.length; j++) {
+    const n = G.count[j];
+    if (!n) continue;
+    const f = Math.min(1, Math.max(0, (G.speed[j] - G.lo) / span));
+    img.data[j * 4] = lo[0] + (hi[0] - lo[0]) * f;
+    img.data[j * 4 + 1] = lo[1] + (hi[1] - lo[1]) * f;
+    img.data[j * 4 + 2] = lo[2] + (hi[2] - lo[2]) * f;
+    img.data[j * 4 + 3] = 255 * (0.18 + 0.82 * Math.sqrt(n / G.maxN));
+  }
+  heat.getContext("2d").putImageData(img, 0, 0);
+  ctx.drawImage(heat, 0, 0);
+  return off.toDataURL("image/png");
+}
+
+function drawGcHeat() {
+  const el = $("#gc-heat");
+  if (typeof Plotly === "undefined" || currentTab !== "genie") return;
+  // the heat only changes with the corner, the passes shown, the orientation or the theme: kept between row clicks
+  const key = [gc.tk, gc.k, gc.passes?.length, [...(gc.cars || [])].join(","), $("#gc-valid").checked, mapMirror, mapRot,
+    css("--seq-lo"), !!gc.edges].join("|");
+  if (gc.heatKey !== key) {
+    gc.heatKey = key;
+    gc.heat = gcHeatData();
+    gc.heatImg = gc.heat?.grid ? gcHeatImage(gc.heat.grid, gc.heat.c) : null;
+  }
+  const d = gc.heat, G = d?.grid;
+  if (!G) {
+    Plotly.react(el, [], plotLayout({ margin: { l: 0, r: 0, t: 0, b: 0 }, xaxis: { visible: false }, yaxis: { visible: false },
+      annotations: [{ text: d?.shown?.length ? "Only low-detail passes here: no line to draw" : gc.passes ? "No pass to draw" : "Loading…",
+        showarrow: false, xref: "paper", yref: "paper", x: 0.5, y: 0.5, font: { size: 13, color: css("--muted") } }] }),
+      { displaylogo: false, responsive: true });
+    $("#gc-legend").innerHTML = "";
+    return;
+  }
+  const traces = [];
+  // track edges, when mapped (y is flipped: map Y grows downwards, the chart's upwards)
+  if (gc.edges) for (const side of ["left", "right"]) for (const seg of gc.edges[side] || []) {
+    // outside the drawn stretch: null, so the line breaks there instead of cutting across
+    const xy = seg.map((p) => mapXY(p[0], p[1])).map(([X, Y]) => (X >= G.x0 && X <= G.x1 && Y >= G.y0 && Y <= G.y1 ? [X, Y] : [null, null]));
+    if (xy.filter((q) => q[0] != null).length > 1) traces.push({ x: xy.map((q) => q[0]), y: xy.map((q) => (q[1] == null ? null : -q[1])), type: "scatter", mode: "lines",
+      line: { color: css("--text-2"), width: 1.5 }, hoverinfo: "skip", showlegend: false });
+  }
+  // invisible hover layer: passes and average speed over spots of GC_HOVER × GC_HOVER cells
+  const HW = Math.ceil(G.GW / GC_HOVER), HH = Math.ceil(G.GH / GC_HOVER), z = [], txt = [];
+  for (let hy = 0; hy < HH; hy++) {
+    const zr = [], tr = [];
+    for (let hx = 0; hx < HW; hx++) {
+      let n = 0, v = 0;
+      for (let y = hy * GC_HOVER; y < Math.min(G.GH, (hy + 1) * GC_HOVER); y++) for (let x = hx * GC_HOVER; x < Math.min(G.GW, (hx + 1) * GC_HOVER); x++) {
+        const j = y * G.GW + x;
+        if (G.count[j] > n) { n = G.count[j]; v = G.speed[j]; }
+      }
+      zr.push(n || null);
+      tr.push(n ? Math.round(v) : "");
+    }
+    z.push(zr);
+    txt.push(tr);
+  }
+  const hc = GC_HOVER * GC_CELL;
+  traces.push({ type: "heatmap", z, text: txt, x0: G.x0 + hc / 2, dx: hc, y0: -(G.y0 + hc / 2), dy: -hc, opacity: 0, showscale: false,
+    hoverongaps: false, hovertemplate: "%{z} pass(es) · %{text} km/h average<extra></extra>" });
+  // the fastest pass dashed, the selected one solid, each over a thin surface ring so it reads over the heat
+  const line = (p, label, color, dash) => {
+    const pts = p && d.paths.get(p.id);
+    if (!pts?.length) return;
+    const x = pts.map((q) => q[0]), y = pts.map((q) => -q[1]);
+    traces.push({ x, y, type: "scatter", mode: "lines", line: { color: css("--surface"), width: 5 }, hoverinfo: "skip", showlegend: false });
+    traces.push({ x, y, type: "scatter", mode: "lines", line: { color, width: 2, dash: dash ? "dash" : "solid" }, showlegend: false,
+      customdata: pts.map((q) => [Math.round(q[2]), Math.round(q[3])]),
+      hovertemplate: `${esc(label)} · %{customdata[0]} km/h · %{customdata[1]} m<extra></extra>` });
+  };
+  const sel = d.shown.find((p) => p.id === gc.sel);
+  if (d.fastest && d.fastest !== sel) line(d.fastest, "fastest pass", css("--text-2"), true);
+  line(sel, "selected pass", css("--text"), false);
+  // the two cars of the replay: the selected pass filled, the fastest one a ring
+  gcPlayPrepare(sel, d.fastest, d.c);
+  traces.push({ x: [null], y: [null], type: "scatter", mode: "markers", hoverinfo: "skip", showlegend: false,
+    marker: { size: 13, color: css("--text-2"), symbol: "circle-open", line: { width: 3 } } });
+  traces.push({ x: [null], y: [null], type: "scatter", mode: "markers", hoverinfo: "skip", showlegend: false,
+    marker: { size: 12, color: css("--text"), line: { color: css("--surface"), width: 2 } } });
+  gc.playIdx = [traces.length - 2, traces.length - 1];
+  const R = gc.R, ann = [];
+  if (R?.x) {
+    const i = sampleAt(R, d.c.apex), [X, Y] = mapXY(R.x[i], R.z[i]);
+    ann.push({ x: X, y: -Y, text: esc(cornerName(gc.tk, d.c, gc.k)), showarrow: true, arrowhead: 0, arrowwidth: 1, arrowcolor: css("--muted"),
+      ax: 0, ay: -28, font: { size: 12, color: css("--text") }, bgcolor: css("--surface"), opacity: 0.9 });
+  }
+  Plotly.react(el, traces, plotLayout({
+    paper_bgcolor: css("--surface-2"), plot_bgcolor: css("--surface-2"),
+    margin: { l: 4, r: 4, t: 4, b: 4 }, showlegend: false, dragmode: "pan", hovermode: "closest",
+    // zoom kept while the selected pass, cars or valid filter change; a new corner or orientation resets it
+    uirevision: `${gc.tk}|${gc.k}|${mapMirror}|${mapRot}`,
+    images: [{ source: gc.heatImg, xref: "x", yref: "y", x: G.x0, y: -G.y0, sizex: G.x1 - G.x0, sizey: G.y1 - G.y0,
+      xanchor: "left", yanchor: "top", sizing: "stretch", layer: "below" }],
+    annotations: ann,
+    xaxis: { visible: false, range: [G.x0, G.x1] },
+    yaxis: { visible: false, range: [-G.y1, -G.y0], scaleanchor: "x", scaleratio: 1 },
+  }), { displaylogo: false, responsive: true, scrollZoom: true, modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] });
+  $("#gc-legend").innerHTML = `<span class="ramp">≤ ${Math.round(G.lo)} km/h<span class="bar" style="background:linear-gradient(90deg, ${css("--seq-lo")}, ${css("--seq-hi")})"></span>≥ ${Math.round(G.hi)} km/h</span>`
+    + `<span>more solid = more passes (${d.used.length}${d.used.length < d.shown.length ? `, ${d.shown.length - d.used.length} low-detail left out` : ""})</span>`
+    + (sel ? `<span><span class="ln"></span>selected pass</span>` : "")
+    + (d.fastest && d.fastest !== sel ? `<span><span class="ln dash"></span>fastest pass</span>` : "")
+    + `<span class="muted">scroll to zoom, drag to move, double-click to reset</span>`;
+  gcPlayShow();
+}
+
+// ---- replay: the selected pass and the fastest one through the corner, side by side in time ----
+// Both start together where the drawn stretch starts; the side panel shows each one's speed, gear and pedals,
+// and the gap: how much later (or sooner) the selected pass reached the spot it is at than the fastest one.
+const gp = { sel: null, fast: null, t: 0, T: 0, playing: false, raf: null, last: 0, key: null };
+function gcPlayTrack(p, c) {
+  if (!p?.samples?.x?.length) return null;
+  const L = p.samples, [w0, w1] = gcWindow(c), t0 = timeAt(L, w0), out = { t: [], X: [], Y: [], v: [], thr: [], brk: [], gear: [], d: [], st: [], ty: [[], [], [], []] };
+  for (let i = 0; i < L.lap_dist.length; i++) {
+    if (L.lap_dist[i] < w0 || L.lap_dist[i] > w1) continue;
+    const [X, Y] = mapXY(L.x[i], L.z[i]);
+    out.t.push(L.lap_time[i] - t0); out.X.push(X); out.Y.push(-Y); out.v.push(L.speed[i]);
+    out.thr.push(L.throttle[i]); out.brk.push(L.brake[i]); out.gear.push(L.gear[i]); out.d.push(L.lap_dist[i]);
+    out.st.push(L.steer?.[i] ?? null);
+    GC_TYRES.forEach((w, k) => out.ty[k].push(L[w]?.[i] ?? null));
+  }
+  return out.t.length > 1 ? { ...out, p } : null;
+}
+// a track's values at time t (interpolated), and the time it reached lap distance dd
+function gcAt(tr, t) {
+  const n = tr.t.length;
+  if (t <= tr.t[0]) return { i: 0, f: 0 };
+  if (t >= tr.t[n - 1]) return { i: n - 2, f: 1 };
+  let i = 0;
+  while (i < n - 2 && tr.t[i + 1] < t) i++;
+  return { i, f: (t - tr.t[i]) / Math.max(tr.t[i + 1] - tr.t[i], 1e-6) };
+}
+const gcLerp = (a, { i, f }) => a[i] + (a[i + 1] - a[i]) * f;
+function gcTimeAtDist(tr, dd) {
+  const k = tr.d.findIndex((v) => v >= dd);
+  if (k <= 0) return k === 0 ? tr.t[0] : tr.t[tr.t.length - 1];
+  const f = (dd - tr.d[k - 1]) / Math.max(tr.d[k] - tr.d[k - 1], 1e-6);
+  return tr.t[k - 1] + f * (tr.t[k] - tr.t[k - 1]);
+}
+function gcPlayPrepare(sel, fast, c) {
+  const key = `${sel?.id}|${fast?.id}|${gc.tk}|${gc.k}|${mapMirror}|${mapRot}`;
+  if (key === gp.key) return;
+  gcPlayStop();
+  gp.key = key;
+  gp.sel = gcPlayTrack(sel, c);
+  gp.fast = fast && fast !== sel ? gcPlayTrack(fast, c) : null;
+  gp.T = Math.max(gp.sel ? gp.sel.t[gp.sel.t.length - 1] : 0, gp.fast ? gp.fast.t[gp.fast.t.length - 1] : 0);
+  gp.t = 0;
+  $("#gc-play").disabled = !gp.sel;
+  $("#gc-side").classList.toggle("muted", !gp.sel);
+  drawGcTraces(c);
+}
+
+// ---- inputs through the corner: speed, throttle, brake and steering of both passes, one row each,
+// on one lap-distance axis; a vertical cursor follows the replay ----
+const GC_ROWS = [["v", "Speed", "km/h", (v) => v], ["thr", "Throttle", "%", (v) => v * 100], ["brk", "Brake", "%", (v) => v * 100],
+  ["st", "Steering", "%", (v) => (v == null ? null : v * 100)]];
+function drawGcTraces(c) {
+  const el = $("#gc-traces");
+  if (typeof Plotly === "undefined") return;
+  if (!gp.sel) { Plotly.purge(el); el.innerHTML = `<div class="empty">Click a pass in the table to compare its inputs.</div>`; return; }
+  if (!el.data) el.innerHTML = "";
+  const n = GC_ROWS.length, gap = 0.04, h = (1 - gap * (n - 1)) / n, traces = [], layout = {};
+  GC_ROWS.forEach(([k, name, unit, f], r) => {
+    const ya = r ? `y${r + 1}` : "y";
+    for (const [tr, label, color, dash] of [[gp.fast, "fastest", css("--text-2"), "dash"], [gp.sel, "selected", css("--text"), "solid"]]) {
+      if (!tr) continue;
+      traces.push({ x: tr.d, y: tr[k].map(f), yaxis: ya, type: "scatter", mode: "lines", name: label, showlegend: false,
+        line: { color, width: label === "selected" ? 2 : 1.5, dash },
+        hovertemplate: `${label} · %{y:.0f} ${unit}<extra></extra>` });
+    }
+    const top = 1 - r * (h + gap);
+    layout[r ? `yaxis${r + 1}` : "yaxis"] = { ...axisStyle(), domain: [top - h, top], title: { text: `${name} (${unit})`, font: { size: 11 } },
+      zeroline: k === "st", fixedrange: true, ...(k === "thr" || k === "brk" ? { range: [-3, 103] } : {}) };
+  });
+  const apex = c.apex, [w0, w1] = gcWindow(c);
+  Plotly.react(el, traces, plotLayout({
+    margin: { l: 64, r: 12, t: 20, b: 34 }, hovermode: "x unified", showlegend: false,
+    uirevision: `${gc.tk}|${gc.k}`,
+    xaxis: { ...axisStyle(), range: [w0, w1], title: { text: "lap distance (m)", font: { size: 11 } }, anchor: GC_ROWS.length > 1 ? `y${GC_ROWS.length}` : "y" },
+    ...layout,
+    shapes: [
+      { type: "line", xref: "x", yref: "paper", x0: w0, x1: w0, y0: 0, y1: 1, visible: false, line: { color: css("--s-speed"), width: 1.5 } },
+      { type: "line", xref: "x", yref: "paper", x0: apex, x1: apex, y0: 0, y1: 1, line: { color: css("--muted"), width: 1, dash: "dot" } },
+    ],
+    annotations: [{ x: apex, y: 1, xref: "x", yref: "paper", text: `${esc(cornerName(gc.tk, c, gc.k))} apex`, showarrow: false,
+      yanchor: "bottom", font: { size: 10, color: css("--muted") } }],
+  }), { displaylogo: false, responsive: true, modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] });
+  gp.cursorAt = null;
+}
+// the cursor at the selected pass's distance, at most every 50 ms
+function gcTracesCursor() {
+  const el = $("#gc-traces"), now = performance.now();
+  if (!el.data || !gp.sel || (gp.playing && now - (gp.cursorT || 0) < 50)) return;
+  gp.cursorT = now;
+  const dd = gp.t > 0 ? gcLerp(gp.sel.d, gcAt(gp.sel, gp.t)) : null;
+  if (dd === gp.cursorAt) return;
+  gp.cursorAt = dd;
+  Plotly.relayout(el, dd == null ? { "shapes[0].visible": false } : { "shapes[0].visible": true, "shapes[0].x0": dd, "shapes[0].x1": dd });
+}
+function gcPlayShow() {
+  const el = $("#gc-heat");
+  const pos = (tr) => { if (!tr) return [null, null]; const a = gcAt(tr, gp.t); return [gcLerp(tr.X, a), gcLerp(tr.Y, a)]; };
+  const [fx, fy] = pos(gp.fast), [sx, sy] = pos(gp.sel);
+  if (el.data && gc.playIdx) Plotly.restyle(el, { x: [[fx], [sx]], y: [[fy], [sy]] }, gc.playIdx);
+  const side = (who, tr) => {
+    const box = document.querySelector(`#gc-side .gc-runner[data-who="${who}"]`), f = (k) => box.querySelector(`[data-f="${k}"]`);
+    box.hidden = !tr;
+    if (!tr) return;
+    const a = gcAt(tr, gp.t);
+    f("v").textContent = Math.round(gcLerp(tr.v, a));
+    f("g").textContent = `gear ${tr.gear[a.f < 0.5 ? a.i : a.i + 1]}`;
+    f("t").style.width = `${Math.round(100 * Math.min(1, gcLerp(tr.thr, a)))}%`;
+    f("b").style.width = `${Math.round(100 * Math.min(1, gcLerp(tr.brk, a)))}%`;
+    tr.ty.forEach((arr, k) => {
+      const v = arr[a.i] == null || arr[a.i + 1] == null ? null : gcLerp(arr, a);
+      f(`ty${k}`).textContent = v == null ? "–" : `${Math.round(v)}°`;
+    });
+  };
+  side("sel", gp.sel);
+  side("fast", gp.fast);
+  const gap = $("#gc-gap");
+  if (gp.sel && gp.fast) {
+    const ds = gcLerp(gp.sel.d, gcAt(gp.sel, gp.t)), df = gcLerp(gp.fast.d, gcAt(gp.fast, gp.t));
+    const dt = gcTimeAtDist(gp.sel, ds) - gcTimeAtDist(gp.fast, ds);  // both read the same way: 0 at the start
+    gap.textContent = `${dt > 0 ? "+" : dt < 0 ? "−" : "±"}${Math.abs(dt).toFixed(2)} s`;
+    gap.className = dt > 0.02 ? "bad" : dt < -0.02 ? "good" : "";
+    const m = Math.round(df - ds);
+    $("#gc-gap-m").textContent = m > 0 ? `${m} m behind` : m < 0 ? `${-m} m ahead` : "side by side";
+  } else {
+    gap.textContent = "–";
+    gap.className = "";
+    $("#gc-gap-m").textContent = gp.sel ? "this is the fastest pass" : "";
+  }
+  $("#gc-scrub").value = gp.T ? Math.round((gp.t / gp.T) * 1000) : 0;
+  $("#gc-clock").textContent = gp.T ? `${gp.t.toFixed(1)} / ${gp.T.toFixed(1)} s` : "";
+  gcTracesCursor();
+}
+function gcPlayStop() {
+  gp.playing = false;
+  cancelAnimationFrame(gp.raf);
+  $("#gc-play").textContent = "▶ Play";
+}
+function gcPlayFrame(now) {
+  if (!gp.playing) return;
+  gp.t = Math.min(gp.T, gp.t + ((now - gp.last) / 1000) * +$("#gc-rate").value);
+  gp.last = now;
+  gcPlayShow();
+  if (gp.t >= gp.T) { gcPlayStop(); return; }
+  gp.raf = requestAnimationFrame(gcPlayFrame);
+}
+$("#gc-play").onclick = () => {
+  if (gp.playing) { gcPlayStop(); return; }
+  if (!gp.sel) return;
+  if (gp.t >= gp.T) gp.t = 0;
+  gp.playing = true;
+  gp.last = performance.now();
+  $("#gc-play").textContent = "❚❚ Pause";
+  gp.raf = requestAnimationFrame(gcPlayFrame);
+};
+$("#gc-scrub").oninput = (e) => { gcPlayStop(); gp.t = (+e.target.value / 1000) * gp.T; gcPlayShow(); };
+$("#gc-table thead").onclick = (e) => {
+  const k = e.target.closest("th[data-k]")?.dataset.k;
+  if (!k) return;
+  const col = GC_COLS.find((x) => x[0] === k);
+  // first click: best first (fastest, latest braking, highest speed); again: the other way
+  gc.sort = gc.sort.key === k ? { key: k, dir: -gc.sort.dir } : { key: k, dir: col[3] > 0 || k === "when" ? -1 : 1 };
+  pref.set("gcSort", gc.sort);
+  renderGcTable();
+};
+$("#gc-table tbody").onclick = (e) => {
+  const id = e.target.closest("tr[data-id]")?.dataset.id;
+  if (!id) return;
+  gc.sel = id;
+  renderGcTable();
+};
+// a click on the map picks the nearest corner
+$("#gc-map").onclick = (e) => {
+  const R = gc.R, S = $("#gc-map").mapS;
+  if (!R || !S || !gc.corners.length) return;
+  const box = e.target.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top;
+  let bestK = -1, bestD = 40;
+  gc.corners.forEach((c, k) => {
+    const i = sampleAt(R, c.apex), [X, Y] = S(mapXY(R.x[i], R.z[i])), d = Math.hypot(X - x, Y - y);
+    if (d < bestD) { bestD = d; bestK = k; }
+  });
+  if (bestK >= 0 && bestK !== gc.k) selectGcCorner(bestK);
+};
+// the settings accordion: remembered open or closed; its replay map is drawn once it has a size
+// the table shows 10 passes, more scroll (header kept on top)
+function gcTableHeight() {
+  const wrap = $(".gc-table-wrap"), row = $("#gc-table tbody tr"), head = $("#gc-table thead");
+  if (!row || !row.offsetHeight) return;  // closed accordion: measured again when it opens
+  wrap.style.maxHeight = `${head.offsetHeight + row.offsetHeight * 10 + 2}px`;
+}
+// the two Corner passes accordions: open or closed remembered; their maps and charts sized once visible
+for (const [id, key, onOpen] of [
+  ["#gc-acc-passes", "gcAccPasses", () => { drawGcMap(); gcTableHeight(); }],
+  ["#gc-acc-lines", "gcAccLines", () => { for (const el of [$("#gc-heat"), $("#gc-traces")]) if (el.data) Plotly.Plots.resize(el); }],
+]) {
+  const el = $(id);
+  el.open = pref.get(key, true);
+  el.ontoggle = () => { pref.set(key, el.open); if (el.open) onOpen(); };
+}
+$("#pf-settings").open = pref.get("genieSettingsOpen", false);
+$("#pf-settings").ontoggle = () => { pref.set("genieSettingsOpen", $("#pf-settings").open); if ($("#pf-settings").open) drawPilotMap(0); };
 
 // ---------- progress: one track layout + car over every session ----------
 const pg = { combos: [], data: null, key: null, laps: {} };

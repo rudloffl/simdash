@@ -301,6 +301,73 @@
 </section>
 
 <section id="tab-genie" class="tab">
+  <div class="card gc-bar">
+    <h3>Corner passes <span class="right muted">every lap you recorded through one corner, with any car</span></h3>
+    <div class="filters gc-filters">
+      <select id="gc-track" aria-label="Track"></select>
+      <select id="gc-corner" aria-label="Corner"></select>
+      <div class="ms" id="gc-cars">
+        <button type="button" class="ms-btn" aria-haspopup="true" aria-expanded="false">All cars</button>
+        <div class="ms-pop" hidden>
+          <div class="ms-quick"><button type="button" data-all="1">All</button><button type="button" data-all="0">None</button></div>
+          <div class="ms-list"></div>
+        </div>
+      </div>
+      <label class="led-check"><input type="checkbox" id="gc-valid" checked> Valid laps only</label>
+      <span class="muted" id="gc-state"></span>
+    </div>
+  </div>
+
+  <details class="card acc" id="gc-acc-passes" open>
+  <summary><h3>Map and passes <span class="right muted">pick a corner, then a pass to compare with the fastest</span></h3></summary>
+    <div class="gc-grid">
+      <div>
+        <canvas id="gc-map" aria-label="Track map: click a corner to pick it"></canvas>
+        <div class="fx-hint" style="margin-top:4px">Click a corner on the map, or pick it above. Corners come from the fastest lap on this track.</div>
+        <div class="pf-stage gc-stage"><div class="pilot-pop" id="gc-pop" hidden></div><span class="muted">Click a pass in the table to see its card.</span></div>
+        <div class="fx-hint" id="gc-vs"></div>
+      </div>
+      <div class="gc-table-wrap"><table id="gc-table"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </details>
+
+  <details class="card acc" id="gc-acc-lines" open>
+  <summary><h3>Lines taken and inputs <span class="right muted">the selected pass against the fastest one, replayed</span></h3></summary>
+    <div class="gc-lines">
+      <div>
+        <div class="gc-heat-row">
+          <div id="gc-heat" aria-label="Heatmap of the lines taken through the corner, coloured by speed"></div>
+          <div class="gc-side" id="gc-side" aria-live="off">
+            <div class="gc-gap"><span class="muted">Gap</span><b id="gc-gap">–</b><span class="muted" id="gc-gap-m"></span></div>
+            <div class="gc-runner" data-who="sel"><div class="gc-who"><span class="dot sel"></span>Selected</div>
+              <div class="gc-v"><b data-f="v">–</b> km/h <span class="muted" data-f="g"></span></div>
+              <div class="gc-pedal"><span>Thr</span><i><u class="thr" data-f="t"></u></i></div>
+              <div class="gc-pedal"><span>Brk</span><i><u class="brk" data-f="b"></u></i></div>
+              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div></div>
+            <div class="gc-runner" data-who="fast"><div class="gc-who"><span class="dot fast"></span>Fastest</div>
+              <div class="gc-v"><b data-f="v">–</b> km/h <span class="muted" data-f="g"></span></div>
+              <div class="gc-pedal"><span>Thr</span><i><u class="thr" data-f="t"></u></i></div>
+              <div class="gc-pedal"><span>Brk</span><i><u class="brk" data-f="b"></u></i></div>
+              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div></div>
+          </div>
+        </div>
+        <div class="gc-play">
+          <button id="gc-play" type="button">▶ Play</button>
+          <input type="range" id="gc-scrub" min="0" max="1000" value="0" aria-label="Position in the replay">
+          <select id="gc-rate" aria-label="Replay speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option></select>
+          <span class="num muted" id="gc-clock"></span>
+        </div>
+        <div class="gc-legend" id="gc-legend"></div>
+      </div>
+      <div>
+        <div class="gc-traces-h muted">Selected pass solid, fastest dashed, by distance into the lap</div>
+        <div id="gc-traces" aria-label="Speed, throttle, brake and steering of the selected and the fastest pass through the corner"></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="card acc pf-settings" id="pf-settings">
+  <summary><h3>Settings and test <span class="right muted">the corner recap popup while you drive</span></h3></summary>
   <div class="pilot-grid">
     <div class="card">
       <h3>Corner Genie <span class="right muted">corner recap while you drive</span></h3>
@@ -324,6 +391,7 @@
         <label class="led-check"><input type="checkbox" data-f="exit"> Exit speed</label>
         <label class="led-check"><input type="checkbox" data-f="throttle"> Full throttle: metres after the apex (negative: before it)</label>
         <label class="led-check"><input type="checkbox" data-f="gear"> Gear</label>
+        <label class="led-check"><input type="checkbox" data-f="tip"> Tip: the one thing to change (or keep) next lap</label>
       </div>
       <div class="fx-hint" id="pf-save-note"></div>
     </div>
@@ -347,6 +415,7 @@
       <div class="fx-hint num" id="pf-replay-state"></div>
     </div>
   </div>
+  </details>
 </section>
 
 <section id="tab-shakers" class="tab">
