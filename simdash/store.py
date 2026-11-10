@@ -521,7 +521,15 @@ def corner_passes(track, variation, start, end):
                                   (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 0),
                                   (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 1),
                                   (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 2),
-                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 3)
+                                  (SELECT tyre_temp_c FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 3),
+                                  (SELECT wear FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 0),
+                                  (SELECT wear FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 1),
+                                  (SELECT wear FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 2),
+                                  (SELECT wear FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 3),
+                                  (SELECT tyre_y FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 0),
+                                  (SELECT tyre_y FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 1),
+                                  (SELECT tyre_y FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 2),
+                                  (SELECT tyre_y FROM wheel w WHERE w.tick_id = t.id AND w.wheel = 3)
                            FROM tick t JOIN telemetry e ON e.tick_id = t.id
                            WHERE t.session_id = ? AND e.lap_dist BETWEEN ? AND ? AND e.current_time >= 0
                            ORDER BY t.ts""", (sid, start, end)):
@@ -535,7 +543,9 @@ def corner_passes(track, variation, start, end):
                                 "lap": r["lap"], "lap_time": r["lap_time"], "valid": bool(r["valid"]),
                                 "samples": {k: [x[i] for x in rows] for i, k in enumerate(
                                     ("lap_dist", "lap_time", "speed", "throttle", "brake", "gear", "x", "z", "steer",
-                                     "tyre_fl", "tyre_fr", "tyre_rl", "tyre_rr"))}})
+                                     "tyre_fl", "tyre_fr", "tyre_rl", "tyre_rr",
+                                     "wear_fl", "wear_fr", "wear_rl", "wear_rr",
+                                     "height_fl", "height_fr", "height_rl", "height_rr"))}})
             con.close()
         except (sqlite3.Error, FileNotFoundError):
             continue

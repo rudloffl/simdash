@@ -29,7 +29,9 @@ simdash on a screen you can see (a second monitor or a tablet: AMS2 full screen 
     metres after it. Both are measured from the reference lap's apex, so two laps compare only where they
     braked or floored it. ✓ = within 3 m.
   - speeds: **entry** (at the braking point) | **slowest** | **exit** (100 m past the apex), km/h.
-  - gear: | the gear held at the slowest point |.
+  - gear and wear: | the gear held at the slowest point | **tyre wear** of the most worn tyre (% and which
+    tyre; red when more worn than the reference). Live, the reference's wear is not known, so only yours shows.
+    Hidden when AMS2 tyre wear is off (it then stays at 0).
 - **Tip:** one line with the single thing to change next lap, or to keep. It is not a language model: every
   difference with the reference is scored in rough "tenths" (10 m of braking or throttle point ≈ 3 km/h of
   speed) and the biggest one is put in words: *Brake 25 m later*, *Carry 7 km/h more to the apex: release
@@ -59,14 +61,20 @@ laps count.
 *Paddock Hill (C1), 24 passes. The selected pass (3rd) lost 0.10 s to the fastest: braked 15 m earlier
 and was 7 km/h slower at the apex, hence the tip. It also started the corner on tyres 14° colder.*
 
+- **Tracks** carry their country's flag and are grouped by country (the Sessions and Progress tabs too); the country list (with the number of
+  tracks in each) narrows the track list down and is remembered. AMS2 does not send the country, so it comes
+  from a table of AMS2 circuits (`TRACK_COUNTRY` in `static/app.js`); a track missing from it shows 🏁 under
+  *Other*: add a line there for it.
 - **Corners** come from the fastest detailed lap on the track, with any car, and keep the names you gave
   them ([how corners are found](corners.md)).
 - **Table** (10 rows, then it scrolls): corner time, gap to the fastest pass shown, braking point, entry /
   slowest / exit speed, full-throttle point, gear, **tyre temperature** as the corner starts (average of
-  the four; hover for each tyre), car, date and lap time. The best value of each column is green. Click a
+  the four; hover for each tyre), **tyre wear** of the most worn tyre (hover for each tyre, — when wear
+  was off), **tyre height** at the apex (AMS2 `mTyreY`, the tyre's height in the car's frame, mm:
+  average of the four, hover for each tyre), car, date and lap time. The best value of each column is green. Click a
   header to sort, click a row to select that pass.
 - **Card:** the selected pass as the popup would show it, against the fastest pass shown, tip included;
-  under it, which pass is the fastest and how the tyre temperatures compare.
+  under it, which pass is the fastest and how the tyre temperatures, wear and heights at the apex compare.
 - **Cars:** a dropdown of checkboxes with the number of passes per car, *All* and *None*.
 
 ![The cars dropdown at Laguna Seca: six cars with their number of passes](img/genie-cars.png)
@@ -85,16 +93,18 @@ still braking at 80 % where the fastest is at 65 %; the blue cursor marks the sa
 
 - **Heatmap** of the lines taken, from the braking zone to the exit: every pass is drawn as a 2 m wide
   band. The more passes go through a spot, the more solid it gets, so the line you usually take stands out;
-  the colour is their average speed there (dark blue slow, light fast in the dark theme, and the other way
-  round in the light theme). The scale covers the 5th to 95th percentile of the speeds, weighted by passes,
-  so one spin does not wash it out. Track edges show where they are mapped. Hover for the passes and
-  average speed at a spot, or for speed and lap distance along the two lines.
+  the colour is the corner time of the **fastest pass through that spot**, so the quickest line comes out in
+  the strong colour (dark blue in the light theme, light blue in the dark one) and stays solid even if you
+  took it only once, while slower lines fade. The scale runs from the fastest pass shown to the 75th
+  percentile of the corner times, at most 1 s slower, so spins and slow laps do not wash it out. Track edges show where they are mapped.
+  Hover for the passes, the fastest time through a spot and the average speed there, or for speed and lap
+  distance along the two lines.
 - **Zoom** with the Plotly toolbox: scroll to zoom, drag to pan, double-click or the home button to reset.
   The zoom stays while you change pass, cars or filters.
 - **Replay:** ▶ Play runs both passes side by side in time from the same start, at ¼×, ½× or 1×; the
   slider moves to any moment. The panel beside the map shows the **gap** (how much later or sooner the
   selected pass reached its spot, and how many metres behind or ahead it is), and for each pass the speed,
-  gear, throttle, brake and the four **tyre temperatures** (fronts on top).
+  gear, throttle, brake, the four **tyre temperatures** and, under them, the four **tyre heights** in mm (fronts on top).
 - **Inputs:** speed, throttle, brake and steering of both passes along the lap distance (selected solid,
   fastest dashed), the apex dotted, and a cursor that follows the replay. Hover to read all values at one
   distance.

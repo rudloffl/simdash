@@ -122,7 +122,9 @@
 
 <section id="tab-history" class="tab">
   <div class="filters">
-    <input id="f-search" type="search" placeholder="Search track, car, driver class…">
+    <input id="f-search" type="search" placeholder="Search track, country, car, class…">
+    <select id="f-country" aria-label="Country"></select>
+    <select id="f-track" aria-label="Track"><option value="">All tracks</option></select>
     <select id="f-type"><option value="">All sessions</option><option>Race</option><option>Qualify</option><option>Practice</option><option>Time attack</option><option>Test</option></select>
     <select id="f-day"><option value="">All days</option></select>
     <button id="f-refresh">Refresh</button>
@@ -215,7 +217,7 @@
 
 <section id="tab-progress" class="tab">
   <div class="card">
-    <h3>Progress <span class="right"><select id="pg-combo" aria-label="Track and car"></select></span></h3>
+    <h3>Progress <span class="right"><select id="pg-country" aria-label="Country"></select> <select id="pg-combo" aria-label="Track and car"></select></span></h3>
     <div class="tiles" id="pg-tiles"></div>
   </div>
   <div class="card">
@@ -304,6 +306,7 @@
   <div class="card gc-bar">
     <h3>Corner passes <span class="right muted">every lap you recorded through one corner, with any car</span></h3>
     <div class="filters gc-filters">
+      <select id="gc-country" aria-label="Country"></select>
       <select id="gc-track" aria-label="Track"></select>
       <select id="gc-corner" aria-label="Corner"></select>
       <div class="ms" id="gc-cars">
@@ -336,19 +339,21 @@
     <div class="gc-lines">
       <div>
         <div class="gc-heat-row">
-          <div id="gc-heat" aria-label="Heatmap of the lines taken through the corner, coloured by speed"></div>
+          <div id="gc-heat" aria-label="Heatmap of the lines taken through the corner, coloured by the time of the fastest pass through each spot"></div>
           <div class="gc-side" id="gc-side" aria-live="off">
             <div class="gc-gap"><span class="muted">Gap</span><b id="gc-gap">–</b><span class="muted" id="gc-gap-m"></span></div>
             <div class="gc-runner" data-who="sel"><div class="gc-who"><span class="dot sel"></span>Selected</div>
               <div class="gc-v"><b data-f="v">–</b> km/h <span class="muted" data-f="g"></span></div>
               <div class="gc-pedal"><span>Thr</span><i><u class="thr" data-f="t"></u></i></div>
               <div class="gc-pedal"><span>Brk</span><i><u class="brk" data-f="b"></u></i></div>
-              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div></div>
+              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div>
+              <div class="gc-tyres gc-heights" title="Tyre height in the car's frame (AMS2 mTyreY, mm): front left, front right, rear left, rear right"><span data-f="th0">–</span><span data-f="th1">–</span><span data-f="th2">–</span><span data-f="th3">–</span></div></div>
             <div class="gc-runner" data-who="fast"><div class="gc-who"><span class="dot fast"></span>Fastest</div>
               <div class="gc-v"><b data-f="v">–</b> km/h <span class="muted" data-f="g"></span></div>
               <div class="gc-pedal"><span>Thr</span><i><u class="thr" data-f="t"></u></i></div>
               <div class="gc-pedal"><span>Brk</span><i><u class="brk" data-f="b"></u></i></div>
-              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div></div>
+              <div class="gc-tyres" title="Tyre temperatures: front left, front right, rear left, rear right"><span data-f="ty0">–</span><span data-f="ty1">–</span><span data-f="ty2">–</span><span data-f="ty3">–</span></div>
+              <div class="gc-tyres gc-heights" title="Tyre height in the car's frame (AMS2 mTyreY, mm): front left, front right, rear left, rear right"><span data-f="th0">–</span><span data-f="th1">–</span><span data-f="th2">–</span><span data-f="th3">–</span></div></div>
           </div>
         </div>
         <div class="gc-play">
@@ -391,6 +396,7 @@
         <label class="led-check"><input type="checkbox" data-f="exit"> Exit speed</label>
         <label class="led-check"><input type="checkbox" data-f="throttle"> Full throttle: metres after the apex (negative: before it)</label>
         <label class="led-check"><input type="checkbox" data-f="gear"> Gear</label>
+        <label class="led-check"><input type="checkbox" data-f="wear"> Tyre wear: the most worn tyre (AMS2 tyre wear must be on)</label>
         <label class="led-check"><input type="checkbox" data-f="tip"> Tip: the one thing to change (or keep) next lap</label>
       </div>
       <div class="fx-hint" id="pf-save-note"></div>

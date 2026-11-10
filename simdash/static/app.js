@@ -765,6 +765,74 @@ window.addEventListener("resize", () => { live.dirty = true; if (replay.cars) dr
 const hist = { sessions: [], ref: null, detail: null, lap: null, lapData: null, cmp: null, cmpData: null, cmpLabel: null,
   lapReq: {}, loaded: {}, shown: new Set(), zoomDist: null, mapRev: null, mapMarker: 0 };
 
+// ---- circuit countries: AMS2 sends only the track and layout names, so the country comes from this table ----
+// keys are matched inside the track name (then the layout name), lower case, letters and digits only
+const TRACK_COUNTRY = {
+  // United Kingdom
+  brandshatch: "GB", cadwell: "GB", donington: "GB", knockhill: "GB", oultonpark: "GB", silverstone: "GB", snetterton: "GB",
+  thruxton: "GB", croft: "GB", goodwood: "GB", lydden: "GB",
+  // United States
+  daytona: "US", lagunaseca: "US", roadamerica: "US", roadatlanta: "US", watkinsglen: "US", midohio: "US", longbeach: "US",
+  cleveland: "US", indianapolis: "US", fontana: "US", autoclub: "US", virginia: "US", vir: "US", sebring: "US",
+  talladega: "US", texasmotor: "US", cota: "US", circuitoftheamericas: "US", sonoma: "US", lasvegas: "US",
+  // Brazil
+  interlagos: "BR", jacarepagua: "BR", brasilia: "BR", campogrande: "BR", cascavel: "BR", curitiba: "BR", goiania: "BR",
+  guapore: "BR", londrina: "BR", salvador: "BR", santacruz: "BR", taruma: "BR", velocitta: "BR", velopark: "BR",
+  granjaviana: "BR", speedland: "BR", ascurra: "BR", foz: "BR",
+  // rest of Europe
+  spielberg: "AT", redbullring: "AT", osterreichring: "AT", spa: "BE", francorchamps: "BE", zolder: "BE",
+  hockenheim: "DE", nurburgring: "DE", nordschleife: "DE", norisring: "DE", sachsenring: "DE", oschersleben: "DE",
+  monza: "IT", imola: "IT", mugello: "IT", misano: "IT", vallelunga: "IT", ortona: "IT", lemans: "FR", sarthe: "FR",
+  paulricard: "FR", magnycours: "FR", dijon: "FR", barcelona: "ES", catalunya: "ES", jerez: "ES", aragon: "ES",
+  valencia: "ES", estoril: "PT", portimao: "PT", algarve: "PT", zandvoort: "NL", assen: "NL", hungaroring: "HU",
+  brno: "CZ", slovakiaring: "SK", azure: "MC", monaco: "MC", montecarlo: "MC", anderstorp: "SE", mantorp: "SE",
+  // rest of the world
+  bathurst: "AU", mountpanorama: "AU", adelaide: "AU", phillipisland: "AU", sandown: "AU", kyalami: "ZA",
+  buenosaires: "AR", termas: "AR", riohondo: "AR", cordoba: "AR", montreal: "CA", gillesvilleneuve: "CA",
+  mosport: "CA", canadiantire: "CA", kansai: "JP", suzuka: "JP", fuji: "JP", sugo: "JP", motegi: "JP", okayama: "JP",
+  zhuhai: "CN", shanghai: "CN", ibarra: "EC", yahuarcocha: "EC", sepang: "MY", bahrain: "BH", sakhir: "BH",
+  yasmarina: "AE", mexico: "MX", hermanosrodriguez: "MX",
+};
+const trackNorm = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "");
+const TRACK_KEYS = Object.keys(TRACK_COUNTRY).map((k) => [trackNorm(k), TRACK_COUNTRY[k]]).sort((a, b) => b[0].length - a[0].length);
+function trackCountry(track, variation) {
+  for (const name of [track, variation]) {
+    const n = trackNorm(name);
+    // short keys (vir, spa, foz...) must be the whole name or its start, not any substring
+    const hit = n && TRACK_KEYS.find(([k]) => (k.length <= 4 ? n === k || n.startsWith(k) : n.includes(k)));
+    if (hit) return hit[1];
+  }
+  return null;
+}
+// flag emoji from a two-letter code (regional indicator letters); a chequered flag when unknown
+const countryFlag = (cc) => (cc ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "🏁");
+const countryNames = (() => { try { return new Intl.DisplayNames(["en"], { type: "region" }); } catch { return null; } })();
+const countryName = (cc) => (cc ? countryNames?.of(cc) || cc : "Other");
+const NO_CC = "-";  // value of the "Other" country: tracks missing from TRACK_COUNTRY
+const ccKey = (cc) => cc || NO_CC, ccOf = (k) => (k === NO_CC ? null : k);
+const byCountryName = (a, b) => (a === NO_CC) - (b === NO_CC) || countryName(ccOf(a)).localeCompare(countryName(ccOf(b)));
+const trackLabel = (t) => `${countryFlag(trackCountry(t.track, t.variation))} ${esc(t.track)}${t.variation && t.variation !== t.track ? ` · ${esc(t.variation)}` : ""}`;
+// a country <select>: "All countries" and each country of the items with a flag and a count
+function countrySelect(el, items, cur, noun) {
+  const n = new Map();
+  for (const x of items) { const k = ccKey(trackCountry(x.track, x.variation)); n.set(k, (n.get(k) || 0) + 1); }
+  const keys = [...n.keys()].sort(byCountryName);
+  const plural = (k) => (noun ? `${k} ${noun}${k > 1 ? "s" : ""}` : `${k}`);
+  el.innerHTML = `<option value="">🌍 All countries (${plural(items.length)})</option>`
+    + keys.map((k) => `<option value="${k}">${countryFlag(ccOf(k))} ${esc(countryName(ccOf(k)))} (${plural(n.get(k))})</option>`).join("");
+  el.value = keys.includes(cur) ? cur : "";
+  return el.value;
+}
+const inCountry = (x, cc) => !cc || ccKey(trackCountry(x.track, x.variation)) === cc;
+// <option>s of the items: grouped under each country's name when no country is picked
+function countryOptions(items, cc, opt) {
+  if (cc) return items.map(opt).join("");
+  const groups = new Map();
+  for (const x of items) { const k = ccKey(trackCountry(x.track, x.variation)); groups.set(k, [...(groups.get(k) || []), x]); }
+  return [...groups].sort((a, b) => byCountryName(a[0], b[0]))
+    .map(([k, xs]) => `<optgroup label="${esc(countryName(ccOf(k)))}">${xs.map(opt).join("")}</optgroup>`).join("");
+}
+
 async function loadSessions() {
   try {
     hist.sessions = await (await fetch("/api/sessions")).json();
@@ -774,16 +842,33 @@ async function loadSessions() {
   const days = [...new Set(hist.sessions.map((s) => s.day))];
   const sel = $("#f-day"), cur = sel.value;
   sel.innerHTML = `<option value="">All days</option>` + days.map((d) => `<option ${d === cur ? "selected" : ""}>${d}</option>`).join("");
+  hist.country = countrySelect($("#f-country"), hist.sessions, hist.country ?? pref.get("sessionsCountry", ""), "session");
+  renderSessionTracks();
   renderSessions();
   const m = location.hash.match(/session=([\d-]+:\d+)/);
   if (m && m[1] !== hist.ref) openSession(m[1]);
 }
 
+// the track filter: the tracks of the chosen country (all of them grouped by country), with their sessions
+function renderSessionTracks() {
+  const cur = $("#f-track").value, by = new Map();
+  for (const s of hist.sessions.filter((x) => inCountry(x, hist.country))) {
+    const k = `${s.track}|${s.variation}`;
+    const t = by.get(k) || { key: k, track: s.track, variation: s.variation, n: 0 };
+    t.n++;
+    by.set(k, t);
+  }
+  const tracks = [...by.values()].sort((a, b) => a.track.localeCompare(b.track) || a.variation.localeCompare(b.variation));
+  $("#f-track").innerHTML = `<option value="">All tracks</option>` + countryOptions(tracks, hist.country,
+    (t) => `<option value="${esc(t.key)}">${trackLabel(t)} (${t.n})</option>`);
+  $("#f-track").value = by.has(cur) ? cur : "";
+}
 function renderSessions() {
   const q = $("#f-search").value.trim().toLowerCase();
-  const type = $("#f-type").value, day = $("#f-day").value;
+  const type = $("#f-type").value, day = $("#f-day").value, track = $("#f-track").value;
   const rows = hist.sessions.filter((s) => (!type || s.session_type === type) && (!day || s.day === day)
-    && (!q || [s.track, s.variation, s.car, s.car_class, s.session_type].join(" ").toLowerCase().includes(q)));
+    && inCountry(s, hist.country) && (!track || `${s.track}|${s.variation}` === track)
+    && (!q || [s.track, s.variation, s.car, s.car_class, s.session_type, countryName(trackCountry(s.track, s.variation))].join(" ").toLowerCase().includes(q)));
   $("#f-count").textContent = `${rows.length} session${rows.length === 1 ? "" : "s"}`;
   const tb = $("#sessions-table tbody");
   if (!rows.length) {
@@ -796,7 +881,7 @@ function renderSessions() {
     return `<tr data-ref="${s.ref}" class="${s.ref === hist.ref ? "sel" : ""}">
       <td>${s.day}</td><td>${t.toTimeString().slice(0, 5)}</td>
       <td><span class="pill ${esc((s.session_type || "").toLowerCase())}">${esc(s.session_type)}</span></td>
-      <td>${esc(s.track)} <span class="muted">${esc(s.variation)}</span></td><td>${esc(s.car)}</td>
+      <td><span title="${esc(countryName(trackCountry(s.track, s.variation)))}">${countryFlag(trackCountry(s.track, s.variation))}</span> ${esc(s.track)} <span class="muted">${esc(s.variation)}</span></td><td>${esc(s.car)}</td>
       <td class="r">${s.laps ?? 0}</td><td class="r">${fmtLap(s.best_lap)}</td><td class="r">${pos}</td>
       <td class="r">${s.ended_at ? fmtDur(s.driving_s) : "live"}</td></tr>`;
   }).join("");
@@ -805,6 +890,13 @@ $("#sessions-table tbody").onclick = (e) => { const tr = e.target.closest("tr[da
 $("#f-search").oninput = renderSessions;
 $("#f-type").onchange = renderSessions;
 $("#f-day").onchange = renderSessions;
+$("#f-country").onchange = (e) => {
+  hist.country = e.target.value;
+  pref.set("sessionsCountry", hist.country);
+  renderSessionTracks();
+  renderSessions();
+};
+$("#f-track").onchange = renderSessions;
 $("#f-refresh").onclick = loadSessions;
 
 async function openSession(ref) {
@@ -829,7 +921,7 @@ async function openSession(ref) {
   renderSessions();
   const s = d.session;
   $("#session-detail").hidden = false;
-  $("#d-title").textContent = `${s.session_type} · ${s.track} ${s.variation}`;
+  $("#d-title").textContent = `${s.session_type} · ${countryFlag(trackCountry(s.track, s.variation))} ${s.track} ${s.variation}`;
   $("#d-sub").textContent = `${s.car} (${s.car_class}) · ${new Date(s.started_at * 1000).toLocaleString()}${d.live ? " · recording now" : ""}`;
   $("#d-csv").href = `/api/sessions/${ref}/samples.csv`;
   $("#d-progress").href = `#progress=${encodeURIComponent(comboKey(s))}`;
@@ -2331,7 +2423,7 @@ $("#rp-lap").onchange = (ev) => {
 // track with this car) over that corner, up to the trigger point just after its apex.
 // used until the server's settings arrive (or if this simdash is older than the settings API)
 const PILOT_DEFAULTS = { enabled: true, duration: 4, position: "top", size: "screen", only: "all", min_delta: 0.05,
-  fields: { time: true, brake: true, throttle: true, entry: true, min: true, exit: true, gear: true, tip: true } };
+  fields: { time: true, brake: true, throttle: true, entry: true, min: true, exit: true, gear: true, wear: true, tip: true } };
 const pf = { s: PILOT_DEFAULTS, saveT: null, replay: null, saved: true };
 const pilot = { lap: null, rows: [], next: null, corners: null };
 const pilotTrigger = (c) => Math.min(c.e, c.apex + 120);
@@ -2377,11 +2469,22 @@ const PILOT_ICON_PATHS = {
   exit: '<path d="M3 5h8q8 0 8 8v8" opacity=".3"/><path d="M19 13v8"/><path d="M16 18l3 3 3-3"/>',
   gear: '<path d="M6 4v16M12 4v16M18 4v8M6 12h12"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="12" cy="20" r="1.5" fill="currentColor"/>',
   throttle: '<path d="M8 3h8l1.5 13h-11z"/><path d="M9.5 7h5M9 10.5h6"/><path d="M12 16v5M8 21h8"/>',
+  wear: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>',
   tip: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
 };
 const PILOT_ICON_NAMES = { time: "Time gained or lost in the corner", brake: "Braking point: metres before the apex",
   throttle: "Full throttle: metres after the apex", entry: "Entry speed",
-  min: "Slowest speed", exit: "Exit speed", gear: "Gear at the slowest point", tip: "Tip for the next lap" };
+  min: "Slowest speed", exit: "Exit speed", gear: "Gear at the slowest point",
+  wear: "Tyre wear: the most worn tyre", tip: "Tip for the next lap" };
+// tyre wear (AMS2: 0 new … 1 worn, FL FR RL RR): the most worn tyre, or null when wear is off (it stays ~0)
+const WHEEL_NAMES = ["FL", "FR", "RL", "RR"];
+function worstWear(w) {
+  if (!w?.length || w.some((v) => v == null)) return null;
+  const k = w.indexOf(Math.max(...w));
+  return w[k] < 0.0005 ? null : { k, v: w[k], name: WHEEL_NAMES[k] };
+}
+const fmtWear = (v) => `${(v * 100).toFixed(1)} %`;
+const wearTitle = (w) => (w?.length && w.every((v) => v != null) ? `Wear: ${w.map((v, k) => `${WHEEL_NAMES[k]} ${fmtWear(v)}`).join(" · ")}` : "");
 const pilotIcon = (k) => `<svg class="pp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${PILOT_ICON_NAMES[k]}"><title>${PILOT_ICON_NAMES[k]}</title>${PILOT_ICON_PATHS[k]}</svg>`;
 
 // a one-line coaching tip from the corner's numbers (rules, no model): every difference with the best lap is
@@ -2425,6 +2528,14 @@ function pilotTip(rec) {
   return { text: "As fast as your best", cls: "pp-same" };
 }
 
+// the most worn tyre now, and the reference's when known (more wear: red, a hint that grip is going)
+function pilotWear(rec) {
+  const w = worstWear(rec.wear);
+  if (!w) return "";
+  const r = worstWear(rec.refWear), d = r ? w.v - r.v : 0;
+  const cls = !r || Math.abs(d) < 0.002 ? "pp-same" : d > 0 ? "pp-bad" : "pp-good";
+  return `<span class="pp-item" title="${esc(wearTitle(rec.wear))}">${pilotIcon("wear")}<b>${fmtWear(w.v)}</b><span class="${cls}">${w.name}${r ? ` · best ${fmtWear(r.v)}` : ""}</span></span>`;
+}
 function pilotHtml(rec, s) {
   const f = s.fields, { a, b } = rec;
   const item = (k, body) => `<span class="pp-item">${pilotIcon(k)}${body}</span>`;
@@ -2444,7 +2555,8 @@ function pilotHtml(rec, s) {
     [f.brake && (a.brakeToApex != null || b.brakeToApex != null) ? dist("brake", a.brakeToApex, b.brakeToApex) : "", "",
       f.throttle ? dist("throttle", a.full, b.full) : ""],
     [f.entry ? sp("entry", a.entry, b.entry) : "", f.min ? sp("min", a.min, b.min) : "", f.exit ? sp("exit", a.exit, b.exit) : ""],
-    ["", f.gear && a.gear != null ? item("gear", `<b>${a.gear}</b>${b.gear != null && b.gear !== a.gear ? `<span class="pp-same">best ${b.gear}</span>` : ""}`) : "", ""],
+    ["", f.gear && a.gear != null ? item("gear", `<b>${a.gear}</b>${b.gear != null && b.gear !== a.gear ? `<span class="pp-same">best ${b.gear}</span>` : ""}`) : "",
+      f.wear !== false ? pilotWear(rec) : ""],
   ].filter((r) => r.some(Boolean));
   const dtCls = rec.dt < -0.02 ? "pp-good" : rec.dt > 0.02 ? "pp-bad" : "";
   const dt = f.time ? `<span class="pp-dt ${dtCls}">${pilotIcon("time")}${rec.dt > 0 ? "+" : rec.dt < 0 ? "−" : "±"}${Math.abs(rec.dt).toFixed(2)} s</span>` : "";
@@ -2484,6 +2596,7 @@ function pilotRow(r, fresh) {
     if (!fresh || !pf.s?.enabled) continue;
     if (pilot.rows[0][LT.dist] > Math.max(c.s, 0) + 100) continue;  // not seen from the corner's start
     const rec = pilotRecap(rowsAsLap(pilot.rows), focus.ref, c, k, focus.trackKey, Math.min(d, c.e));
+    if (rec) rec.wear = live.data?.car?.wear;
     // no corner recap on the Track edges page or while mapping edges (the lap is not a real lap)
     if (rec && pilotWanted(rec) && currentTab !== "edges" && !live.data?.mapping) showPilot($("#pilot-pop"), rec);
   }
@@ -2535,7 +2648,8 @@ document.querySelectorAll(".pf-fields input[data-f]").forEach((i) => i.insertAdj
 
 const PILOT_SAMPLE = { name: "C6 Hawthorn", dt: 0.12,
   a: { brake: 2290, brakeToApex: 97, full: 52, entry: 149, min: 93, exit: 127, gear: 3 },
-  b: { brake: 2302, brakeToApex: 85, full: 38, entry: 153, min: 91, exit: 130, gear: 3 } };
+  b: { brake: 2302, brakeToApex: 85, full: 38, entry: 153, min: 91, exit: 130, gear: 3 },
+  wear: [0.021, 0.034, 0.017, 0.026], refWear: [0.008, 0.012, 0.006, 0.009] };
 // tests show the card twice: in the preview box, and as the real popup over the page
 const pilotTest = (rec) => { pilotPreview(rec); showPilot($("#pilot-pop"), rec); };
 // the preview box always shows a card: the latest test or replay one, else the sample
@@ -2638,6 +2752,10 @@ const gc = { tracks: [], tk: null, R: null, corners: [], k: null, passes: null, 
   sort: pref.get("gcSort", { key: "time", dir: 1 }), req: 0 };
 const GC_MARGIN = 60;
 const GC_TYRES = ["tyre_fl", "tyre_fr", "tyre_rl", "tyre_rr"];
+const GC_HEIGHTS = ["height_fl", "height_fr", "height_rl", "height_rr"];
+// tyre height (AMS2 mTyreY: the tyre's height in the car's frame, m) shown in mm
+const fmtHeight = (v) => `${Math.round(v * 1000)} mm`;
+const heightTitle = (h) => (h?.length && h.every((v) => v != null) ? `Tyre height at the apex: ${h.map((v, k) => `${WHEEL_NAMES[k]} ${fmtHeight(v)}`).join(" · ")}` : "");
 const gcTyreTitle = (t) => (t?.length ? `FL ${Math.round(t[0])}° · FR ${Math.round(t[1])}° · RL ${Math.round(t[2])}° · RR ${Math.round(t[3])}°` : "");  // m fetched past each end of the corner, so times interpolate at its exact edges
 // [key, header, value of a pass's stats, better: -1 lower is better, 1 higher, 0 no best, format]
 const GC_COLS = [
@@ -2650,6 +2768,8 @@ const GC_COLS = [
   ["full", "Full thr.", (p) => p.st.full, -1, (v) => `${Math.round(v)} m`],
   ["gear", "Gear", (p) => p.st.gear, 0, (v) => v],
   ["tyres", "Tyres", (p) => p.tyreAvg, 0, (v) => `${Math.round(v)}°`],
+  ["wear", "Wear", (p) => p.wearMax?.v ?? null, 0, (v) => fmtWear(v)],
+  ["height", "Height", (p) => p.heightAvg, 0, (v) => fmtHeight(v)],
   ["car", "Car", (p) => p.car, 0, (v) => esc(v)],
   ["when", "When", (p) => p.started_at, 0, (v) => new Date(v * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })],
   ["lap", "Lap", (p) => p.lap_time, 0, (v) => fmtLap(v)],
@@ -2657,7 +2777,9 @@ const GC_COLS = [
 const GC_TITLES = { time: "Time from the corner's start to its end", delta: "Slower than the fastest pass shown",
   brake: "Braking point: metres before the apex", entry: "Entry speed (km/h)", min: "Slowest speed (km/h)",
   exit: "Exit speed (km/h)", full: "Full throttle: metres after the apex", gear: "Gear at the slowest point",
-  tyres: "Tyre temperature as the corner starts: average of the four (°C), hover for each tyre" };
+  tyres: "Tyre temperature as the corner starts: average of the four (°C), hover for each tyre",
+  wear: "Tyre wear as the corner starts: the most worn tyre, hover for each tyre (— : tyre wear off)",
+  height: "Tyre height in the car's frame at the apex (AMS2 mTyreY): average of the four (mm), hover for each tyre" };
 
 async function loadCornerPassesTab() {
   if (gc.tracks.length) { drawGcMap(); drawGcHeat(); return; }
@@ -2671,12 +2793,22 @@ async function loadCornerPassesTab() {
     by.set(k, t);
   }
   gc.tracks = [...by.values()].sort((a, b) => b.last - a.last);
-  $("#gc-track").innerHTML = gc.tracks.map((t) => `<option value="${esc(t.key)}">${esc(t.track)}${t.variation && t.variation !== t.track ? ` ${esc(t.variation)}` : ""}</option>`).join("");
   if (!gc.tracks.length) { $("#gc-state").textContent = "No session recorded yet."; return; }
   // the live track first, else the last one picked, else the latest driven
   const want = [focus.trackKey, pref.get("gcTrack", null)].find((k) => k && by.has(k)) || gc.tracks[0].key;
-  $("#gc-track").value = want;
+  // the country filter: kept from last time unless the wanted track is elsewhere
+  const cc = pref.get("gcCountry", "");
+  gc.country = inCountry(by.get(want), cc) ? countrySelect($("#gc-country"), gc.tracks, cc, "track") : countrySelect($("#gc-country"), gc.tracks, "", "track");
+  renderGcTrackOptions(want);
   selectGcTrack(want);
+}
+// tracks of the chosen country, latest driven first; with all countries, grouped by country
+function renderGcTrackOptions(want = gc.tk) {
+  const shown = gc.tracks.filter((t) => inCountry(t, gc.country));
+  $("#gc-track").innerHTML = countryOptions(shown, gc.country,
+    (t) => `<option value="${esc(t.key)}">${trackLabel(t)} (${t.sessions.length} session${t.sessions.length > 1 ? "s" : ""})</option>`);
+  $("#gc-track").value = shown.some((t) => t.key === want) ? want : shown[0]?.key ?? "";
+  return $("#gc-track").value;
 }
 
 // reference for the corners: the fastest lap on the layout, with any car, that was recorded in full detail
@@ -2745,7 +2877,11 @@ async function selectGcCorner(k) {
     // tyre temperatures (°C, FL FR RL RR) as the corner starts, for context
     const i0 = sampleAt(L, c.s), tyres = L.tyre_fl ? GC_TYRES.map((w) => L[w][i0]) : [];
     const tyreAvg = tyres.length && tyres.every((v) => v != null) ? tyres.reduce((a, v) => a + v, 0) / 4 : null;
-    return { ...p, st, tyres, tyreAvg, coarse: span / L.lap_dist.length > 6, id: `${p.ref}/${p.lap}` };
+    const wear = L.wear_fl ? ["wear_fl", "wear_fr", "wear_rl", "wear_rr"].map((w) => L[w][i0]) : [];
+    // tyre heights (m, FL FR RL RR) at the reference apex, where the suspension works hardest
+    const iA = sampleAt(L, c.apex), heights = L.height_fl ? GC_HEIGHTS.map((w) => L[w][iA]) : [];
+    const heightAvg = heights.length && heights.every((v) => v != null) ? heights.reduce((a, v) => a + v, 0) / 4 : null;
+    return { ...p, st, tyres, tyreAvg, wear, wearMax: worstWear(wear), heights, heightAvg, coarse: span / L.lap_dist.length > 6, id: `${p.ref}/${p.lap}` };
   }).filter(Boolean);
   renderGcCars();
   // the latest pass is the one shown first
@@ -2794,7 +2930,7 @@ function renderGcTable() {
     + GC_COLS.map(([k, , g, , fmt]) => {
       const v = g(p), cls = [!["car", "when"].includes(k) && "r", k === "car" && "gc-car", v != null && best[k] === v && !p.coarse && "best",
         k === "lap" && !p.valid && "invalid"].filter(Boolean).join(" ");
-      const tip = k === "car" ? p.car : k === "tyres" ? gcTyreTitle(p.tyres) : "";
+      const tip = k === "car" ? p.car : k === "tyres" ? gcTyreTitle(p.tyres) : k === "wear" ? wearTitle(p.wear) : k === "height" ? heightTitle(p.heights) : "";
       return `<td class="${cls}"${tip ? ` title="${esc(tip)}"` : ""}>${v == null ? "—" : fmt(v)}</td>`;
     }).join("") + "</tr>").join("");
   const coarse = shown.filter((p) => p.coarse).length;
@@ -2810,12 +2946,18 @@ function showGcCard(p, fastest) {
   const el = $("#gc-pop");
   if (!p) { el.hidden = true; $("#gc-vs").textContent = ""; return; }
   const c = gc.corners[gc.k];
-  showPilot(el, { name: cornerName(gc.tk, c, gc.k), dt: p.st.time - fastest.st.time, a: p.st, b: fastest.st, c }, pf.s, true);
-  const ty = (q) => (q.tyreAvg == null ? "" : ` (tyres ${Math.round(q.tyreAvg)}°)`);
+  showPilot(el, { name: cornerName(gc.tk, c, gc.k), dt: p.st.time - fastest.st.time, a: p.st, b: fastest.st, c,
+    wear: p.wear, refWear: p === fastest ? null : fastest.wear }, pf.s, true);
+  const ty = (q) => (q.tyreAvg == null && !q.wearMax ? ""
+    : ` (tyres ${[q.tyreAvg != null && `${Math.round(q.tyreAvg)}°`, q.wearMax && `${fmtWear(q.wearMax.v)} worn`].filter(Boolean).join(", ")})`);
   $("#gc-vs").textContent = (p === fastest ? `This is the fastest pass shown${ty(p)}.`
     : `Against the fastest pass: ${fastest.car}, ${new Date(fastest.started_at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" })}, lap ${fastest.lap}${ty(fastest)}.`
       + (p.tyreAvg != null ? ` This pass started the corner on tyres at ${Math.round(p.tyreAvg)}°${fastest.tyreAvg != null
-        ? ` (${p.tyreAvg - fastest.tyreAvg >= 0 ? "+" : "−"}${Math.abs(Math.round(p.tyreAvg - fastest.tyreAvg))}°)` : ""}.` : ""));
+        ? ` (${p.tyreAvg - fastest.tyreAvg >= 0 ? "+" : "−"}${Math.abs(Math.round(p.tyreAvg - fastest.tyreAvg))}°)` : ""}.` : "")
+      + (p.wearMax ? ` Most worn tyre: ${p.wearMax.name} at ${fmtWear(p.wearMax.v)}${fastest.wearMax
+        ? ` (fastest: ${fmtWear(fastest.wearMax.v)})` : ""}.` : "")
+      + (p.heightAvg != null && fastest.heightAvg != null ? ` Tyre height at the apex: ${fmtHeight(p.heightAvg)} on average`
+        + ` (fastest: ${fmtHeight(fastest.heightAvg)}).` : ""));
 }
 
 function drawGcMap() {
@@ -2829,6 +2971,12 @@ function drawGcMap() {
 }
 
 $("#gc-track").onchange = (e) => selectGcTrack(e.target.value);
+$("#gc-country").onchange = (e) => {
+  gc.country = e.target.value;
+  pref.set("gcCountry", gc.country);
+  const tk = renderGcTrackOptions();
+  if (tk && tk !== gc.tk) selectGcTrack(tk);
+};
 $("#gc-corner").onchange = (e) => selectGcCorner(+e.target.value);
 $("#gc-valid").onchange = () => renderGcTable();
 
@@ -2898,9 +3046,11 @@ function gcHeatData() {
   x0 -= pad; x1 += pad; y0 -= pad; y1 += pad;
   const GW = Math.ceil((x1 - x0) / GC_CELL), GH = Math.ceil((y1 - y0) / GC_CELL);
   const count = new Uint16Array(GW * GH), speed = new Float32Array(GW * GH), stamp = new Int32Array(GW * GH).fill(-1);
+  // each spot keeps the corner time of the fastest pass through it: the best line comes out in the strong colour
+  const best = new Float32Array(GW * GH).fill(Infinity);
   const r2 = GC_RIBBON * GC_RIBBON + 1;
   used.forEach((p, n) => {
-    const pts = paths.get(p.id);
+    const pts = paths.get(p.id), time = p.st.time;
     for (let i = 1; i < pts.length; i++) {
       const [ax, ay, av] = pts[i - 1], [bx, by, bv] = pts[i];
       const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (GC_CELL / 2)));
@@ -2915,27 +3065,32 @@ function gcHeatData() {
           stamp[j] = n;
           count[j]++;
           speed[j] += v;
+          if (time < best[j]) best[j] = time;
         }
       }
     }
   });
-  let maxN = 0, total = 0;
-  const vals = [];
+  let maxN = 0;
   for (let j = 0; j < count.length; j++) {
     if (!count[j]) continue;
     speed[j] /= count[j];
     maxN = Math.max(maxN, count[j]);
-    vals.push([speed[j], count[j]]);
-    total += count[j];
   }
-  // colour scale over the 5th to 95th percentile, each spot weighted by its passes, so one spin at walking
-  // pace (a spot few passes go through) does not wash out the line everyone takes
-  vals.sort((a, b) => a[0] - b[0]);
-  const pct = (q) => { let acc = 0; for (const [v, n] of vals) { acc += n; if (acc >= q * total) return v; } return vals[vals.length - 1][0]; };
-  const lo = pct(0.05), hi = pct(0.95);
-  return { c, shown, fastest, paths, used, grid: { x0, x1, y0, y1, GW, GH, count, speed, maxN, lo, hi } };
+  // colour scale: the fastest pass drawn .. the 75th percentile of the corner times, kept between 0.3 and 1 s
+  // wide, so spins and slow laps do not squeeze every real pass into the same colour
+  const times = used.map((p) => p.st.time).sort((a, b) => a - b);
+  const lo = times[0], hi = Math.min(lo + 1, Math.max(times[Math.floor((times.length - 1) * 0.75)], lo + 0.3));
+  return { c, shown, fastest, paths, used, grid: { x0, x1, y0, y1, GW, GH, count, speed, best, maxN, lo, hi } };
 }
 
+// fast and slow colours of the lines: fast is the end of the blue ramp that stands out most from the
+// background (dark in the light theme, light in the dark one), slow the one that fades into it
+function gcTimeRamp() {
+  const lum = (c) => { const [r, g, b] = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const a = css("--seq-lo"), b = css("--seq-hi"), bg = css("--surface-2");
+  if (!/^#[0-9a-f]{6}$/i.test(bg)) return [a, b];
+  return Math.abs(lum(a) - lum(bg)) >= Math.abs(lum(b) - lum(bg)) ? [a, b] : [b, a];
+}
 // the heat as a PNG, track surface underneath: one pixel per cell
 function gcHeatImage(G, c) {
   const off = document.createElement("canvas");
@@ -2959,15 +3114,16 @@ function gcHeatImage(G, c) {
   heat.width = G.GW; heat.height = G.GH;
   const img = heat.getContext("2d").createImageData(G.GW, G.GH);
   const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16));
-  const [lo, hi] = [hex(css("--seq-lo")), hex(css("--seq-hi"))], span = Math.max(G.hi - G.lo, 1);
+  const [fast, slow] = gcTimeRamp().map(hex), span = Math.max(G.hi - G.lo, 0.01);
   for (let j = 0; j < G.count.length; j++) {
     const n = G.count[j];
     if (!n) continue;
-    const f = Math.min(1, Math.max(0, (G.speed[j] - G.lo) / span));
-    img.data[j * 4] = lo[0] + (hi[0] - lo[0]) * f;
-    img.data[j * 4 + 1] = lo[1] + (hi[1] - lo[1]) * f;
-    img.data[j * 4 + 2] = lo[2] + (hi[2] - lo[2]) * f;
-    img.data[j * 4 + 3] = 255 * (0.18 + 0.82 * Math.sqrt(n / G.maxN));
+    const f = Math.min(1, Math.max(0, (G.best[j] - G.lo) / span));  // 0: fastest pass, 1: slow
+    img.data[j * 4] = fast[0] + (slow[0] - fast[0]) * f;
+    img.data[j * 4 + 1] = fast[1] + (slow[1] - fast[1]) * f;
+    img.data[j * 4 + 2] = fast[2] + (slow[2] - fast[2]) * f;
+    // solid where many passes go, and where fast ones go even if few did: the quick line never fades out
+    img.data[j * 4 + 3] = 255 * (0.15 + 0.85 * Math.max(Math.sqrt(n / G.maxN), (1 - f) ** 2));
   }
   heat.getContext("2d").putImageData(img, 0, 0);
   ctx.drawImage(heat, 0, 0);
@@ -3003,24 +3159,27 @@ function drawGcHeat() {
       line: { color: css("--text-2"), width: 1.5 }, hoverinfo: "skip", showlegend: false });
   }
   // invisible hover layer: passes and average speed over spots of GC_HOVER × GC_HOVER cells
-  const HW = Math.ceil(G.GW / GC_HOVER), HH = Math.ceil(G.GH / GC_HOVER), z = [], txt = [];
+  const HW = Math.ceil(G.GW / GC_HOVER), HH = Math.ceil(G.GH / GC_HOVER), z = [], txt = [], bst = [];
   for (let hy = 0; hy < HH; hy++) {
-    const zr = [], tr = [];
+    const zr = [], tr = [], br = [];
     for (let hx = 0; hx < HW; hx++) {
-      let n = 0, v = 0;
+      let n = 0, v = 0, b = Infinity;
       for (let y = hy * GC_HOVER; y < Math.min(G.GH, (hy + 1) * GC_HOVER); y++) for (let x = hx * GC_HOVER; x < Math.min(G.GW, (hx + 1) * GC_HOVER); x++) {
         const j = y * G.GW + x;
         if (G.count[j] > n) { n = G.count[j]; v = G.speed[j]; }
+        if (G.count[j] && G.best[j] < b) b = G.best[j];
       }
       zr.push(n || null);
       tr.push(n ? Math.round(v) : "");
+      br.push(n ? `${b.toFixed(2)} s${b - G.lo >= 0.005 ? ` (+${(b - G.lo).toFixed(2)})` : " (fastest)"}` : "");
     }
     z.push(zr);
     txt.push(tr);
+    bst.push(br);
   }
   const hc = GC_HOVER * GC_CELL;
-  traces.push({ type: "heatmap", z, text: txt, x0: G.x0 + hc / 2, dx: hc, y0: -(G.y0 + hc / 2), dy: -hc, opacity: 0, showscale: false,
-    hoverongaps: false, hovertemplate: "%{z} pass(es) · %{text} km/h average<extra></extra>" });
+  traces.push({ type: "heatmap", z, text: txt, customdata: bst, x0: G.x0 + hc / 2, dx: hc, y0: -(G.y0 + hc / 2), dy: -hc, opacity: 0, showscale: false,
+    hoverongaps: false, hovertemplate: "%{z} pass(es) · fastest through here %{customdata} · %{text} km/h average<extra></extra>" });
   // the fastest pass dashed, the selected one solid, each over a thin surface ring so it reads over the heat
   const line = (p, label, color, dash) => {
     const pts = p && d.paths.get(p.id);
@@ -3058,7 +3217,7 @@ function drawGcHeat() {
     xaxis: { visible: false, range: [G.x0, G.x1] },
     yaxis: { visible: false, range: [-G.y1, -G.y0], scaleanchor: "x", scaleratio: 1 },
   }), { displaylogo: false, responsive: true, scrollZoom: true, modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] });
-  $("#gc-legend").innerHTML = `<span class="ramp">≤ ${Math.round(G.lo)} km/h<span class="bar" style="background:linear-gradient(90deg, ${css("--seq-lo")}, ${css("--seq-hi")})"></span>≥ ${Math.round(G.hi)} km/h</span>`
+  $("#gc-legend").innerHTML = `<span class="ramp" title="Each spot takes the colour of the fastest pass through it (time in the corner)">fastest ${G.lo.toFixed(2)} s<span class="bar" style="background:linear-gradient(90deg, ${gcTimeRamp().join(", ")})"></span>≥ ${G.hi.toFixed(2)} s</span>`
     + `<span>more solid = more passes (${d.used.length}${d.used.length < d.shown.length ? `, ${d.shown.length - d.used.length} low-detail left out` : ""})</span>`
     + (sel ? `<span><span class="ln"></span>selected pass</span>` : "")
     + (d.fastest && d.fastest !== sel ? `<span><span class="ln dash"></span>fastest pass</span>` : "")
@@ -3072,7 +3231,7 @@ function drawGcHeat() {
 const gp = { sel: null, fast: null, t: 0, T: 0, playing: false, raf: null, last: 0, key: null };
 function gcPlayTrack(p, c) {
   if (!p?.samples?.x?.length) return null;
-  const L = p.samples, [w0, w1] = gcWindow(c), t0 = timeAt(L, w0), out = { t: [], X: [], Y: [], v: [], thr: [], brk: [], gear: [], d: [], st: [], ty: [[], [], [], []] };
+  const L = p.samples, [w0, w1] = gcWindow(c), t0 = timeAt(L, w0), out = { t: [], X: [], Y: [], v: [], thr: [], brk: [], gear: [], d: [], st: [], ty: [[], [], [], []], th: [[], [], [], []] };
   for (let i = 0; i < L.lap_dist.length; i++) {
     if (L.lap_dist[i] < w0 || L.lap_dist[i] > w1) continue;
     const [X, Y] = mapXY(L.x[i], L.z[i]);
@@ -3080,6 +3239,7 @@ function gcPlayTrack(p, c) {
     out.thr.push(L.throttle[i]); out.brk.push(L.brake[i]); out.gear.push(L.gear[i]); out.d.push(L.lap_dist[i]);
     out.st.push(L.steer?.[i] ?? null);
     GC_TYRES.forEach((w, k) => out.ty[k].push(L[w]?.[i] ?? null));
+    GC_HEIGHTS.forEach((w, k) => out.th[k].push(L[w]?.[i] ?? null));
   }
   return out.t.length > 1 ? { ...out, p } : null;
 }
@@ -3177,6 +3337,10 @@ function gcPlayShow() {
     tr.ty.forEach((arr, k) => {
       const v = arr[a.i] == null || arr[a.i + 1] == null ? null : gcLerp(arr, a);
       f(`ty${k}`).textContent = v == null ? "–" : `${Math.round(v)}°`;
+    });
+    tr.th.forEach((arr, k) => {
+      const v = arr[a.i] == null || arr[a.i + 1] == null ? null : gcLerp(arr, a);
+      f(`th${k}`).textContent = v == null ? "–" : fmtHeight(v);
     });
   };
   side("sel", gp.sel);
@@ -3288,11 +3452,28 @@ async function loadProgress() {
   const linked = location.hash.startsWith("#progress=") ? decodeURIComponent(location.hash.slice(10)) : null;
   const keep = linked && by.has(linked) ? linked : pg.key && by.has(pg.key) ? pg.key : pref.get("progressCombo", null);
   pg.key = keep && by.has(keep) ? keep : pg.combos[0]?.key;
-  $("#pg-combo").innerHTML = pg.combos.map((c) => `<option value="${esc(c.key)}">${esc(c.track)}${c.variation && c.variation !== c.track ? ` ${esc(c.variation)}` : ""} · ${esc(c.car)} (${c.n} session${c.n > 1 ? "s" : ""})</option>`).join("");
+  // the country filter is kept, unless the track and car to show (a link, the last one) are elsewhere
+  const cc = pg.country ?? pref.get("progressCountry", "");
+  pg.country = countrySelect($("#pg-country"), pg.combos, pg.key && !inCountry(by.get(pg.key), cc) ? "" : cc, "");
+  renderProgressCombos();
   if (!pg.key) { $("#pg-tiles").innerHTML = `<div class="empty">No session recorded yet.</div>`; return; }
-  $("#pg-combo").value = pg.key;
   await showProgress();
 }
+// track and car pairs of the chosen country, flagged; with all countries, grouped by country
+function renderProgressCombos() {
+  const shown = pg.combos.filter((c) => inCountry(c, pg.country));
+  $("#pg-combo").innerHTML = countryOptions(shown, pg.country,
+    (c) => `<option value="${esc(c.key)}">${trackLabel(c)} · ${esc(c.car)} (${c.n} session${c.n > 1 ? "s" : ""})</option>`);
+  if (!shown.some((c) => c.key === pg.key)) pg.key = shown[0]?.key;
+  $("#pg-combo").value = pg.key ?? "";
+}
+$("#pg-country").onchange = (e) => {
+  pg.country = e.target.value;
+  pref.set("progressCountry", pg.country);
+  const before = pg.key;
+  renderProgressCombos();
+  if (pg.key && pg.key !== before) $("#pg-combo").onchange({ target: $("#pg-combo") });
+};
 $("#pg-combo").onchange = (e) => {
   pg.key = e.target.value;
   pref.set("progressCombo", pg.key);

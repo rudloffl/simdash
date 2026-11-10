@@ -195,6 +195,7 @@ tr.player td { background: color-mix(in srgb, var(--s-speed) 18%, transparent); 
 /* ---- history ---- */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .filters input { min-width: 240px; }
+#f-track { max-width: 300px; }
 #sessions-table tbody tr { cursor: pointer; }
 #sessions-table tbody tr:hover td, #laps-table tbody tr:hover td { background: var(--surface-2); }
 #sessions-table tbody tr.sel td, #laps-table tbody tr.sel td {
@@ -536,6 +537,7 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 /* tyre temperatures laid out like the car seen from above: fronts on top */
 .gc-tyres { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; margin-top: 2px; padding: 4px 10px; border-radius: 6px;
   background: var(--surface-2); font-variant-numeric: tabular-nums; color: var(--text); text-align: center; }
+.gc-heights { font-size: 12px; color: var(--text-2); }
 .gc-play { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .gc-play #gc-scrub { flex: 1; min-width: 0; }
 .gc-play #gc-play { min-width: 84px; }
@@ -565,7 +567,8 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 #gc-table tbody tr:hover td { background: var(--surface-2); }
 #gc-table tbody tr.sel td { background: color-mix(in srgb, var(--s-speed) 22%, transparent); }
 #gc-table tr.coarse td { font-style: italic; color: var(--muted); }
-#gc-table td.gc-car { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+#gc-table th, #gc-table td { padding: 5px 6px; }
+#gc-table td.gc-car { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 /* accordions of the Corner Genie tab */
 .acc { padding-top: 0; padding-bottom: 0; margin-bottom: 12px; }
 .acc > summary { cursor: pointer; list-style: none; padding: 12px 0; }
