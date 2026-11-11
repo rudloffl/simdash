@@ -363,14 +363,38 @@ def decode(buf):
     }
 
 
+REAR_AXLE = 1.3  # m behind the centre, assumed (AMS2 gives no wheelbase)
+
+
+def rear_slide_deg(vel_x, vel_fwd, yaw):
+    """The rear slip angle with its direction: > 0 the rear axle slides to the left, < 0 to the right."""
+    if vel_fwd < 8:
+        return 0.0
+    return math.degrees(math.atan2(vel_x - yaw * REAR_AXLE, vel_fwd))
+
+
+def rear_slip_deg(vel_x, vel_fwd, yaw):
+    """How far the rear axle slides sideways, in degrees: the rear tyres' slip angle.
+
+    In AMS2 the yaw rate is positive turning left and the local X axis points left (a clockwise
+    lap adds up to -360° of yaw on the recorded laps), so the rear axle (behind the centre) moves
+    sideways at vel_x - yaw * REAR_AXLE: outward of the corner in 99.4 % of recorded cornering. A few
+    degrees is grip; past ~5 the rear is stepping out. 0 below 8 m/s (parking, spins at a standstill).
+    """
+    return abs(rear_slide_deg(vel_x, vel_fwd, yaw))
+
+
 def derived(snap):
     """Car-frame G-forces and body slip angle.
 
-    pCARS local frame: X right, Y up, -Z forward (simapi negates Z for forward
-    speed). So g_long > 0 is accelerating, g_lat > 0 is accelerating to the right.
+    pCARS local frame: X left, Y up, -Z forward (simapi negates Z for forward speed; X points
+    left: a clockwise lap adds up to -360° of yaw). So g_long > 0 is accelerating and g_lat > 0 is
+    accelerating to the left, i.e. the force felt pushes right: the Live G-meter's dot shows the
+    felt force (outside of the corner).
     """
     ax, ay, az = snap["local_acc"]
     vx, _, vz = snap["local_vel"]
     fwd = -vz
     slip_angle = math.degrees(math.atan2(vx, fwd)) if fwd > 5.0 else 0.0
-    return {"g_lat": ax / G, "g_long": -az / G, "g_vert": ay / G, "slip_angle": slip_angle}
+    return {"g_lat": ax / G, "g_long": -az / G, "g_vert": ay / G, "slip_angle": slip_angle,
+            "rear_slip": rear_slip_deg(vx, fwd, snap["ang_vel"][1])}

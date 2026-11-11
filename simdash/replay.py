@@ -14,7 +14,7 @@ import time
 from array import array
 
 from . import shakers, store
-from .pcars2 import SURFACE
+from .pcars2 import SURFACE, rear_slide_deg
 
 RATE = 8000           # Hz; shaker frequencies stay far below 4 kHz, and it keeps the synth cheap
 CHUNK = 0.05          # s of audio per synthesis step
@@ -38,7 +38,7 @@ def read_session(ref):
             raise LookupError("no such session")
         rows = con.execute(
             "SELECT t.id, t.ts, e.x, e.z, e.lap, e.speed, e.rpm, e.gear, e.throttle, e.brake, "
-            "e.local_vel_y, e.local_vel_z, e.abs_active FROM tick t JOIN telemetry e ON e.tick_id = t.id "
+            "e.local_vel_y, e.local_vel_z, e.abs_active, e.local_vel_x, e.angular_vel_y FROM tick t JOIN telemetry e ON e.tick_id = t.id "
             "WHERE t.session_id=? ORDER BY t.ts", (sid,)).fetchall()
         rps, terrain, max_rpm = {}, {}, []
         if rows:
@@ -53,7 +53,7 @@ def read_session(ref):
                 (hi, lo)).fetchall()
     con.close()
     d = {k: [] for k in ("ts", "x", "z", "lap", "speed", "rpm", "maxrpm", "gear", "throttle", "brake",
-                         "vel_fwd", "vel_up", "abs", "rps", "terrain")}
+                         "vel_fwd", "vel_up", "abs", "rps", "terrain", "vel_x", "yaw")}
     k, cur_max = 0, 0
     for r in rows:
         while k < len(max_rpm) and max_rpm[k][0] <= r[0]:
@@ -63,6 +63,7 @@ def read_session(ref):
         d["speed"].append(r[5] or 0.0); d["rpm"].append(r[6] or 0.0); d["maxrpm"].append(cur_max)
         d["gear"].append(r[7] or 0); d["throttle"].append(r[8] or 0.0); d["brake"].append(r[9] or 0.0)
         d["vel_up"].append(r[10] or 0.0); d["vel_fwd"].append(r[11] or 0.0); d["abs"].append(r[12] or 0)
+        d["vel_x"].append(r[13] or 0.0); d["yaw"].append(r[14] or 0.0)
         d["rps"].append(rps.get(r[0], [0.0] * 4))
         d["terrain"].append(terrain.get(r[0], [None] * 4))
     return {"car": s["car"], "track": s["track"], "variation": s["variation"], **d}
@@ -134,12 +135,28 @@ def surface_play(dev, data, i):
     return 0.0
 
 
+def oversteer_play(dev, data, i):
+    """simdash's Oversteer: the rear slip angle past the threshold, full strength at "full" degrees,
+    for the side the rear slides to (wheels RL: to the left, RR: to the right)."""
+    a = rear_slide_deg(data["vel_x"][i], -data["vel_fwd"][i], data["yaw"][i])
+    side = "RL" if a > 0 else "RR"  # > 0: the rear slides to the left
+    if side not in dev.get("wheels", ("RL", "RR")):
+        return 0.0
+    a = abs(a)
+    th, full = float(dev.get("threshold", 5)), float(dev.get("full", 10))
+    if a <= th:
+        return 0.0
+    return max(0.01, min(1.0, (a - th) / max(0.5, full - th)))
+
+
 def effect_value(dev, data, i, slips):
     """(frequency, amplitude %) of a continuous effect at tick i; amplitude 0 = silent."""
     if dev["effect"] == "Engine":
         mx = round(data["maxrpm"][i])
         return shakers._modulated(dev, round(data["rpm"][i]) / mx if mx > 0 else 0.0)
-    if dev["effect"] in shakers.SIMDASH_EFFECTS:
+    if dev["effect"] == "Oversteer":
+        x = oversteer_play(dev, data, i)
+    elif dev["effect"] in shakers.SIMDASH_EFFECTS:
         x = surface_play(dev, data, i)
     else:
         x = slip_play(dev, data, i, slips)
@@ -304,7 +321,7 @@ class Live:
         lv = snap["local_vel"]
         data = {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
                 "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
-                "terrain": [list(snap["terrain"])]}
+                "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]]}
         shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
         self.gear = snap["gear"]
         slips = wheel_slip(data, 0, self.dia)
@@ -388,7 +405,7 @@ class OwnPlayer:
             streams = {k: v[0] for k, v in self.targets.items()}
             self.targets = {}
             for dev, f, a in own:
-                key = (dev["effect"], dev["pan"], tuple(dev["wheels"]), dev.get("frequency"))
+                key = (dev["effect"], dev["pan"], tuple(dev.get("wheels", ())), dev.get("frequency"))
                 st = streams.get(key)
                 if st is None or st.dev != dev:
                     st = _Stream(dev)

@@ -438,6 +438,10 @@ function renderLive() {
   const a = clamp(c.slip_angle, -15, 15);
   Object.assign($("#b-angle").style, { left: `${50 + Math.min(0, a) / 15 * 50}%`, width: `${Math.abs(a) / 15 * 50}%` });
   $("#v-angle").textContent = c.slip_angle.toFixed(1);
+  // rear slip angle, red once past the Oversteer effect's start
+  const ov = sh.effects.find((e) => e.effect === "Oversteer");
+  $("#v-rear").textContent = (c.rear_slip ?? 0).toFixed(1);
+  $("#v-rear").style.color = c.rear_slip > (ov?.threshold ?? 5) ? "var(--critical)" : "";
 
   drawTrace();
 
@@ -1793,11 +1797,11 @@ $("#d-delete").onclick = async () => {
 
 // ---------- shakers (monocoque Sound effects) ----------
 const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle",
-  Kerb: "--s-clutch", OffTrack: "--surf-gravel" };
+  Kerb: "--s-clutch", OffTrack: "--surf-gravel", Oversteer: "--critical" };
 const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension",
-  Kerb: "Kerb", OffTrack: "Off track" };
-// played by simdash itself from AMS2's per-wheel terrain, not by monocoque
-const OWN_FX = new Set(["Kerb", "OffTrack"]);
+  Kerb: "Kerb", OffTrack: "Off track", Oversteer: "Oversteer" };
+// played by simdash itself from AMS2's telemetry, not by monocoque
+const OWN_FX = new Set(["Kerb", "OffTrack", "Oversteer"]);
 const FX_DEFAULTS = {
   Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
   Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
@@ -1807,6 +1811,8 @@ const FX_DEFAULTS = {
   Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
   Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
   OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
+  // a pitch no other effect uses, weak at the first hint and strong when the rear is really going
+  Oversteer: { wheels: ["RL", "RR"], threshold: 5, full: 10, modulation: "amplify", frequency: 55, amplitude: 35, amplitudeMax: 100, noise: 0 },
 };
 // AMS2 field audit (AMS2-TELEMETRY-FIELDS.md)
 const FX_HINT = {
@@ -1818,6 +1824,7 @@ const FX_HINT = {
   Suspension: "AMS2: not mapped by simapi, gives no vibration.",
   Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
   OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
+  Oversteer: "RL plays while the rear slides to the left, RR to the right: one Oversteer effect on each rear shaker tells you which way the car is going; both on one shaker plays either way. Played by simdash (not monocoque) as the rear steps out: from the rear tyres' slip angle (how far the rear axle slides sideways), starting at the first angle and full at the second. Grip is a few degrees; on your laps 5° comes 2 to 4 times a minute, about as often as you countersteer, so it warns just before. Lower it for an earlier hint, raise it if it plays in every corner. A shaker on the seat or seat back feels most like the rear going. Applies a few seconds after saving.",
 };
 const SPOT_XY = { seat: [120, 240], "seat-back": [120, 274], pedals: [120, 166], "front-left": [29, 95], "front-right": [211, 95], "rear-left": [29, 344], "rear-right": [211, 344] };
 const SPOT_NAME = { none: "Not connected", seat: "Seat", "seat-back": "Seat back", pedals: "Pedals", "front-left": "Front left", "front-right": "Front right", "rear-left": "Rear left", "rear-right": "Rear right" };
@@ -1979,6 +1986,12 @@ function renderEffects() {
     if (mod === "amplify") f += fxField(e, i, "amplitudeMax", "Strength max", 0, 100, 1, "%");
     if (e.effect === "Gear") f += fxField(e, i, "duration", "Duration", 0.05, 1, 0.05, "s");
     if (wheel && !OWN_FX.has(e.effect)) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
+    if (e.effect === "Oversteer") {
+      const ws = e.wheels || ["RL", "RR"];
+      f += `<label>Rear sliding to<span class="wheel-chips">${[["RL", "the left"], ["RR", "the right"]].map(([w, t]) => `<button type="button" class="chip${ws.includes(w) ? " on" : ""}" data-wheel="${w}" data-i="${i}" title="plays while the rear slides to ${t}">${w}</button>`).join("")}</span></label>`;
+      f += fxField(e, i, "threshold", "Starts at rear slip", 1, 20, 0.5, "°");
+      f += fxField(e, i, "full", "Full at rear slip", 2, 30, 0.5, "°");
+    }
     f += fxField(e, i, "noise", "Roughness", 0, 20, 1, "Hz");
     const chOpts = o.channels.map((_, ch) => `<option value="${ch}"${ch === e.pan ? " selected" : ""}>${esc(chName(ch))}</option>`).join("");
     return `<div class="fx${sh.active === i ? " active" : ""}" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
@@ -2051,6 +2064,13 @@ function setActiveEffect(i) {
 
 function toggleWheel(i, w) {
   const e = sh.effects[i];
+  if (e.effect === "Oversteer") {  // rear wheels only, and at least one: it says which way the rear slides
+    if (w !== "RL" && w !== "RR") return;
+    const ws = e.wheels || ["RL", "RR"];
+    const next = ws.includes(w) ? ws.filter((x) => x !== w) : [...ws, w];
+    if (next.length) { e.wheels = next; markShakersDirty(true); }
+    return;
+  }
   e.wheels = e.wheels.includes(w) ? e.wheels.filter((x) => x !== w) : [...e.wheels, w];
   sh.active = i;
   markShakersDirty(true);

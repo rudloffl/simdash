@@ -2,7 +2,7 @@
 
 [← simdash](../README.md)
 
-Bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb and off-track
+Bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb, off-track and oversteer
 effects simdash plays itself. Link: `/#shakers`.
 
 ![The Shakers tab: the car seen from above with each shaker, the channel table and the effects](img/shakers-tab.png)
@@ -48,6 +48,26 @@ terrain per wheel (`mTerrain`), with its pitch or strength rising with speed (fu
 simdash plays them itself on the shaker card next to monocoque (PulseAudio mixes the two), so they need
 simdash running but no monocoque restart: they apply a few seconds after saving. They are saved in simdash's
 `effects.json`, never in `monocoque.config`, and show in the replay and on the small cars.
+
+## Oversteer (played by simdash)
+
+A hint that the rear is stepping out, before you have to countersteer. simdash computes the **rear slip
+angle**, how far the rear axle slides sideways, from AMS2's velocity and yaw rate:
+`atan(|sideways speed − yaw rate × 1.3 m| / forward speed)` (in AMS2 positive yaw is a left turn and the car's
+X axis points left: a clockwise lap adds up to −360°; the rear axle is assumed 1.3 m behind the centre). A few degrees is normal grip. The effect starts at **Starts at** (5° by
+default) and reaches its max strength at **Full at** (10°), so a small slide gives a light buzz and a real one a
+strong one. Nothing plays below 8 m/s.
+
+Its wheels say which way: **RL** plays while the rear slides to the left (in a right-hand corner), **RR** while it
+slides to the right. One Oversteer effect with RL on the rear-left shaker and one with RR on the rear-right shaker
+tell you which way the car is going; both wheels on one shaker plays either way. Only the rear has a direction:
+both rear tyres slide sideways together, and a front tyre's slip angle needs the steering lock, which AMS2 does
+not give.
+
+On the recorded laps it was set up with (MINI at Brands Hatch, Aston Martin GT3 at Spa) the defaults play 4 to 6
+times a minute, about 5–7 % of the driving, close to how often you countersteer. Lower the start for an earlier
+hint, raise it if it plays in every corner. The Live page shows the rear slip angle next to the car slip angle,
+red past the start. It needs no wheels and no monocoque restart, and plays in the replay too.
 
 ## Replay on the shakers
 

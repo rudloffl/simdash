@@ -621,6 +621,7 @@ class Recorder(threading.Thread):
                 "fuel_l": round(snap["fuel_level"] * snap["fuel_capacity"], 1),
                 "g_lat": round(der["g_lat"], 3), "g_long": round(der["g_long"], 3),
                 "slip_angle": round(der["slip_angle"], 2),
+                "rear_slip": round(der["rear_slip"], 1),
                 "slip": [round(v, 3) for v in slips] if slips else None,
                 "tyre_temp": [round(t) for t in snap["tyre_temp"]],
                 "brake_temp": [round(t) for t in snap["brake_temp"]],

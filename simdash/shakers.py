@@ -26,12 +26,15 @@ OWN_EFFECTS = store.DATA_DIR / "effects.json"  # simdash's own effects (SIMDASH_
 RATE = 44100
 CHANNEL_MAP = ["front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right", "side-left", "side-right"]
 CHANNEL_SHORT = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
-EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack"]
+EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack", "Oversteer"]
 # played by simdash itself from AMS2's per-wheel terrain (monocoque has no surface effect), kept in
 # simdash's own file so monocoque never reads an effect it does not know
-SIMDASH_EFFECTS = {"Kerb", "OffTrack"}
+SIMDASH_EFFECTS = {"Kerb", "OffTrack", "Oversteer"}
 SURFACE_CLASS = {"Kerb": 1, "OffTrack": 2}  # pcars2.SURFACE class each one reacts to
-WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"} | SIMDASH_EFFECTS
+WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"} | set(SURFACE_CLASS)
+# Oversteer: the rear slip angle (pcars2.rear_slide_deg), from "threshold" degrees to full at "full" degrees;
+# its wheels say which way: RL plays while the rear slides to the left, RR to the right (pcars2: > 0 = left)
+OVERSTEER_DEFAULTS = {"threshold": 5.0, "full": 10.0}
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
 WHEELS = ["FL", "FR", "RL", "RR"]
 TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
@@ -325,10 +328,17 @@ def expand(effects, devid):
 
 def _clean_own(e):
     """One of simdash's own effects, with any wheel set (simdash plays it, so no splitting)."""
-    out = {"device": "Sound", "effect": _norm_effect(e.get("effect")),
-           "wheels": [w for w in WHEELS if w in (e.get("wheels") or [])]}
-    if not out["wheels"]:
-        raise ValueError(f"{out['effect']}: pick at least one wheel")
+    out = {"device": "Sound", "effect": _norm_effect(e.get("effect"))}
+    if out["effect"] == "Oversteer":
+        th = float(e.get("threshold") if e.get("threshold") not in (None, "") else OVERSTEER_DEFAULTS["threshold"])
+        full = float(e.get("full") if e.get("full") not in (None, "") else OVERSTEER_DEFAULTS["full"])
+        out["threshold"] = max(1.0, min(30.0, th))
+        out["full"] = max(out["threshold"] + 0.5, min(45.0, full))
+        out["wheels"] = [w for w in ("RL", "RR") if w in (e.get("wheels") or ["RL", "RR"])] or ["RL", "RR"]
+    else:
+        out["wheels"] = [w for w in WHEELS if w in (e.get("wheels") or [])]
+        if not out["wheels"]:
+            raise ValueError(f"{out['effect']}: pick at least one wheel")
     out["pan"] = max(0, min(7, int(e.get("pan", 0))))
     for k, lo, hi in (("volume", 0, 100), ("frequency", 0, 200), ("frequencyMax", 0, 200),
                       ("amplitude", 0, 100), ("amplitudeMax", 0, 100), ("noise", 0, 50)):
@@ -563,7 +573,7 @@ def render(e, mode="effect"):
             s.rest(0.7)
     else:
         # three slides: strength rises from the threshold to full
-        th = e.get("threshold", 0) or 0
+        th = 0 if eff == "Oversteer" else e.get("threshold", 0) or 0
         for _ in range(3):
             for k in range(35):
                 x = th + (1 - th) * k / 34
