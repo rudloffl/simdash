@@ -448,8 +448,7 @@ function renderLive() {
   if (ek !== live.edgesKey || (d.mapping && performance.now() - live.edgesFetch > 5000)) refreshLiveEdges(s, ek);
   const lv = liveMapView();
   drawMap($("#map"), live.outline, d.cars, live.outlineSrc === "lap", live.edges || d.mapping
-    ? { ...(lv || {}), edges: live.edges, natural: mapNatural && !!live.edges,
-        ...(d.mapping ? { missing: edgeGaps(live.edges), length: live.edges?.length || d.lap?.length } : {}) }
+    ? { ...(lv || {}), edges: live.edges, natural: mapNatural && !!live.edges }
     : lv);
   if (focus.corners[focus.corner] && performance.now() - focus.lastDraw > 300) {
     focus.lastDraw = performance.now();
@@ -3902,18 +3901,12 @@ function renderSystem() {
   // buttons that make no sense in the current state
   const can = {
     "ams2/start": !d.ams2.running && !d.session && !d.busy.ams2,
-    "ams2/start-map": !d.ams2.running && !d.session && !d.busy.ams2,
     "ams2/restart": !d.busy.ams2,
     "ams2/quit": d.ams2.running && !d.busy.ams2,
     "simd/restart": true,
     "monocoque/restart": true,
     "monocoque/stop": d.monocoque.running,
   };
-  // why the AMS2 start buttons are greyed out, next to the mapping one
-  const why = d.ams2.running ? "AMS2 is already running: press Start mapping (nothing is recorded from then on)."
-    : d.session ? "A session is starting: start-race is waiting for AMS2 to open. Once it is open, press Start mapping, or quit AMS2 to start again in mapping mode."
-    : d.busy.ams2 ? "Busy: " + d.busy.ams2 : "";
-  if ($("#ed-start-why")) $("#ed-start-why").textContent = why;
   document.querySelectorAll(SYS_BUTTONS).forEach((b) => {
     if (b.id === "hdr-start") b.hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;
     b.disabled = sys.busy === b.dataset.act || !can[b.dataset.act];
@@ -3988,7 +3981,6 @@ function renderEdgesState() {
   const arm = $("#ed-arm");
   arm.textContent = m.armed ? "Stop mapping" : "Start mapping";
   arm.classList.toggle("on", m.armed);
-  $("#ed-speak").checked = m.speak;
   $("#ed-live").textContent = d.live ? `AMS2: ${d.live.track} ${d.live.variation}` : "AMS2 not on track";
   const w = m.wheels || "";
   document.querySelectorAll("#ed-wheels span").forEach((el, i) => (el.className = w[i] != null && m.armed ? "s" + w[i] : ""));
@@ -4076,7 +4068,7 @@ function drawAltitude() {
   $("#ed-alt-src").textContent = p ? `from your ${p.valid ? "fastest" : "fastest (invalid)"} lap, ${fmtLap(p.lap_time)} in the ${p.car} · car height, about 0.4 m above the ground` : "";
   if (!p) {
     Plotly.purge(el);
-    el.innerHTML = '<div class="muted" style="padding:20px">No recorded lap on this track yet: drive one normal lap (not in mapping mode) to get the altitude.</div>';
+    el.innerHTML = '<div class="muted" style="padding:20px">No recorded lap on this track yet: drive one normal lap (not while mapping) to get the altitude.</div>';
     return;
   }
   if (!el.data) el.innerHTML = "";
@@ -4194,7 +4186,7 @@ function drawTrack3D() {
   });
   if (!mx.length && !I.length) {
     Plotly.purge(el);
-    el.innerHTML = '<div class="muted" style="padding:20px">No altitude for this track yet: drive one normal lap (not in mapping mode).</div>';
+    el.innerHTML = '<div class="muted" style="padding:20px">No altitude for this track yet: drive one normal lap (not while mapping).</div>';
     return;
   }
   if (!el.data) el.innerHTML = "";
@@ -4311,10 +4303,6 @@ $("#ed-arm").onclick = async () => {
   if (r.ok) ed.data.mapping = await r.json();
   renderEdgesState();
   loadEdges();
-};
-$("#ed-speak").onchange = async (ev) => {
-  const r = await fetch("/api/edges/mapping", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ speak: ev.target.checked }) });
-  if (r.ok) ed.data.mapping = await r.json();
 };
 $("#ed-harvest").onclick = async (ev) => {
   if (!ed.sel) return;

@@ -201,8 +201,7 @@ def create_app(recorder=None):
 
     @app.post("/api/edges/mapping")
     def edges_mapping(body: dict):
-        rec.mapper.arm(bool(body.get("on", rec.mapper.armed)),
-                       None if body.get("speak") is None else bool(body["speak"]))
+        rec.mapper.arm(bool(body.get("on", rec.mapper.armed)))
         return rec.mapper.state()
 
     @app.post("/api/edges/harvest")

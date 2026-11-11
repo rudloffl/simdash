@@ -1,6 +1,6 @@
 """Track edges: where the drivable surface (track or kerb) ends, on each side of the track.
 
-AMS2 gives no track boundaries, only the terrain under each tyre. In mapping mode the driver
+AMS2 gives no track boundaries, only the terrain under each tyre. While mapping, the driver
 runs along each edge with the outside wheels over it: every time a tyre goes between
 track/kerb and off-track (grass, gravel, runoff...), that tyre is on the edge. Also, while
 one tyre of an axle is off and the other is on, the edge lies between them (a looser guess,
@@ -17,7 +17,6 @@ so left = (-fz, fx). Wheels are FL, FR, RL, RR.
 import json
 import logging
 import math
-import subprocess
 import threading
 import time
 
@@ -347,55 +346,19 @@ def _usable(speed, slip_deg, pit_mode):
 
 # ---- live mapping ----
 
-STATE_FILE = store.DATA_DIR / "mapping.json"
 OFF_AFTER = 30  # s without AMS2's shared memory before mapping switches itself off
-
-
-def say(text):
-    """Spoken update through speech-dispatcher, so the driver can stay in AMS2."""
-    try:
-        subprocess.Popen(["spd-say", "-l", "en", "-r", "5", text],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        log.warning("spd-say not available: %s", text)
-
-
-def _where(track, variation, d):
-    names = store.load_corner_names(track, variation)
-    near = min(names, key=lambda c: abs(c["apex"] - d), default=None)
-    if near and abs(near["apex"] - d) < 300:
-        return ("before " if d < near["apex"] - 40 else "after " if d > near["apex"] + 40 else "at ") + near["name"]
-    return f"at {d / 1000:.1f} kilometres" if d >= 1000 else f"at {round(d, -1):.0f} metres"
-
-
-def spoken_summary(track, variation):
-    s = summary(track, variation, with_lines=False)
-    if not s:
-        return "No edges yet."
-    parts = []
-    for side in SIDES:
-        pct = round(s["coverage"][side] * 100)
-        gaps = s["gaps"][side]
-        if not gaps:
-            parts.append(f"{side} edge complete.")
-        else:
-            big = max(gaps, key=lambda g: g[1] - g[0])
-            parts.append(f"{side} {pct} percent, missing {_where(track, variation, gaps[0][0])}"
-                         + (f", biggest hole {_where(track, variation, big[0])}." if big is not gaps[0] else "."))
-    return " ".join(parts)
+ARM_GRACE = 600  # s for AMS2 to reach the track after Start mapping
 
 
 class Mapper:
     """Collects samples while armed; the recorder feeds it every recorded tick.
 
-    Armed from the Track edges tab or before AMS2 starts (start-race --map); the armed state is
-    kept in mapping.json so a simdash restart doesn't lose it, and it switches itself off once
-    AMS2 has gone away. Spoken updates (lap by lap) let the driver map without leaving the game."""
+    Armed only by Start mapping on the Track edges tab; never restored after a simdash
+    restart, and it switches itself off once AMS2 has gone away."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.armed = False
-        self.speak = True
         self.key = None           # (track, variation, length)
         self.run = []             # current run of samples
         self.pending = []         # finished runs not saved yet
@@ -404,56 +367,35 @@ class Mapper:
         self.count = 0
         self.crossings = 0
         self.last_feed = 0.0      # when AMS2 last gave a sample while armed
-        self.announced = None     # track the "mapping on" message was spoken for
-        try:
-            st = json.loads(STATE_FILE.read_text())
-            self.armed, self.speak = bool(st.get("armed")), bool(st.get("speak", True))
-        except (OSError, ValueError):
-            pass
-
-    def _save_state(self):
-        try:
-            STATE_FILE.write_text(json.dumps({"armed": self.armed, "speak": self.speak}))
-        except OSError:
-            log.exception("saving mapping state")
+        self.armed_at = time.time()  # no_game() counts from here when AMS2 never fed a sample
 
     def state(self):
         with self.lock:
-            return {"armed": self.armed, "speak": self.speak, "track": self.key[0] if self.key else None,
+            return {"armed": self.armed, "track": self.key[0] if self.key else None,
                     "variation": self.key[1] if self.key else None, "samples": self.count,
                     "crossings": self.crossings, "wheels": self.last[4] if self.last else None}
 
-    def arm(self, on, speak=None):
+    def arm(self, on):
         with self.lock:
             was = self.armed
             self.armed = on
-            if speak is not None:
-                self.speak = speak
+            if on:
+                self.armed_at = time.time()
             if on and not was:
                 self.count = self.crossings = 0
                 self.last = None
                 self.last_feed = 0.0
-                self.announced = None
-            self._save_state()
         if was and not on:
             self.flush(force=True)
-            if self.speak and self.key:
-                say("Edge mapping off.")
         log.info("track edge mapping %s", "on" if on else "off")
 
     def no_game(self, now):
         """The recorder calls this while AMS2's shared memory is missing."""
-        if self.armed and self.last_feed and now - self.last_feed > OFF_AFTER:
+        if not self.armed:
+            return
+        if (now - self.last_feed > OFF_AFTER) if self.last_feed else (now - self.armed_at > ARM_GRACE):
             log.info("AMS2 gone: track edge mapping off")
             self.arm(False)
-
-    def _announce(self, track, variation, first):
-        try:
-            self.flush()
-            text = spoken_summary(track, variation)
-            say((f"Edge mapping on. {track}. " if first else "Lap done. ") + text)
-        except Exception:
-            log.exception("edge mapping announcement")
 
     def feed(self, snap, player, slip_deg, now):
         if not self.armed:
@@ -464,18 +406,12 @@ class Mapper:
                round(snap["orientation"][1], 4), surf, round(player["raw"]["mWorldPosition"][1], 2),
                [int(t) for t in snap["terrain"]]]
         ok = _usable(snap["speed"], slip_deg, snap["pit_mode"])
-        speak = None
         with self.lock:
             self.last_feed = now
             if key[:2] != (self.key or (None, None))[:2]:
                 self._end_run()
                 self._flush_locked()
                 self.key = key
-            if self.announced != key[:2]:
-                self.announced = key[:2]
-                speak = True
-            elif self.last and key[2] > 0 and self.last[0] > 0.8 * key[2] and smp[0] < 0.2 * key[2]:
-                speak = False  # crossed the start line
             if not ok:
                 self._end_run()
             else:
@@ -484,8 +420,6 @@ class Mapper:
                 self.run.append(smp)
                 self.count += 1
             self.last = smp
-        if speak is not None and self.speak:
-            threading.Thread(target=self._announce, args=(key[0], key[1], speak), daemon=True).start()
         if now - self.last_save > 5:
             self.flush()
 

@@ -255,13 +255,6 @@ def start_ams2():
     _note("session started (start-race: simd, CrewChief, AMS2, monocoque)")
 
 
-def start_ams2_mapping():
-    if _pids("^AMS2AVX"):
-        raise RuntimeError("AMS2 is already running")
-    _start_session("--map")
-    _note("session started for track edge mapping (start-race --map: no CrewChief)")
-
-
 def quit_ams2():
     def run():
         _note("AMS2 closed" if _quit_ams2() else "AMS2 was not running")
@@ -281,7 +274,6 @@ ACTIONS = {
     "monocoque/restart": restart_monocoque,
     "monocoque/stop": stop_monocoque,
     "ams2/start": start_ams2,
-    "ams2/start-map": start_ams2_mapping,
     "ams2/quit": quit_ams2,
     "ams2/restart": restart_ams2,
 }

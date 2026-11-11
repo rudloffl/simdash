@@ -17,8 +17,7 @@ monocoque, and start, restart or quit AMS2; a log viewer tails each tool's log.
 It expects the launchers of the setup it was written for in `~/.local/bin`: `start-race` (one session:
 restarts simd, starts CrewChief, AMS2 through Steam and monocoque, stops them when AMS2 exits; logs in
 `~/.local/state/`), `start-monocoque` and `simtelemetry` (simd's data check). simd runs as the systemd user
-service `simd`. **Start session** and **Restart AMS2** run `start-race`; **Start for edge mapping** runs
-`start-race --map` ([Track edges](track-edges.md)); **Quit AMS2** ends the game process and waits for
+service `simd`. **Start session** and **Restart AMS2** run `start-race`; **Quit AMS2** ends the game process and waits for
 `start-race` to clean up.
 
 Opening the page on the game PC while AMS2 runs moves the focus away from AMS2, which then loses the wheel:

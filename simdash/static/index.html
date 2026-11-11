@@ -246,21 +246,17 @@
     <div class="card">
       <h3>Mapping <span class="right muted" id="ed-live"></span></h3>
       <div class="ed-arm">
-        <button class="primary sys-act" data-act="ams2/start-map" title="start-race --map: AMS2 and the shakers, no CrewChief, mapping on with spoken updates">Start AMS2 in mapping mode</button>
-        <button id="ed-arm">Start mapping</button>
+        <button id="ed-arm" class="primary">Start mapping</button>
         <div class="ed-wheels" id="ed-wheels" title="Surface under each tyre: track, kerb, off track">
           <span></span><span></span><span></span><span></span>
         </div>
         <div class="muted num" id="ed-count"></div>
       </div>
-      <div class="ed-why" id="ed-start-why"></div>
-      <label class="ed-speak"><input type="checkbox" id="ed-speak"> Spoken updates (speakers): mapping on, then each lap the coverage and where the next missing stretch is</label>
       <ol class="ed-steps">
-        <li>Press <b>Start AMS2 in mapping mode</b> (or right-click the “AMS2 Race” icon → “Start in track edge mapping mode”). Mapping is on before the game opens: no need to come back to this page. With AMS2 already running, use <b>Start mapping</b>.</li>
-        <li>In AMS2, start a Practice or Time Trial on the track to map.</li>
+        <li>Start a normal session, then in AMS2 start a Practice or Time Trial on the track to map.</li>
+        <li>Press <b>Start mapping</b>. From then on nothing is recorded and the Corner Genie stays quiet, until you press <b>Stop mapping</b> or AMS2 closes.</li>
         <li>Drive one lap along the left edge with the left tyres just over it (on the grass or gravel), then one lap along the right edge. Weave a little: each time a tyre crosses the edge, that spot is saved.</li>
         <li>Kerbs count as track. The pit lane, the garage and slides (more than 25° sideways) are ignored. Nothing is recorded while mapping (no session, no laps).</li>
-        <li>After each lap a voice reads the coverage and the next missing stretch. Mapping switches itself off when AMS2 closes.</li>
       </ol>
     </div>
     <div class="card">
@@ -524,7 +520,6 @@
       <dl id="sys-ams2"></dl>
       <div class="sys-btns">
         <button data-act="ams2/start">Start session</button>
-        <button data-act="ams2/start-map" title="start-race --map: no CrewChief, track edge mapping on with spoken updates">Start for edge mapping</button>
         <button data-act="ams2/restart" data-confirm="Close AMS2 and start a new session (simd, CrewChief, AMS2, monocoque)? A race in progress ends.">Restart AMS2</button>
         <button data-act="ams2/quit" data-confirm="Close AMS2? A race in progress ends.">Quit AMS2</button>
       </div>

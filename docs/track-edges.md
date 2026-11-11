@@ -13,12 +13,11 @@ and the samples kept.*
 
 ## Mapping
 
-- **Mapping mode:** *Start AMS2 in mapping mode* (or `start-race --map`) starts AMS2 without CrewChief with
-  mapping already on, so you never leave the game (switching window drops the wheel). With AMS2 already
-  running, use *Start mapping*.
-- While mapping, nothing is recorded (no session, no laps), the [Corner Genie](corner-genie.md) stays quiet,
-  and a voice (`spd-say`) reads after each lap the coverage of each side and where the next hole is, by
-  corner name when you named it. Mapping switches itself off 30 s after AMS2 closes.
+- Mapping is only switched on by *Start mapping* on this tab, during a normal session; every other start
+  (desktop icon, `start-race`, System tab) is the full session, and a simdash restart leaves it off.
+- While mapping, nothing is recorded (no session, no laps), and the [Corner Genie](corner-genie.md) stays quiet.
+  Mapping switches itself off 30 s after AMS2 closes (10 min if AMS2 never started), and
+  `start-race` switches it off.
 - The pit lane, the garage and slides over 25° are ignored.
 - **From your sessions:** *Add from recorded sessions* takes every off-track moment of your recorded laps on
   that layout, so a track is partly mapped before you start.
@@ -45,7 +44,7 @@ the track on the map, to link the two.*
 
 - `~/.local/share/simdash/tracks/<track>.edges.json` keeps the raw samples (lap distance, position, heading,
   surface and terrain code under each tyre, altitude), so the lines can be rebuilt as the method improves.
-  Mapping on/off and the voice setting: `mapping.json`.
+  Mapping on/off is not saved: a simdash restart leaves it off.
 - The car's size is assumed (tyres 0.8 m either side, axles 1.3 m from the centre), so edges are good to
   about half a metre; altitude is the car's centre of mass, about 0.4 m above the ground.
 - On a track with no recorded lap yet, drive one normal lap first: the outline, altitude and corners come
