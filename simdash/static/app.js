@@ -3524,8 +3524,14 @@ async function showProgress() {
 
 function drawProgressChart(data, pb) {
   const ss = data.filter((s) => s.st.best);
-  if (!ss.length) { Plotly.purge("pg-chart"); $("#pg-chart").innerHTML = `<div class="empty">No valid lap yet.</div>`; return; }
-  $("#pg-chart").innerHTML = "";
+  if (!ss.length) {
+    Plotly.purge("pg-chart");
+    $("#pg-chart").innerHTML = `<div class="empty">No valid lap yet.</div>`;
+    $("#pg-chart-note").textContent = "";
+    delete $("#pg-chart").dataset.wired;  // purge dropped the click handler
+    return;
+  }
+  if (!$("#pg-chart").data) $("#pg-chart").innerHTML = "";  // clearing a live plot would leave Plotly drawing into nothing
   $("#pg-chart-note").textContent = ss.length < 2 ? "Only one session with a valid lap on this track with this car so far: the trend shows from the second one." : "";
   const label = (s) => `${new Date(s.started_at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}<br>${s.session_type}`;
   const x = ss.map(label);
