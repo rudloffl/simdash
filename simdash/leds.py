@@ -24,7 +24,7 @@ import termios
 import threading
 import time
 
-from . import shakers, store
+from . import haptics, shakers, store
 
 log = logging.getLogger("simdash.leds")
 
@@ -93,7 +93,7 @@ def _write(s):
 
 
 def find_port():
-    ports = sorted(glob.glob(PORT_GLOB))
+    ports = [p for p in sorted(glob.glob(PORT_GLOB)) if not haptics.is_module_port(p)]
     return ports[0] if ports else None
 
 

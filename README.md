@@ -26,6 +26,7 @@ the pages below.
 | [Track edges](docs/track-edges.md) | Map where each track really ends by driving over its edges; natural colours, altitude profile, 3D. |
 | [Shakers](docs/shakers.md) | Bass shaker setup for Monocoque on a top view of the car, kerb and off-track effects, replay of a session on the shakers. |
 | [System](docs/system.md) | The telemetry chain from AMS2 to the shakers, each link green / yellow / red, restart buttons, logs, database size. |
+| [Pedal haptics](docs/pedal-haptics.md) | Moza pedal haptic module driven from AMS2: engine, ABS, TC, gear shift, slip, bite point, road texture. |
 | [Wheel LEDs](docs/wheel-leds.md) | Shift light on a Moza rim's RPM LEDs (shelved, at `/#leds`). |
 
 How corners are detected and measured, used by most pages: [corners](docs/corners.md).

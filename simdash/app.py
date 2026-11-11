@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import edges, genie, leds, replay, shakers, slim, store, system
+from . import edges, genie, haptics, leds, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -568,6 +568,33 @@ def create_app(recorder=None):
         st["live_car"] = (live.get("session") or {}).get("car")
         st["live_max_rpm"] = (live.get("car") or {}).get("max_rpm")
         return st
+
+    # ---- Moza pedal haptics ----
+
+    @app.get("/api/haptics")
+    async def haptics_setup():
+        return await asyncio.to_thread(haptics.setup)
+
+    @app.put("/api/haptics")
+    def haptics_save(patch: dict):
+        try:
+            s = haptics.save_settings(patch)
+        except (TypeError, ValueError, KeyError) as e:
+            raise HTTPException(400, f"bad setting: {e}")
+        haptics.driver_thread.reload()
+        return s
+
+    @app.post("/api/haptics/test")
+    def haptics_test(body: dict):
+        try:
+            haptics.driver_thread.start_test(str(body.get("pedal")), str(body.get("effect")))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.get("/api/haptics/state")
+    def haptics_state():
+        return {**haptics.driver_thread.snapshot(), "found": haptics.known_port()}
 
     # ---- system: telemetry chain status and restarts ----
 

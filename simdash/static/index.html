@@ -16,6 +16,7 @@
     <button data-tab="genie">Corner Genie</button>
     <button data-tab="edges">Track edges</button>
     <button data-tab="shakers">Shakers</button>
+    <button data-tab="haptics">Pedal haptics</button>
     <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
@@ -567,6 +568,25 @@
       <option value="crewchief">CrewChief</option><option value="simdash">simdash</option>
     </select></span></h3>
     <pre class="sys-logbox" id="sys-logbox"></pre>
+  </div>
+</section>
+
+<section id="tab-haptics" class="tab">
+  <div class="hp-grid">
+    <div class="card hp-head">
+      <h3>Pedal haptics <span class="right muted" id="hp-port"></span></h3>
+      <label class="led-check"><input type="checkbox" id="hp-enabled"> Vibrate the pedals while driving</label>
+      <div class="hp-now" id="hp-now">–</div>
+      <div class="fx-hint">Moza Pedal Haptic Feedback module, on its own USB port or plugged behind the wheelbase
+        (its own USB port is used first). simdash streams the effects from AMS2's telemetry; nothing is stored in the module. Close Pit House and boxflat while driving.
+        Engine vibration rises from 10 Hz to the chosen frequency between
+        <input type="number" id="hp-eng-from" min="0" max="95" step="5" class="hp-pct">% and
+        <input type="number" id="hp-eng-to" min="5" max="100" step="5" class="hp-pct">% of max RPM.
+        Wheel spin and lockup need the car's tyre size, learned on a straight while coasting (as for the shakers).</div>
+    </div>
+    <div class="card"><h3>Throttle</h3><div class="hp-fx" data-pedal="throttle"></div></div>
+    <div class="card"><h3>Brake</h3><div class="hp-fx" data-pedal="brake"></div></div>
+    <div class="card"><h3>Clutch</h3><div class="hp-fx" data-pedal="clutch"></div></div>
   </div>
 </section>
 

@@ -13,7 +13,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import edges, leds, replay, shakers, store
+from . import edges, haptics, leds, replay, shakers, store
 from .pcars2 import (GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
                      PIT_MODES, RACE_STATES, SESSION_TYPES, Pcars2Reader, _name, derived)
 
@@ -317,6 +317,10 @@ class Recorder(threading.Thread):
                 leds.driver_thread.feed(snap)  # shift light, when simdash drives the wheel LEDs
             except Exception:
                 log.exception("wheel LEDs")
+            try:
+                haptics.driver_thread.feed(snap, slips)  # Moza pedal haptics
+            except Exception:
+                log.exception("pedal haptics")
         self.set_live(live, trace_row)
         return True
 

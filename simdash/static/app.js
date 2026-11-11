@@ -62,8 +62,9 @@ function showTab(name) {
   if (name === "shakers" && !sh.dirty) loadShakers();
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
+  if (name === "haptics") loadHaptics(); else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/ }[name];
+  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/, haptics: /^#haptics$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -4381,8 +4382,97 @@ setInterval(() => {
 loadShakerCars();
 connect();
 requestAnimationFrame(frame);
+
+// ---------- Pedal haptics (Moza Pedal Haptic Feedback module) ----------
+
+const hp = { setup: null, timer: null, saveTimer: null };
+const HP_HINT = {
+  engine: "follows the RPM", gear: "each gear change", tc: "when traction control cuts in",
+  abs: "when ABS works", spin: "a driven wheel spins (over 15 % slip)", lock: "a wheel locks under braking",
+  brake_point: "brake pressed past the trigger", bite: "clutch near the bite point", road: "bumps through the suspension",
+};
+async function loadHaptics() {
+  const r = await fetch("/api/haptics");
+  if (!r.ok) return;
+  hp.setup = await r.json();
+  renderHaptics();
+  if (!hp.timer) hp.timer = setInterval(pollHaptics, 150);
+}
+function renderHaptics() {
+  const d = hp.setup, s = d.settings;
+  $("#hp-port").textContent = !d.port ? "no haptic module (USB or behind the wheelbase)"
+    : d.routed ? "module found behind the wheelbase" : "module found on its own USB port";
+  $("#hp-enabled").checked = s.enabled;
+  $("#hp-eng-from").value = Math.round(s.engine_from * 100);
+  $("#hp-eng-to").value = Math.round(s.engine_to * 100);
+  document.querySelectorAll(".hp-fx").forEach((box) => {
+    const pedal = box.dataset.pedal, fxs = s.pedals[pedal] || {};
+    box.innerHTML = Object.entries(fxs).map(([name, e]) => `
+      <div class="hp-row${e.on ? "" : " off"}" data-fx="${name}">
+        <div class="top"><label><input type="checkbox" data-k="on"${e.on ? " checked" : ""}> ${esc(d.names[name] || name)}</label>
+          <button data-test>Test</button></div>
+        <div class="muted" style="font-size:12px">${esc(HP_HINT[name] || "")}</div>
+        <div class="vals">
+          <span>Strength %</span><input type="range" min="0" max="100" step="1" data-k="strength" value="${e.strength}"><input type="number" min="0" max="100" data-k="strength" value="${e.strength}">
+          ${name === "road" ? "" : `<span>Frequency Hz</span><input type="range" min="10" max="100" step="1" data-k="hz" value="${e.hz}"><input type="number" min="10" max="100" data-k="hz" value="${e.hz}">`}
+          ${"trigger" in e ? `<span>Trigger % travel</span><input type="range" min="5" max="100" step="1" data-k="trigger" value="${Math.round(e.trigger * 100)}"><input type="number" min="5" max="100" data-k="trigger" value="${Math.round(e.trigger * 100)}">` : ""}
+        </div>
+      </div>`).join("");
+  });
+}
+function hapticsPatch() {
+  const pedals = {};
+  document.querySelectorAll(".hp-fx").forEach((box) => {
+    pedals[box.dataset.pedal] = {};
+    box.querySelectorAll(".hp-row").forEach((row) => {
+      const e = { on: row.querySelector('[data-k="on"]').checked };
+      for (const k of ["strength", "hz", "trigger"]) {
+        const el = row.querySelector(`input[type=number][data-k="${k}"]`);
+        if (el) e[k] = k === "trigger" ? +el.value / 100 : +el.value;
+      }
+      pedals[box.dataset.pedal][row.dataset.fx] = e;
+      row.classList.toggle("off", !e.on);
+    });
+  });
+  return { enabled: $("#hp-enabled").checked, engine_from: +$("#hp-eng-from").value / 100,
+    engine_to: +$("#hp-eng-to").value / 100, pedals };
+}
+function scheduleHapticsSave() {
+  clearTimeout(hp.saveTimer);
+  hp.saveTimer = setTimeout(async () => {
+    const r = await fetch("/api/haptics", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hapticsPatch()) });
+    if (r.ok) hp.setup.settings = await r.json();
+  }, 300);
+}
+$("#tab-haptics").addEventListener("input", (e) => {
+  const k = e.target.dataset.k, row = e.target.closest(".hp-row");
+  if (row && k && k !== "on") row.querySelectorAll(`[data-k="${k}"]`).forEach((el) => { if (el !== e.target) el.value = e.target.value; });
+  scheduleHapticsSave();
+});
+$("#tab-haptics").addEventListener("click", async (e) => {
+  if (!e.target.matches("[data-test]")) return;
+  const row = e.target.closest(".hp-row"), pedal = e.target.closest(".hp-fx").dataset.pedal;
+  clearTimeout(hp.saveTimer);
+  await fetch("/api/haptics", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hapticsPatch()) });
+  await fetch("/api/haptics/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pedal, effect: row.dataset.fx }) });
+});
+async function pollHaptics() {
+  if (currentTab !== "haptics") return;
+  let st;
+  try { st = await (await fetch("/api/haptics/state")).json(); } catch { return; }
+  const playing = new Set(st.playing);
+  document.querySelectorAll(".hp-fx").forEach((box) => box.querySelectorAll(".hp-row").forEach((row) =>
+    row.classList.toggle("playing", playing.has(`${box.dataset.pedal}:${row.dataset.fx}`))));
+  const what = st.playing.map((p) => { const [pedal, fx] = p.split(":"); return `${pedal} ${(hp.setup?.names[fx] || fx).toLowerCase()}`; });
+  $("#hp-now").innerHTML = st.error ? `<span style="color:var(--critical)">${esc(st.error)}</span>`
+    : st.source === "test" ? `Testing: <b>${esc(what.join(", "))}</b> (3 s)`
+    : st.source === "game" ? (what.length ? `Playing: <b>${esc(what.join(", "))}</b>` : "Driving: nothing playing right now")
+    : "Waiting for AMS2 on track";
+  if (!!st.found !== !!hp.setup?.port) loadHaptics();
+}
+
 if (location.hash.startsWith("#session=")) showTab("history");
 else if (location.hash.startsWith("#progress")) showTab("progress");
-else if (["#genie", "#edges", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
+else if (["#genie", "#edges", "#shakers", "#system", "#leds", "#haptics"].includes(location.hash)) showTab(location.hash.slice(1));
 // in-page links such as "Progress on this track"
 window.addEventListener("hashchange", () => { if (location.hash.startsWith("#progress")) showTab("progress"); });
