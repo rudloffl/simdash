@@ -4425,6 +4425,8 @@ function renderHaptics() {
   $("#hp-enabled").checked = s.enabled;
   $("#hp-eng-from").value = Math.round(s.engine_from * 100);
   $("#hp-eng-to").value = Math.round(s.engine_to * 100);
+  document.querySelectorAll("[data-fitted]").forEach((cb) => { cb.checked = s.fitted?.[cb.dataset.fitted] !== false; });
+  hapticsFitted();
   document.querySelectorAll(".hp-fx").forEach((box) => {
     const pedal = box.dataset.pedal, fxs = s.pedals[pedal] || {};
     box.innerHTML = Object.entries(fxs).map(([name, e]) => `
@@ -4440,8 +4442,14 @@ function renderHaptics() {
       </div>`).join("");
   });
 }
+function hapticsFitted() {
+  document.querySelectorAll(".hp-pedal").forEach((card) =>
+    card.classList.toggle("unfitted", !card.querySelector("[data-fitted]").checked));
+}
 function hapticsPatch() {
-  const pedals = {};
+  const pedals = {}, fitted = {};
+  document.querySelectorAll("[data-fitted]").forEach((cb) => { fitted[cb.dataset.fitted] = cb.checked; });
+  hapticsFitted();
   document.querySelectorAll(".hp-fx").forEach((box) => {
     pedals[box.dataset.pedal] = {};
     box.querySelectorAll(".hp-row").forEach((row) => {
@@ -4455,7 +4463,7 @@ function hapticsPatch() {
     });
   });
   return { enabled: $("#hp-enabled").checked, engine_from: +$("#hp-eng-from").value / 100,
-    engine_to: +$("#hp-eng-to").value / 100, pedals };
+    engine_to: +$("#hp-eng-to").value / 100, fitted, pedals };
 }
 function scheduleHapticsSave() {
   clearTimeout(hp.saveTimer);

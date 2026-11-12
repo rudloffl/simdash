@@ -24,6 +24,7 @@ import glob
 import json
 import logging
 import os
+import select
 import termios
 import threading
 import time
@@ -55,6 +56,7 @@ DEFAULTS = {
     "enabled": True,
     "engine_from": 0.2,    # engine vibration from this fraction of max RPM...
     "engine_to": 1.0,      # ...rising from 10 Hz to the effect's frequency at this one
+    "fitted": {"throttle": True, "brake": True, "clutch": True},  # pedals with a motor on them
     "pedals": {
         "throttle": {"engine": _fx(True, 100, 10), "tc": _fx(True, 50, 80), "gear": _fx(True, 100, 80),
                      "spin": _fx(False, 60, 60)},
@@ -85,6 +87,7 @@ def _clean(s):
     s["enabled"] = bool(s["enabled"])
     s["engine_from"] = min(0.95, max(0.0, float(s["engine_from"])))
     s["engine_to"] = min(1.0, max(s["engine_from"] + 0.05, float(s["engine_to"])))
+    s["fitted"] = {p: bool(v) for p, v in s["fitted"].items()}
     for fxs in s["pedals"].values():
         for name, e in fxs.items():
             e["on"] = bool(e["on"])
@@ -161,6 +164,24 @@ def _open_tty(port):
     return fd
 
 
+def _send(fd, data, wait=0.25):
+    """Write one frame. The port is non-blocking and the module reads slower than a burst of frames
+    arrives (11 of 27 back-to-back frames got EAGAIN on the real module), so wait until it takes more."""
+    end = time.monotonic() + wait
+    while True:
+        try:
+            n = os.write(fd, data)
+        except BlockingIOError:
+            n = 0
+        data = data[n:]
+        if not data:
+            return
+        left = end - time.monotonic()
+        if left <= 0:
+            raise OSError("the haptic module is not taking data")
+        select.select([], [fd], [], left)
+
+
 def base_ports():
     return [p for p in sorted(glob.glob("/dev/serial/by-id/usb-Gudsen_MOZA*-if00")) if not is_module_port(p)]
 
@@ -173,7 +194,7 @@ def probe_base(port, wait=0.4):
             os.read(fd, 65536)
         except (BlockingIOError, OSError):
             pass
-        os.write(fd, frame(PEDALS["brake"], 0, False, routed=True, sub=2))
+        _send(fd, frame(PEDALS["brake"], 0, False, routed=True, sub=2))
         buf, end = b"", time.monotonic() + wait
         while time.monotonic() < end:
             time.sleep(0.02)
@@ -251,6 +272,8 @@ class Effects:
             self.road = max(move, self.road * 0.7)
         self.susp = susp
         for pedal, fxs in s["pedals"].items():
+            if not s["fitted"].get(pedal, True):
+                continue  # no motor on this pedal
             for name, e in fxs.items():
                 if not e["on"] or not e["strength"]:
                     continue
@@ -348,6 +371,8 @@ class Driver:
             test, game = self.test, self.game
             if test and now > test[2]:
                 self.test = test = None
+        if test and not s["fitted"].get(test[0], True):
+            test = None
         if test:
             pedal, name, _ = test
             e = s["pedals"].get(pedal, {}).get(name) or {"hz": 50, "strength": 50}
@@ -366,7 +391,7 @@ class Driver:
         self.fd, self.port, self.routed = fd, port, routed
         for p in PEDALS.values():  # a fresh connection starts from silence
             for slot in SLOTS.values():
-                os.write(fd, frame(p, slot, False, routed=routed))
+                _send(fd, frame(p, slot, False, routed=routed))
 
     def _close(self):
         if self.fd is not None:
@@ -380,7 +405,7 @@ class Driver:
         if self.fd is None:
             self._open()
         for f in frames:
-            os.write(self.fd, frame(*f, routed=self.routed))
+            _send(self.fd, frame(*f, routed=self.routed))
         try:
             os.read(self.fd, 4096)  # acknowledgements: drain so the buffer never fills
         except (BlockingIOError, OSError):

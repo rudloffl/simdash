@@ -584,9 +584,12 @@
         <input type="number" id="hp-eng-to" min="5" max="100" step="5" class="hp-pct">% of max RPM.
         Wheel spin and lockup need the car's tyre size, learned on a straight while coasting (as for the shakers).</div>
     </div>
-    <div class="card"><h3>Throttle</h3><div class="hp-fx" data-pedal="throttle"></div></div>
-    <div class="card"><h3>Brake</h3><div class="hp-fx" data-pedal="brake"></div></div>
-    <div class="card"><h3>Clutch</h3><div class="hp-fx" data-pedal="clutch"></div></div>
+    <div class="card hp-pedal" data-pedal="throttle"><h3>Throttle <label class="right hp-fit"><input type="checkbox" data-fitted="throttle"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="throttle"></div></div>
+    <div class="card hp-pedal" data-pedal="brake"><h3>Brake <label class="right hp-fit"><input type="checkbox" data-fitted="brake"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="brake"></div></div>
+    <div class="card hp-pedal" data-pedal="clutch"><h3>Clutch <label class="right hp-fit"><input type="checkbox" data-fitted="clutch"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="clutch"></div></div>
   </div>
 </section>
 
