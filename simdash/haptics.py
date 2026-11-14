@@ -247,19 +247,26 @@ class Effects:
     def __init__(self):
         self.gear = None
         self.gear_until = 0.0
+        self.gear_to = None
         self.susp = None
         self.road = 0.0
+        self.why = {}         # (pedal, effect) -> why it plays, for the page
 
     def reset(self):
         self.gear, self.gear_until, self.susp, self.road = None, 0.0, None, 0.0
+        self.why = {}
 
     def compute(self, s, g, now):
-        want = {}
+        want, why = {}, {}
+        self.why = why
         rpm, max_rpm = g["rpm"], g["max_rpm"]
         if g["gear"] != self.gear:
             if self.gear is not None and g["gear"] != 0:
                 self.gear_until = now + 0.2
+                self.gear_to = (self.gear, g["gear"])
             self.gear = g["gear"]
+        pct = lambda v: f"{round(100 * v)} %"
+        gear_name = lambda n: "R" if n < 0 else "N" if n == 0 else str(n)
         flags = g["car_flags"]
         abs_on = (g["abs"] or flags & 0x10) and g["brake"] > 0.06
         tc_on = flags & 0x40 and g["throttle"] > 0.06
@@ -284,6 +291,7 @@ class Effects:
                     k = min(1.0, (rpm / max_rpm - s["engine_from"]) / (s["engine_to"] - s["engine_from"]))
                     f = 10 + (hz - 10) * k
                     want[pedal, name] = (int(1000 / max(f, 10)) + 1, f, amp, PERIOD)
+                    why[pedal, name] = f"{round(rpm)} rpm, {pct(rpm / max_rpm)} of max"
                     continue
                 if name == "gear":
                     active = now < self.gear_until
@@ -309,7 +317,31 @@ class Effects:
                 if active:
                     dur, every = (200, 0.2) if name == "gear" else TIMING[name]
                     want[pedal, name] = (dur, hz, amp, every)
+                    why[pedal, name] = _reason_text(self, name, g, e, slips, pct, gear_name)
         return want
+
+
+def _reason_text(fx, name, g, e, slips, pct, gear_name):
+    """Why a pedal effect plays, in words, for the page."""
+    if name == "gear":
+        a, b = fx.gear_to or (None, g["gear"])
+        return f"shift {gear_name(a)} → {gear_name(b)}" if a is not None else f"shift to {gear_name(b)}"
+    if name == "abs":
+        return f"ABS working, brake {pct(g['brake'])}"
+    if name == "tc":
+        return f"traction control cutting, throttle {pct(g['throttle'])}"
+    if name == "spin":
+        return f"wheel spinning {pct(max(slips))} faster than the car, throttle {pct(g['throttle'])}"
+    if name == "lock":
+        return f"wheel {pct(-min(slips))} slower than the car, brake {pct(g['brake'])}"
+    if name == "brake_point":
+        return f"brake {pct(g['brake'])}, past the {pct(e['trigger'])} trigger"
+    if name == "bite":
+        return f"clutch {pct(g['clutch'])}, near the {pct(e['trigger'])} bite point"
+    if name == "road":
+        return f"suspension moving {fx.road * 1000:.1f} mm per sample"
+    return ""
+
 
 
 # ---------- the writer ----------
@@ -333,8 +365,13 @@ class Driver:
         susp = (snap.get("raw") or {}).get("mSuspensionTravel")
         g = {k: snap[k] for k in ("rpm", "max_rpm", "gear", "car_flags", "abs", "brake", "throttle", "clutch", "speed")}
         g["slips"], g["susp"] = slips, list(susp) if susp else None
+        self.feed_values(g, "game")
+
+    def feed_values(self, g, source="game"):
+        """One sample, from the live game or from a race replay (the replay plays even when
+        "Vibrate the pedals while driving" is off: it is there to try the effects)."""
         with self.lock:
-            self.game = (time.monotonic(), g)
+            self.game = (time.monotonic(), g, source)
         self._ensure()
 
     def start_test(self, pedal, effect):
@@ -377,9 +414,10 @@ class Driver:
             pedal, name, _ = test
             e = s["pedals"].get(pedal, {}).get(name) or {"hz": 50, "strength": 50}
             hz = e["hz"] if name != "road" else 60
+            self.fx.why = {(pedal, name): "Test button"}
             return "test", {(pedal, name): (200, hz, e["strength"] / 100, 0.1)}
-        if game and s["enabled"] and now - game[0] < STALE:
-            return "game", self.fx.compute(s, game[1], now)
+        if game and (s["enabled"] or game[2] == "replay") and now - game[0] < STALE:
+            return game[2], self.fx.compute(s, game[1], now)
         self.fx.reset()
         return "idle", {}
 
@@ -450,7 +488,10 @@ class Driver:
             with self.lock:
                 self.state = {"source": source, "port": self.port if self.fd is not None else None,
                               "routed": self.routed,
-                              "playing": sorted(f"{p}:{n}" for p, n in want), "error": err}
+                              "playing": sorted(f"{p}:{n}" for p, n in want), "error": err,
+                              "detail": {f"{p}:{n}": {"hz": round(w[1]), "strength": round(w[2] * 100),
+                                                      "why": self.fx.why.get((p, n), "")}
+                                         for (p, n), w in want.items()}}
             time.sleep(PERIOD if want or source != "idle" else 0.1)
 
 

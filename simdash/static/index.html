@@ -15,12 +15,19 @@
     <button data-tab="progress">Progress</button>
     <button data-tab="genie">Corner Genie</button>
     <button data-tab="edges">Track edges</button>
-    <button data-tab="shakers">Shakers</button>
-    <button data-tab="haptics">Pedal haptics</button>
+    <button data-tab="shakers">Haptics</button>
     <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
-  <button id="hdr-start" class="primary sys-act" data-act="ams2/start" hidden title="start-race: simd, CrewChief, AMS2 and the shakers">Start AMS2</button>
+  <div id="hdr-start-grp" class="split-btn" hidden>
+    <button id="hdr-start" class="primary sys-act" data-act="ams2/start" title="start-race: simd, AMS2, and what is ticked in the menu next to it">Start AMS2</button>
+    <button id="hdr-start-more" class="primary" aria-haspopup="true" aria-expanded="false" title="What starts with AMS2">▾</button>
+    <div id="hdr-start-menu" class="split-menu" hidden>
+      <div class="muted">Also start with AMS2</div>
+      <label class="led-check"><input type="checkbox" data-launch="crewchief"> CrewChief</label>
+      <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers (monocoque)</label>
+    </div>
+  </div>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
 </header>
 
@@ -422,6 +429,58 @@
 </section>
 
 <section id="tab-shakers" class="tab">
+  <details class="card acc" id="hx-acc-replay" open>
+  <summary><h3>Replay a race on the shakers and pedals <span class="right muted" id="rp-note"></span></h3></summary>
+      <div class="rp-bar">
+        <select id="rp-session"><option value="">Choose a recorded session…</option></select>
+        <select id="rp-lap" title="Jump to a lap" disabled></select>
+        <button id="rp-play" class="primary" disabled>Play</button>
+        <select id="rp-speed" title="Replay speed: the vibrations keep their pitch, gear kicks their length">
+          <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+        </select>
+        <label class="led-check rp-pedals" title="Also play the Moza pedal haptics from the recording"><input type="checkbox" id="rp-pedals" checked> Pedals</label>
+        <input type="range" id="rp-slider" min="0" max="1" step="0.05" value="0" disabled>
+        <span class="num" id="rp-time"></span>
+      </div>
+      <div id="rp-body" hidden>
+        <div class="rp-cols">
+          <div class="rp-left">
+        <div class="rp-top">
+          <canvas id="rp-map"></canvas>
+          <svg id="rp-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Which shakers are playing"></svg>
+        </div>
+        <div class="rp-gauges">
+          <div class="rp-rpm"><span class="muted">RPM</span><b class="num" id="rp-rpm">–</b>
+            <div class="rp-rpmbar"><i id="rp-rpmfill"></i></div></div>
+          <div><span class="muted">Gear</span><b class="num" id="rp-gear">–</b></div>
+          <div><span class="muted">km/h</span><b class="num" id="rp-speed-v">–</b></div>
+          <div><span class="muted">Lap</span><b class="num" id="rp-lapv">–</b></div>
+        </div>
+        <div class="rp-surface"><span class="pill" id="rp-where">–</span><div class="rp-wheels" id="rp-wheels"></div></div>
+        <div class="rp-pedal"><span class="muted">Throttle</span><div><i id="rp-thr"></i></div></div>
+        <div class="rp-pedal"><span class="muted">Brake</span><div><i id="rp-brk"></i></div></div>
+            <div class="rp-hp muted" id="rp-hp"></div>
+          </div>
+          <div class="rp-right">
+            <div class="rp-sub muted">Shakers</div>
+            <div id="rp-fx"></div>
+            <div class="rp-sub muted">Pedals <span id="rp-pfx-state"></span></div>
+            <div id="rp-pfx"></div>
+          </div>
+        </div>
+      </div>
+      <div class="muted sh-help">
+        Plays a recorded session on the shakers with the effects on this page, unsaved changes included: change an
+        effect on the right while it plays and you feel the new setting a moment later. With <b>Pedals</b> ticked the Moza
+        pedal haptics play along with their settings below (saved as you change them), even if
+        “Vibrate the pedals while driving” is off. Computed from the recording with
+        monocoque's formulas. Under each wheel: AMS2's raw terrain and monocoque's slip (lock &gt; 0, spin &lt; 0),
+        highlighted past the effect's threshold. Without the shaker card it only shows it.
+      </div>
+  </details>
+
+  <details class="card acc" id="hx-acc-shakers" open>
+  <summary><h3>Shakers <span class="right muted">bass shakers through monocoque</span></h3></summary>
   <div class="filters shaker-bar">
     <label class="muted" for="sh-sink">Sound card</label>
     <select id="sh-sink"></select>
@@ -434,7 +493,6 @@
     </span>
   </div>
   <div class="shaker-grid">
-    <div class="sh-col">
     <div class="card">
       <h3>Shakers on the car <span class="right muted" id="sh-car-hint">click a shaker to test it</span></h3>
       <svg id="sh-car" viewBox="0 0 240 440" role="img" aria-label="Car seen from above with the shaker positions">
@@ -459,43 +517,6 @@
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
-    <div class="card" id="rp-card">
-      <h3>Replay a race on the shakers <span class="right muted" id="rp-note"></span></h3>
-      <div class="rp-bar">
-        <select id="rp-session"><option value="">Choose a recorded session…</option></select>
-        <select id="rp-lap" title="Jump to a lap" disabled></select>
-        <button id="rp-play" class="primary" disabled>Play</button>
-        <select id="rp-speed" title="Replay speed: the vibrations keep their pitch, gear kicks their length">
-          <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
-        </select>
-        <input type="range" id="rp-slider" min="0" max="1" step="0.05" value="0" disabled>
-        <span class="num" id="rp-time"></span>
-      </div>
-      <div id="rp-body" hidden>
-        <div class="rp-top">
-          <canvas id="rp-map"></canvas>
-          <svg id="rp-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="Which shakers are playing"></svg>
-        </div>
-        <div class="rp-gauges">
-          <div class="rp-rpm"><span class="muted">RPM</span><b class="num" id="rp-rpm">–</b>
-            <div class="rp-rpmbar"><i id="rp-rpmfill"></i></div></div>
-          <div><span class="muted">Gear</span><b class="num" id="rp-gear">–</b></div>
-          <div><span class="muted">km/h</span><b class="num" id="rp-speed-v">–</b></div>
-          <div><span class="muted">Lap</span><b class="num" id="rp-lapv">–</b></div>
-        </div>
-        <div class="rp-surface"><span class="pill" id="rp-where">–</span><div class="rp-wheels" id="rp-wheels"></div></div>
-        <div class="rp-pedal"><span class="muted">Throttle</span><div><i id="rp-thr"></i></div></div>
-        <div class="rp-pedal"><span class="muted">Brake</span><div><i id="rp-brk"></i></div></div>
-        <div id="rp-fx"></div>
-      </div>
-      <div class="muted sh-help">
-        Plays a recorded session on the shakers with the effects on this page, unsaved changes included: change an
-        effect on the right while it plays and you feel the new setting a moment later. Computed from the recording with
-        monocoque's formulas. Under each wheel: AMS2's raw terrain and monocoque's slip (lock &gt; 0, spin &lt; 0),
-        highlighted past the effect's threshold. Without the shaker card it only shows it.
-      </div>
-    </div>
-    </div>
     <div class="card">
       <h3>Effects <span class="right"><button id="sh-add">Add effect</button></span></h3>
       <div id="sh-effects"></div>
@@ -507,6 +528,29 @@
       </div>
     </div>
   </div>
+  </details>
+
+  <details class="card acc" id="hx-acc-pedals" open>
+  <summary><h3>Pedal haptics <span class="right muted" id="hp-port"></span></h3></summary>
+  <div class="hp-grid" id="hp-section">
+    <div class="card hp-head">
+      <label class="led-check"><input type="checkbox" id="hp-enabled"> Vibrate the pedals while driving</label>
+      <div class="hp-now" id="hp-now">–</div>
+      <div class="fx-hint">Moza Pedal Haptic Feedback module, on its own USB port or plugged behind the wheelbase
+        (its own USB port is used first). simdash streams the effects from AMS2's telemetry; nothing is stored in the module. Close Pit House and boxflat while driving.
+        Engine vibration rises from 10 Hz to the chosen frequency between
+        <input type="number" id="hp-eng-from" min="0" max="95" step="5" class="hp-pct">% and
+        <input type="number" id="hp-eng-to" min="5" max="100" step="5" class="hp-pct">% of max RPM.
+        Wheel spin and lockup need the car's tyre size, learned on a straight while coasting (as for the shakers).</div>
+    </div>
+    <div class="card hp-pedal" data-pedal="throttle"><h3>Throttle <label class="right hp-fit"><input type="checkbox" data-fitted="throttle"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="throttle"></div></div>
+    <div class="card hp-pedal" data-pedal="brake"><h3>Brake <label class="right hp-fit"><input type="checkbox" data-fitted="brake"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="brake"></div></div>
+    <div class="card hp-pedal" data-pedal="clutch"><h3>Clutch <label class="right hp-fit"><input type="checkbox" data-fitted="clutch"> Motor fitted</label></h3>
+      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="clutch"></div></div>
+  </div>
+  </details>
 </section>
 
 <section id="tab-system" class="tab">
@@ -521,10 +565,14 @@
       <dl id="sys-ams2"></dl>
       <div class="sys-btns">
         <button data-act="ams2/start">Start session</button>
-        <button data-act="ams2/restart" data-confirm="Close AMS2 and start a new session (simd, CrewChief, AMS2, monocoque)? A race in progress ends.">Restart AMS2</button>
+        <button data-act="ams2/restart" data-confirm="Close AMS2 and start a new session? A race in progress ends.">Restart AMS2</button>
         <button data-act="ams2/quit" data-confirm="Close AMS2? A race in progress ends.">Quit AMS2</button>
       </div>
-      <div class="sys-note">Start and Restart go through <span class="num">start-race</span>, which also gives a fresh simd, CrewChief and monocoque, and stops them when AMS2 exits.</div>
+      <div class="sys-launch">Also start with AMS2:
+        <label class="led-check"><input type="checkbox" data-launch="crewchief"> CrewChief</label>
+        <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers (monocoque)</label>
+      </div>
+      <div class="sys-note">Start and Restart go through <span class="num">start-race</span> (also the desktop launcher), which gives a fresh simd plus what is ticked above, and stops them when AMS2 exits. A change applies from the next start.</div>
     </div>
     <div class="card sys-card" data-c="simd">
       <h3><span class="dot"></span>simd (simapi) <span class="right muted" id="sys-simd-state"></span></h3>
@@ -568,28 +616,6 @@
       <option value="crewchief">CrewChief</option><option value="simdash">simdash</option>
     </select></span></h3>
     <pre class="sys-logbox" id="sys-logbox"></pre>
-  </div>
-</section>
-
-<section id="tab-haptics" class="tab">
-  <div class="hp-grid">
-    <div class="card hp-head">
-      <h3>Pedal haptics <span class="right muted" id="hp-port"></span></h3>
-      <label class="led-check"><input type="checkbox" id="hp-enabled"> Vibrate the pedals while driving</label>
-      <div class="hp-now" id="hp-now">–</div>
-      <div class="fx-hint">Moza Pedal Haptic Feedback module, on its own USB port or plugged behind the wheelbase
-        (its own USB port is used first). simdash streams the effects from AMS2's telemetry; nothing is stored in the module. Close Pit House and boxflat while driving.
-        Engine vibration rises from 10 Hz to the chosen frequency between
-        <input type="number" id="hp-eng-from" min="0" max="95" step="5" class="hp-pct">% and
-        <input type="number" id="hp-eng-to" min="5" max="100" step="5" class="hp-pct">% of max RPM.
-        Wheel spin and lockup need the car's tyre size, learned on a straight while coasting (as for the shakers).</div>
-    </div>
-    <div class="card hp-pedal" data-pedal="throttle"><h3>Throttle <label class="right hp-fit"><input type="checkbox" data-fitted="throttle"> Motor fitted</label></h3>
-      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="throttle"></div></div>
-    <div class="card hp-pedal" data-pedal="brake"><h3>Brake <label class="right hp-fit"><input type="checkbox" data-fitted="brake"> Motor fitted</label></h3>
-      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="brake"></div></div>
-    <div class="card hp-pedal" data-pedal="clutch"><h3>Clutch <label class="right hp-fit"><input type="checkbox" data-fitted="clutch"> Motor fitted</label></h3>
-      <div class="hp-unfit muted">No motor on this pedal: its effects are off.</div><div class="hp-fx" data-pedal="clutch"></div></div>
   </div>
 </section>
 

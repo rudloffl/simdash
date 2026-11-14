@@ -50,6 +50,7 @@ class ReplayControl(BaseModel):
     ts: float | None = None
     speed: float = 1.0
     devid: str = ""
+    pedals: bool = True  # also play the Moza pedal haptics
 
 
 class LedDriver(BaseModel):
@@ -486,7 +487,7 @@ def create_app(recorder=None):
         p = replay.player
         try:
             if c.action == "play":
-                p.play(c.ts if c.ts is not None else p.now(), max(0.1, min(2.0, c.speed)), c.devid)
+                p.play(c.ts if c.ts is not None else p.now(), max(0.1, min(2.0, c.speed)), c.devid, c.pedals)
             elif c.action == "pause":
                 p.pause()
             elif c.action == "seek" and c.ts is not None:
@@ -600,6 +601,11 @@ def create_app(recorder=None):
 
     @app.get("/api/system")
     async def system_status():
+        return await asyncio.to_thread(system.status, rec.snapshot())
+
+    @app.post("/api/system/launch")
+    async def system_launch(body: dict):
+        await asyncio.to_thread(system.set_launch, body)
         return await asyncio.to_thread(system.status, rec.snapshot())
 
     @app.get("/api/system/log/{name}")

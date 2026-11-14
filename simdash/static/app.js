@@ -60,11 +60,11 @@ function showTab(name) {
   if (name !== "genie" && pf.replay) stopPilotReplay();
   if (name !== "genie" && typeof gp !== "undefined" && gp.playing) gcPlayStop();
   if (name === "shakers" && !sh.dirty) loadShakers();
+  if (name === "shakers") loadHaptics(); else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
-  if (name === "haptics") loadHaptics(); else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#shakers$/, system: /^#system$/, leds: /^#leds$/, haptics: /^#haptics$/ }[name];
+  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#(shakers|haptics)$/, system: /^#system$/, leds: /^#leds$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -1911,7 +1911,12 @@ function renderCar() {
     });
   }
   if (!used.length) html = `<text x="120" y="230" text-anchor="middle" style="fill:var(--muted);font-size:12px">Place a shaker with the table below</text>`;
-  $("#sh-spots").innerHTML = html;
+  $("#sh-spots").innerHTML = html + pedalGlyphs();
+  $("#sh-spots").querySelectorAll(".pedal-g").forEach((g) => (g.onclick = () => {
+    $("#hx-acc-pedals").open = true;
+    document.querySelector(`.hp-pedal[data-pedal="${g.dataset.pedal}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
+  paintPedals();
   $("#sh-spots").querySelectorAll(".spot").forEach((g) => (g.onclick = () => {
     selectChannel(+g.dataset.ch);
     shakerTest({ pan: +g.dataset.ch }, "identify");
@@ -2267,7 +2272,26 @@ function buildShakerCar(svg, layout, channels) {
         <circle r="25"/><text>${channels[ch]}</text></g>`;
     });
   }
-  $(svg).innerHTML = body + spots;
+  $(svg).innerHTML = body + spots + (svg === "#rp-car" ? pedalGlyphs() : "");
+  if (svg === "#rp-car") paintPedals();
+}
+
+// the three pedals in the footwell of the car top views (Haptics tab), lit while their haptics play
+const PEDAL_X = { clutch: 100, brake: 120, throttle: 140 };
+function pedalGlyphs() {
+  return Object.entries(PEDAL_X).map(([p, x]) =>
+    `<g class="pedal-g" data-pedal="${p}" transform="translate(${x} 112)"><title>${p[0].toUpperCase() + p.slice(1)} pedal haptics</title>
+      <rect x="-6" y="-13" width="12" height="26" rx="3"/><text y="24">${p[0].toUpperCase()}</text></g>`).join("");
+}
+function paintPedals() {
+  const playing = hp.playing || [], fitted = hp.setup?.settings?.fitted || {};
+  document.querySelectorAll(".pedal-g").forEach((g) => {
+    const p = g.dataset.pedal, fx = playing.filter((x) => x.startsWith(p + ":")).map((x) => hp.setup?.names[x.split(":")[1]] || x.split(":")[1]);
+    g.classList.toggle("on", fx.length > 0);
+    g.classList.toggle("unfitted", fitted[p] === false);
+    const t = g.querySelector("title");
+    if (t) t.textContent = `${p[0].toUpperCase() + p.slice(1)} pedal haptics${fitted[p] === false ? " (no motor)" : ""}${fx.length ? ": " + fx.join(", ") : ""}`;
+  });
 }
 function renderMiniCar() { buildShakerCar("#rp-car", sh.layout, sh.opts.channels); }
 
@@ -2313,7 +2337,7 @@ const replayTs = () => {
 async function replayControl(body) {
   const r = await fetch("/api/shakers/replay/control", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ devid: sh.devid, speed: +$("#rp-speed").value, ...body }),
+    body: JSON.stringify({ devid: sh.devid, speed: +$("#rp-speed").value, pedals: $("#rp-pedals").checked, ...body }),
   });
   const d = await r.json();
   if (!r.ok) { $("#rp-note").textContent = d.detail || "Replay failed"; return; }
@@ -2426,6 +2450,20 @@ $("#rp-session").onfocus = loadReplaySessions;
 $("#rp-session").onchange = async (ev) => {
   if (rp.st?.playing) await replayControl({ action: "pause" });
   loadReplay(ev.target.value);
+};
+// the Haptics tab's three accordions: open or closed remembered; the replay map sized once visible
+for (const [id, key, onOpen] of [
+  ["#hx-acc-replay", "hxAccReplay", () => { rp.lastDraw = -1; if (rp.d) drawReplayFrame(); }],
+  ["#hx-acc-shakers", "hxAccShakers", () => {}],
+  ["#hx-acc-pedals", "hxAccPedals", () => {}],
+]) {
+  const el = $(id);
+  el.open = pref.get(key, true);
+  el.ontoggle = () => { pref.set(key, el.open); if (el.open) onOpen(); };
+}
+$("#rp-pedals").onchange = () => {
+  paintPedalFx();
+  if (rp.st?.playing) replayControl({ action: "play", ts: replayTs() });
 };
 $("#rp-play").onclick = () => replayControl(rp.st?.playing ? { action: "pause" } : { action: "play", ts: replayTs() >= rp.d.t1 - 0.1 ? rp.d.t0 : replayTs() });
 $("#rp-speed").onchange = () => { if (rp.st?.playing) replayControl({ action: "play", ts: replayTs() }); };
@@ -3863,12 +3901,14 @@ function chainStates(d) {
     : d.simd.check === "live" ? ["ok", "live"]
     : on && shmLive ? ["bad", "sees no game", "simd does not see AMS2 (it stops finding it after a few restarts): Restart AMS2, or Restart simd."]
     : ["ok", "waiting for a game"];
+  const want = d.launch || { crewchief: true, monocoque: true };
   st.monocoque = d.monocoque.stale ? ["bad", "reads an old simd", "monocoque was started before simd was restarted and reads data that no longer changes (no vibration from it): Restart monocoque."]
     : d.monocoque.running ? ["ok", "running"]
-    : on ? ["warn", "not running", "monocoque is not running, so no vibration: Restart monocoque."] : ["off", "not running"];
+    : on && want.monocoque ? ["warn", "not running", "monocoque is not running, so no vibration: Restart monocoque."]
+    : ["off", want.monocoque ? "not running" : "not started (unticked)"];
   st.card = d.card.connected ? ["ok", "connected"] : ["bad", "not connected", "The shaker sound card is unplugged: plug the USB 7.1 card in."];
   st.crewchief = d.crewchief.running ? (d.crewchief.listening ? ["ok", "listening"] : ["warn", "starting"])
-    : on ? ["warn", "not running"] : ["off", "not running"];
+    : on && want.crewchief ? ["warn", "not running"] : ["off", want.crewchief ? "not running" : "not started (unticked)"];
   return st;
 }
 
@@ -3925,6 +3965,10 @@ function renderSystem() {
   $("#sys-actions").innerHTML = (d.actions || []).map((a) =>
     `<li><span class="t">${new Date(a.t * 1000).toLocaleTimeString()}</span>${esc(a.text)}</li>`).join("") || '<li class="muted">None yet</li>';
 
+  document.querySelectorAll("[data-launch]").forEach((c) => {
+    if (!sys.launchSaving) c.checked = !!(d.launch || {})[c.dataset.launch];
+  });
+
   // buttons that make no sense in the current state
   const can = {
     "ams2/start": !d.ams2.running && !d.session && !d.busy.ams2,
@@ -3935,7 +3979,7 @@ function renderSystem() {
     "monocoque/stop": d.monocoque.running,
   };
   document.querySelectorAll(SYS_BUTTONS).forEach((b) => {
-    if (b.id === "hdr-start") b.hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;
+    if (b.id === "hdr-start") $("#hdr-start-grp").hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;
     b.disabled = sys.busy === b.dataset.act || !can[b.dataset.act];
     b.classList.toggle("busy", sys.busy === b.dataset.act || (b.dataset.act.startsWith("ams2/") && !!d.busy.ams2));
   });
@@ -3975,6 +4019,28 @@ document.querySelectorAll(SYS_BUTTONS).forEach((b) => (b.onclick = async () => {
   }
 }));
 $("#sys-log").onchange = loadSystemLog;
+// the ▾ next to Start AMS2: what starts with it (same settings as the System tab's AMS2 card)
+const startMenu = (open) => {
+  $("#hdr-start-menu").hidden = !open;
+  $("#hdr-start-more").setAttribute("aria-expanded", String(open));
+};
+$("#hdr-start-more").onclick = (e) => { e.stopPropagation(); startMenu($("#hdr-start-menu").hidden); };
+document.addEventListener("click", (e) => { if (!$("#hdr-start-grp").contains(e.target)) startMenu(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") startMenu(false); });
+document.querySelectorAll("[data-launch]").forEach((c) => (c.onchange = async () => {
+  sys.launchSaving = true;
+  try {
+    const r = await fetch("/api/system/launch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [c.dataset.launch]: c.checked }),
+    });
+    if (r.ok) sys.data = await r.json();
+    else alert("Could not save");
+  } finally {
+    sys.launchSaving = false;
+    renderSystem();
+  }
+}));
 
 // refresh every 2 s on the System tab, every 15 s elsewhere for the tab's warning dot
 setInterval(() => {
@@ -4405,7 +4471,7 @@ requestAnimationFrame(frame);
 
 // ---------- Pedal haptics (Moza Pedal Haptic Feedback module) ----------
 
-const hp = { setup: null, timer: null, saveTimer: null };
+const hp = { setup: null, timer: null, saveTimer: null, playing: [] };
 const HP_HINT = {
   engine: "follows the RPM", gear: "each gear change", tc: "when traction control cuts in",
   abs: "when ABS works", spin: "a driven wheel spins (over 15 % slip)", lock: "a wheel locks under braking",
@@ -4427,6 +4493,7 @@ function renderHaptics() {
   $("#hp-eng-to").value = Math.round(s.engine_to * 100);
   document.querySelectorAll("[data-fitted]").forEach((cb) => { cb.checked = s.fitted?.[cb.dataset.fitted] !== false; });
   hapticsFitted();
+  renderPedalFx();
   document.querySelectorAll(".hp-fx").forEach((box) => {
     const pedal = box.dataset.pedal, fxs = s.pedals[pedal] || {};
     box.innerHTML = Object.entries(fxs).map(([name, e]) => `
@@ -4442,9 +4509,43 @@ function renderHaptics() {
       </div>`).join("");
   });
 }
+// the replay's pedal list: each effect that can play (on, pedal fitted), lit with its value and why
+const PEDAL_COLOUR = { throttle: "--s-throttle", brake: "--s-brake", clutch: "--s-clutch" };
+function renderPedalFx() {
+  const s = hp.setup?.settings;
+  if (!s) return;
+  const rows = [];
+  for (const [pedal, fxs] of Object.entries(s.pedals)) {
+    if (s.fitted?.[pedal] === false) continue;
+    for (const [name, e] of Object.entries(fxs)) {
+      if (!e.on || !e.strength) continue;
+      rows.push(`<div class="rp-fx" data-k="${pedal}:${name}" style="--c:var(${PEDAL_COLOUR[pedal]})">
+        <span class="n">${pedal[0].toUpperCase() + pedal.slice(1)} · ${esc(hp.setup.names[name] || name)}</span><span class="v">–</span>
+        <div class="bar"><i></i></div><span class="why"></span></div>`);
+    }
+  }
+  $("#rp-pfx").innerHTML = rows.join("") || '<span class="muted">No pedal effect switched on.</span>';
+  paintPedalFx();
+}
+function paintPedalFx() {
+  const det = hp.detail || {};
+  document.querySelectorAll("#rp-pfx .rp-fx").forEach((row) => {
+    const x = det[row.dataset.k];
+    row.classList.toggle("on", !!x);
+    row.querySelector(".v").textContent = x ? `${x.hz} Hz ${x.strength}%` : "–";
+    row.querySelector(".bar i").style.width = x ? `${x.strength}%` : "0";
+    row.querySelector(".why").textContent = x ? x.why : "";
+  });
+  $("#rp-pfx-state").textContent = !$("#rp-pedals").checked ? "· off for this replay (tick Pedals)"
+    : hp.setup && !hp.setup.port ? "· no haptic module found" : "";
+}
+
 function hapticsFitted() {
-  document.querySelectorAll(".hp-pedal").forEach((card) =>
-    card.classList.toggle("unfitted", !card.querySelector("[data-fitted]").checked));
+  document.querySelectorAll(".hp-pedal").forEach((card) => {
+    card.classList.toggle("unfitted", !card.querySelector("[data-fitted]").checked);
+    if (hp.setup) (hp.setup.settings.fitted ??= {})[card.dataset.pedal] = card.querySelector("[data-fitted]").checked;
+  });
+  paintPedals();
 }
 function hapticsPatch() {
   const pedals = {}, fitted = {};
@@ -4469,15 +4570,15 @@ function scheduleHapticsSave() {
   clearTimeout(hp.saveTimer);
   hp.saveTimer = setTimeout(async () => {
     const r = await fetch("/api/haptics", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hapticsPatch()) });
-    if (r.ok) hp.setup.settings = await r.json();
+    if (r.ok) { hp.setup.settings = await r.json(); renderPedalFx(); }
   }, 300);
 }
-$("#tab-haptics").addEventListener("input", (e) => {
+$("#hp-section").addEventListener("input", (e) => {
   const k = e.target.dataset.k, row = e.target.closest(".hp-row");
   if (row && k && k !== "on") row.querySelectorAll(`[data-k="${k}"]`).forEach((el) => { if (el !== e.target) el.value = e.target.value; });
   scheduleHapticsSave();
 });
-$("#tab-haptics").addEventListener("click", async (e) => {
+$("#hp-section").addEventListener("click", async (e) => {
   if (!e.target.matches("[data-test]")) return;
   const row = e.target.closest(".hp-row"), pedal = e.target.closest(".hp-fx").dataset.pedal;
   clearTimeout(hp.saveTimer);
@@ -4485,22 +4586,30 @@ $("#tab-haptics").addEventListener("click", async (e) => {
   await fetch("/api/haptics/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pedal, effect: row.dataset.fx }) });
 });
 async function pollHaptics() {
-  if (currentTab !== "haptics") return;
+  if (currentTab !== "shakers") return;
   let st;
   try { st = await (await fetch("/api/haptics/state")).json(); } catch { return; }
   const playing = new Set(st.playing);
+  hp.playing = st.playing;
+  hp.detail = st.detail;
+  paintPedals();
+  paintPedalFx();
   document.querySelectorAll(".hp-fx").forEach((box) => box.querySelectorAll(".hp-row").forEach((row) =>
     row.classList.toggle("playing", playing.has(`${box.dataset.pedal}:${row.dataset.fx}`))));
   const what = st.playing.map((p) => { const [pedal, fx] = p.split(":"); return `${pedal} ${(hp.setup?.names[fx] || fx).toLowerCase()}`; });
   $("#hp-now").innerHTML = st.error ? `<span style="color:var(--critical)">${esc(st.error)}</span>`
     : st.source === "test" ? `Testing: <b>${esc(what.join(", "))}</b> (3 s)`
     : st.source === "game" ? (what.length ? `Playing: <b>${esc(what.join(", "))}</b>` : "Driving: nothing playing right now")
+    : st.source === "replay" ? (what.length ? `Replay: <b>${esc(what.join(", "))}</b>` : "Replay: nothing on the pedals right now")
     : "Waiting for AMS2 on track";
+  $("#rp-hp").innerHTML = st.source === "replay" ? `Pedals: ${what.length ? `<b>${esc(what.join(", "))}</b>` : "nothing right now"}`
+    : rp.st?.playing && !rp.st?.pedals ? "Pedals: off for this replay" : "";
   if (!!st.found !== !!hp.setup?.port) loadHaptics();
 }
 
 if (location.hash.startsWith("#session=")) showTab("history");
 else if (location.hash.startsWith("#progress")) showTab("progress");
-else if (["#genie", "#edges", "#shakers", "#system", "#leds", "#haptics"].includes(location.hash)) showTab(location.hash.slice(1));
+else if (location.hash === "#haptics") showTab("shakers");  // the old Pedal haptics tab, now part of Haptics
+else if (["#genie", "#edges", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
 // in-page links such as "Progress on this track"
 window.addEventListener("hashchange", () => { if (location.hash.startsWith("#progress")) showTab("progress"); });

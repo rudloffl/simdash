@@ -13,7 +13,7 @@ import threading
 import time
 from array import array
 
-from . import shakers, store
+from . import haptics, shakers, store
 from .pcars2 import SURFACE, rear_slide_deg
 
 RATE = 8000           # Hz; shaker frequencies stay far below 4 kHz, and it keeps the synth cheap
@@ -38,27 +38,41 @@ def read_session(ref):
             raise LookupError("no such session")
         rows = con.execute(
             "SELECT t.id, t.ts, e.x, e.z, e.lap, e.speed, e.rpm, e.gear, e.throttle, e.brake, "
-            "e.local_vel_y, e.local_vel_z, e.abs_active, e.local_vel_x, e.angular_vel_y FROM tick t JOIN telemetry e ON e.tick_id = t.id "
+            "e.local_vel_y, e.local_vel_z, e.abs_active, e.local_vel_x, e.angular_vel_y, e.clutch FROM tick t JOIN telemetry e ON e.tick_id = t.id "
             "WHERE t.session_id=? ORDER BY t.ts", (sid,)).fetchall()
-        rps, terrain, max_rpm = {}, {}, []
+        rps, terrain, slip, susp, max_rpm, flags = {}, {}, {}, {}, [], []
         if rows:
             lo, hi = rows[0][0], rows[-1][0]
-            for tick, wheel, v, ter in con.execute("SELECT tick_id, wheel, rps, terrain FROM wheel WHERE tick_id BETWEEN ? AND ?",
-                                                   (lo, hi)):
+            for tick, wheel, v, ter, sl, su in con.execute(
+                    "SELECT tick_id, wheel, rps, terrain, slip, suspension_travel FROM wheel WHERE tick_id BETWEEN ? AND ?",
+                    (lo, hi)):
                 rps.setdefault(tick, [0.0] * 4)[wheel] = v or 0.0
                 terrain.setdefault(tick, [None] * 4)[wheel] = ter
+                slip.setdefault(tick, [None] * 4)[wheel] = sl
+                susp.setdefault(tick, [0.0] * 4)[wheel] = su or 0.0
             max_rpm = con.execute(
                 "SELECT tick_id, max_rpm FROM player_state WHERE tick_id <= ? AND tick_id >= "
                 "COALESCE((SELECT MAX(tick_id) FROM player_state WHERE tick_id <= ?), 0) ORDER BY tick_id",
                 (hi, lo)).fetchall()
+            # player_state rows are written on change only: the one before the session, then each change
+            flags = con.execute(
+                "SELECT tick_id, car_flags FROM player_state WHERE car_flags IS NOT NULL AND tick_id <= ? AND tick_id >= "
+                "COALESCE((SELECT MAX(tick_id) FROM player_state WHERE car_flags IS NOT NULL AND tick_id <= ?), 0) "
+                "ORDER BY tick_id", (hi, lo)).fetchall()
     con.close()
     d = {k: [] for k in ("ts", "x", "z", "lap", "speed", "rpm", "maxrpm", "gear", "throttle", "brake",
-                         "vel_fwd", "vel_up", "abs", "rps", "terrain", "vel_x", "yaw")}
-    k, cur_max = 0, 0
+                         "vel_fwd", "vel_up", "abs", "rps", "terrain", "vel_x", "yaw",
+                         "clutch", "car_flags", "slip", "susp")}
+    k, cur_max, kf, cur_flags = 0, 0, 0, 0
     for r in rows:
         while k < len(max_rpm) and max_rpm[k][0] <= r[0]:
             cur_max = max_rpm[k][1] or 0
             k += 1
+        while kf < len(flags) and flags[kf][0] <= r[0]:
+            cur_flags = flags[kf][1] or 0
+            kf += 1
+        d["clutch"].append(r[15] or 0.0); d["car_flags"].append(cur_flags)
+        d["slip"].append(slip.get(r[0])); d["susp"].append(susp.get(r[0]))
         d["ts"].append(r[1]); d["x"].append(r[2]); d["z"].append(r[3]); d["lap"].append(r[4])
         d["speed"].append(r[5] or 0.0); d["rpm"].append(r[6] or 0.0); d["maxrpm"].append(cur_max)
         d["gear"].append(r[7] or 0); d["throttle"].append(r[8] or 0.0); d["brake"].append(r[9] or 0.0)
@@ -219,6 +233,13 @@ class Timeline:
             return tr[i]
         u = (t - ts[i]) / (ts[i + 1] - ts[i])
         return f0 + (f1 - f0) * u, a0 + (a1 - a0) * u
+
+    def pedal_values(self, i):
+        """What the pedal haptics read from the game, at tick i (haptics.Effects.compute's input)."""
+        d = self.data
+        return {"rpm": d["rpm"][i], "max_rpm": d["maxrpm"][i], "gear": d["gear"][i], "car_flags": d["car_flags"][i],
+                "abs": d["abs"][i], "brake": d["brake"][i], "throttle": d["throttle"][i], "clutch": d["clutch"][i],
+                "speed": d["speed"][i], "slips": d["slip"][i], "susp": d["susp"][i]}
 
     def skip_gap(self, t):
         """If t falls in a long gap between ticks, the time of the next tick."""
@@ -481,6 +502,7 @@ class Player:
         self.thread = None
         self.proc = None
         self.error = ""
+        self.pedals = True     # also play the Moza pedal haptics
 
     # -- clock --
     def now(self):
@@ -494,7 +516,7 @@ class Player:
             t = self.now()
             if self.playing and self.audio:
                 t -= LATENCY * self.speed  # what is being felt, not what is being generated
-            return {"ref": tl.ref if tl else None, "playing": self.playing, "ts": t, "speed": self.speed,
+            return {"ref": tl.ref if tl else None, "playing": self.playing, "ts": t, "speed": self.speed, "pedals": self.pedals,
                     "audio": self.audio, "error": self.error, "t0": tl.t0 if tl else None, "t1": tl.t1 if tl else None}
 
     # -- control --
@@ -508,8 +530,9 @@ class Player:
             self.streams = [_Stream(d) for d in tl.devices]
         return tl
 
-    def play(self, ts, speed, devid):
+    def play(self, ts, speed, devid, pedals=True):
         with self.lock:
+            self.pedals = bool(pedals)
             if self.tl is None:
                 raise LookupError("load a session first")
             self.pos = min(max(ts, self.tl.t0), self.tl.t1)
@@ -567,10 +590,16 @@ class Player:
                         gen = None
                     if gen is None or gen < t - 0.05 or gen > t + 2 * AHEAD * speed:  # started or seeked
                         gen = t
+                    pedal_values = None
+                    if self.pedals:
+                        felt = t - LATENCY * speed if self.audio else t  # in step with the shakers
+                        pedal_values = tl.pedal_values(tl.index(max(tl.t0, felt)))
                     chunks = []
                     while gen < t + AHEAD * speed:
                         chunks.append(self._synth(tl, gen, speed))
                         gen += CHUNK * speed
+                if pedal_values:
+                    haptics.driver_thread.feed_values(pedal_values, "replay")
                 if self.proc and chunks:
                     try:
                         self.proc.stdin.write(b"".join(chunks))

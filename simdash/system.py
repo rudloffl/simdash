@@ -24,6 +24,8 @@ STATE = Path.home() / ".local/state"
 LOCK = STATE / "start-race.lock"
 LOGS = {"monocoque": STATE / "monocoque-play.log", "start-race": STATE / "start-race.log",
         "crewchief": STATE / "crewchief.log", "simdash": STATE / "simdash.log"}
+LAUNCH_CONF = Path.home() / ".config/start-race.conf"   # sourced by start-race
+LAUNCH_KEYS = {"crewchief": "START_CREWCHIEF", "monocoque": "START_MONOCOQUE"}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 _actions = deque(maxlen=20)  # recent actions shown in the page
@@ -101,6 +103,34 @@ def _simapi():
     return r.returncode, info
 
 
+def get_launch():
+    """What start-race starts besides simd, simdash and AMS2 (everything by default)."""
+    out = {k: True for k in LAUNCH_KEYS}
+    try:
+        for line in LAUNCH_CONF.read_text().splitlines():
+            key, _, val = line.strip().partition("=")
+            for k, var in LAUNCH_KEYS.items():
+                if key == var:
+                    out[k] = val.strip() != "0"
+    except OSError:
+        pass
+    return out
+
+
+def set_launch(patch):
+    cur = get_launch()
+    for k, v in (patch or {}).items():
+        if k in cur:
+            cur[k] = bool(v)
+    LAUNCH_CONF.parent.mkdir(parents=True, exist_ok=True)
+    tmp = LAUNCH_CONF.with_suffix(".tmp")
+    tmp.write_text("# written by simdash (System tab): what start-race starts with AMS2\n"
+                   + "".join(f"{var}={int(cur[k])}\n" for k, var in LAUNCH_KEYS.items()))
+    tmp.replace(LAUNCH_CONF)
+    _note("start with AMS2: " + ", ".join(f"{k} {'on' if v else 'off'}" for k, v in cur.items()))
+    return cur
+
+
 def status(rec_live=None):
     now = time.time()
     rec_live = rec_live or {}
@@ -141,6 +171,7 @@ def status(rec_live=None):
 
     with _lock:
         out["actions"] = list(_actions)
+    out["launch"] = get_launch()
     return out
 
 
@@ -241,6 +272,11 @@ def _quit_ams2(timeout=40):
     return bool(pids)
 
 
+def _session_parts():
+    want = get_launch()
+    return ", ".join(["simd", "AMS2"] + [n for k, n in (("crewchief", "CrewChief"), ("monocoque", "monocoque")) if want[k]])
+
+
 def _start_session(*args):
     if _session_running():
         raise RuntimeError("a start-race session is still running")
@@ -252,7 +288,7 @@ def start_ams2():
     if _pids("^AMS2AVX"):
         raise RuntimeError("AMS2 is already running")
     _start_session()
-    _note("session started (start-race: simd, CrewChief, AMS2, monocoque)")
+    _note(f"session started (start-race: {_session_parts()})")
 
 
 def quit_ams2():
@@ -265,7 +301,7 @@ def restart_ams2():
     def run():
         _quit_ams2()
         _start_session()
-        _note("AMS2 restarted through start-race (fresh simd, CrewChief, monocoque)")
+        _note(f"AMS2 restarted through start-race ({_session_parts()})")
     _in_background("ams2", "restarting AMS2", run)
 
 
