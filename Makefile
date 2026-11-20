@@ -21,5 +21,7 @@ offsets:
 install: venv
 	printf '#!/bin/sh\ncd "%s" || exit 1\nexec .venv/bin/python -m simdash "$$@"\n' "$(DIR)" > $(PREFIX)/bin/simdash
 	chmod 755 $(PREFIX)/bin/simdash
+	printf '#!/bin/sh\ncd "%s" || exit 1\nexec .venv/bin/python -m simdash.engine "$$@"\n' "$(DIR)" > $(PREFIX)/bin/simdash-haptics
+	chmod 755 $(PREFIX)/bin/simdash-haptics
 
 .PHONY: venv offsets install

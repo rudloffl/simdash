@@ -309,6 +309,14 @@ class Timeline:
 
 # ---------- live: what monocoque is playing now ----------
 
+def tick_data(snap):
+    """One live sample as a one-tick recording, the input of effect_value() and wheel_slip() (tick 0)."""
+    lv = snap["local_vel"]
+    return {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
+            "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
+            "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]]}
+
+
 class Live:
     """Shaker output for the live dashboard, from each shared-memory sample, with the settings
     monocoque started with (monocoque reads its config once, at start)."""
@@ -323,13 +331,16 @@ class Live:
         self.kicks = {}  # device index -> time its gear kick ends
 
     def _refresh(self, car, now):
-        from . import system
-        pids = system._pids("monocoque")
-        since = system._started(pids[0]) if pids else None
-        self.devices = shakers.devices_at(since)[0] if since else []
-        own = shakers.simdash_devices()  # simdash plays these itself, monocoque or not
-        self.devices += own
-        self.player.devid = shakers.load()["devid"] if own else ""
+        from . import engine, system
+        own = shakers.simdash_devices()
+        if engine.read_status():  # the haptics engine plays everything, with the settings as they are now
+            self.devices = shakers.devices_at(time.time())[0] + own
+            self.player.devid = ""
+        else:
+            pids = system._pids("monocoque")
+            since = system._started(pids[0]) if pids else None
+            self.devices = (shakers.devices_at(since)[0] if since else []) + own
+            self.player.devid = shakers.load()["devid"] if own else ""  # simdash plays its own, monocoque or not
         if car != self.car or self.dia is None:
             self.car = car
         self.dia = tyre_diameters(car)[0]
@@ -339,10 +350,7 @@ class Live:
         """{channel: [strength %, effect]} for the shakers playing now; {} without monocoque."""
         if now - self.checked > self.REFRESH or snap["car"] != self.car:
             self._refresh(snap["car"], now)
-        lv = snap["local_vel"]
-        data = {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
-                "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
-                "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]]}
+        data = tick_data(snap)
         shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
         self.gear = snap["gear"]
         slips = wheel_slip(data, 0, self.dia)
@@ -358,7 +366,7 @@ class Live:
                     own.append((dev, f, a))
             if a > out.get(dev["pan"], [0])[0]:
                 out[dev["pan"]] = [int(round(min(a, 100))), dev["effect"]]
-        self.player.feed(own, now)
+        self.player.feed(own if self.player.devid else [], now)
         return out
 
 
@@ -386,6 +394,27 @@ class _Stream:
             mix[8 * j + self.pan] += self.gain * a / 100 * math.sin(2 * math.pi * self.phase)
             ff = f + (random.uniform(-1, 1) * self.noise if self.noise else 0)
             self.phase = (self.phase + ff / RATE) % 1.0
+
+    def kick(self, mix, n, start=False):
+        """Gear: add n samples of the running kick (monocoque's pulse: a sine for "duration" s, faded out
+        at its end); start=True starts a new one here."""
+        if start:
+            self.pulse, self.phase = 0.0, 0.0
+        if self.pulse is None:
+            return
+        dev = self.dev
+        dur = float(dev.get("duration", 0.125))
+        f, a = dev.get("frequency", 0), min(100, dev.get("amplitude", 50))
+        for j in range(n):
+            left = dur - self.pulse
+            if left <= 0:
+                self.pulse, self.phase = None, 0.0
+                return
+            amp = a / 100 * (min(1.0, left / GEAR_FADE))
+            mix[8 * j + self.pan] += self.gain * amp * math.sin(2 * math.pi * self.phase)
+            ff = f + (random.uniform(-1, 1) * self.noise if self.noise else 0)
+            self.phase = (self.phase + ff / RATE) % 1.0
+            self.pulse += 1 / RATE   # a kick lasts its duration in real time, whatever the replay speed
 
 
 def _pcm(mix):
@@ -628,22 +657,7 @@ class Player:
         for k, s in enumerate(self.streams):
             dev = s.dev
             if dev["effect"] == "Gear":
-                dur = float(dev.get("duration", 0.125))
-                if new_kick:
-                    s.pulse, s.phase = 0.0, 0.0
-                if s.pulse is None:
-                    continue
-                f, a = dev.get("frequency", 0), min(100, dev.get("amplitude", 50))
-                for j in range(n):
-                    left = dur - s.pulse
-                    if left <= 0:
-                        s.pulse, s.phase = None, 0.0
-                        break
-                    amp = a / 100 * (min(1.0, left / GEAR_FADE))
-                    mix[8 * j + s.pan] += s.gain * amp * math.sin(2 * math.pi * s.phase)
-                    ff = f + (random.uniform(-1, 1) * s.noise if s.noise else 0)
-                    s.phase = (s.phase + ff / RATE) % 1.0
-                    s.pulse += 1 / RATE   # a kick lasts its duration in real time, whatever the replay speed
+                s.kick(mix, n, new_kick)
                 continue
             s.glide(mix, n, *tl.state(k, t), *tl.state(k, t_end))
         return _pcm(mix)

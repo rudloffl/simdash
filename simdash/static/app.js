@@ -3902,7 +3902,13 @@ function chainStates(d) {
     : on && shmLive ? ["bad", "sees no game", "simd does not see AMS2 (it stops finding it after a few restarts): Restart AMS2, or Restart simd."]
     : ["ok", "waiting for a game"];
   const want = d.launch || { crewchief: true, monocoque: true };
-  st.monocoque = d.monocoque.stale ? ["bad", "reads an old simd", "monocoque was started before simd was restarted and reads data that no longer changes (no vibration from it): Restart monocoque."]
+  const es = d.engine && d.engine.status;
+  st.engine = es ? (es.state === "no card" ? ["bad", "no card", "The haptics engine cannot find the shaker card: plug it in."] : ["ok", es.state])
+    : d.engine && d.engine.running ? ["warn", "starting"]
+    : on && want.monocoque && want.simdash_shakers ? ["warn", "not running", "The haptics engine is not running, so no vibration: Restart engine."]
+    : ["off", want.simdash_shakers ? "not running" : "not used (monocoque plays)"];
+  st.monocoque = want.simdash_shakers && !d.monocoque.running ? ["off", "not used (simdash plays)"]
+    : d.monocoque.stale ? ["bad", "reads an old simd", "monocoque was started before simd was restarted and reads data that no longer changes (no vibration from it): Restart monocoque."]
     : d.monocoque.running ? ["ok", "running"]
     : on && want.monocoque ? ["warn", "not running", "monocoque is not running, so no vibration: Restart monocoque."]
     : ["off", want.monocoque ? "not running" : "not started (unticked)"];
@@ -3911,6 +3917,22 @@ function chainStates(d) {
     : on && want.crewchief ? ["warn", "not running"] : ["off", want.crewchief ? "not running" : "not started (unticked)"];
   return st;
 }
+
+// the haptics engine's timing over a run (engine.py summary): what can't be watched while driving
+function engineRun(sm, title) {
+  if (!sm) return "";
+  const lat = sm.latency_ms == null ? "–" : `${sm.latency_ms} ms (${sm.latency_min_ms}–${sm.latency_max_ms})`;
+  return `<h3 class="sub-h">${esc(title)}</h3><dl>` + dl([
+    ["Playing", fmtSecs(sm.playing_s)],
+    ["Telemetry", `${sm.telemetry_hz} Hz, lowest ${sm.telemetry_hz_min} Hz`],
+    ["Latency", lat],
+    ["Synthesis", `${sm.synth_ms} ms per block, max ${sm.synth_max_ms} ms`],
+    ["Dropouts", sm.late_blocks ? `<span class="bad">${sm.late_blocks}</span>` : "none"],
+    sm.gap_max_ms != null && ["Longest wait", `${sm.gap_max_ms} ms between writes (buffer 30 ms)`],
+    sm.priority && ["Priority", esc(sm.priority)],
+  ]) + "</dl>";
+}
+const fmtSecs = (s) => s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
 
 function dl(rows) {
   return rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
@@ -3923,7 +3945,9 @@ function renderSystem() {
   const d = sys.data;
   if (!d) return;
   const st = chainStates(d);
-  const chain = [["ams2", "AMS2"], ["bridge", "Bridge"], ["shm", "$pcars2$"], ["simd", "simd"], ["monocoque", "monocoque"], ["card", "Shaker card"]];
+  const byEngine = (d.launch || {}).simdash_shakers;
+  const chain = byEngine ? [["ams2", "AMS2"], ["bridge", "Bridge"], ["shm", "$pcars2$"], ["engine", "Haptics engine"], ["card", "Shaker card"]]
+    : [["ams2", "AMS2"], ["bridge", "Bridge"], ["shm", "$pcars2$"], ["simd", "simd"], ["monocoque", "monocoque"], ["card", "Shaker card"]];
   $("#sys-chain").innerHTML = chain.map(([k, n], i) =>
     `${i ? '<span class="arrow">→</span>' : ""}<div class="node st-${st[k][0]}"><div class="n">${stDot(st[k])}${n}</div><div class="s">${esc(st[k][1])}</div></div>`).join("");
   const hints = chain.map(([k]) => st[k][2]).filter(Boolean);
@@ -3936,6 +3960,19 @@ function renderSystem() {
   card("ams2", st.ams2);
   card("simd", st.simd);
   card("monocoque", st.monocoque);
+  card("engine", st.engine);
+  $("#sys-eng-state").textContent = st.engine[1];
+  const en = d.engine || {}, es = en.status;
+  $("#sys-eng").innerHTML = "<dl>" + dl([
+    ["Process", en.pid ? `pid ${en.pid}, up ${fmtAge(en.since, d.now)}` : "–"],
+    es && ["Telemetry", `${es.telemetry_hz} Hz read (blocks of ${es.block_ms} ms, ${es.blocks_hz}/s)`],
+    es && ["Synthesis", es.synth_ms == null ? "idle" : `${es.synth_ms} ms per block, max ${es.synth_max_ms} ms`],
+    es && ["Latency", es.latency_ms == null ? "card closed (silent)" : `${es.latency_ms} ms to the card`],
+    es && ["Dropouts", es.late_blocks ? `<span class="bad">${es.late_blocks} in the last second</span>` : "none"],
+    es && ["Effects", `${es.effects}`],
+    !es && ["Last log", `<span class="muted">${esc((en.log || []).slice(-1)[0] || "–")}</span>`],
+  ]) + "</dl>" + engineRun(es ? es.run : en.last && en.last.summary, es ? "This run, while playing" :
+    en.last ? `Last run, ended ${new Date(en.last.ended * 1000).toLocaleTimeString()}` : "");
   $("#sys-ams2-state").textContent = st.ams2[1];
   $("#sys-simd-state").textContent = st.simd[1];
   $("#sys-mono-state").textContent = st.monocoque[1];
@@ -3979,6 +4016,8 @@ function renderSystem() {
     "simd/restart": true,
     "monocoque/restart": true,
     "monocoque/stop": d.monocoque.running,
+    "engine/restart": true,
+    "engine/stop": !!(d.engine && d.engine.running),
   };
   document.querySelectorAll(SYS_BUTTONS).forEach((b) => {
     if (b.id === "hdr-start") $("#hdr-start-grp").hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;

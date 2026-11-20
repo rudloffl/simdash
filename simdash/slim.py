@@ -67,6 +67,17 @@ def state(day):
     return "compressed" if zst_path(day).exists() else "missing"
 
 
+def _bytes(paths):
+    """Total size; a file gone since it was listed (SQLite drops its -wal at checkpoints) counts 0."""
+    total = 0
+    for p in paths:
+        try:
+            total += p.stat().st_size
+        except FileNotFoundError:
+            pass
+    return total
+
+
 def day_files(day):
     return [p for p in (store.day_path(day), store.day_path(day).with_name(f"{day}.sqlite-wal"),
                         store.day_path(day).with_name(f"{day}.sqlite-shm"), zst_path(day), summary_path(day))
@@ -179,7 +190,7 @@ def _thin_log(con, table, ts_of):
 def slim_day(day, pbs=None):
     """Slim a (not compressed) day file in place. Returns (bytes before, bytes after)."""
     path = store.day_path(day)
-    before = sum(p.stat().st_size for p in day_files(day))
+    before = _bytes(day_files(day))
     pbs = personal_bests() if pbs is None else pbs
     con = sqlite3.connect(path)
     try:
@@ -256,7 +267,7 @@ def compress_day(day):
         con.execute("PRAGMA journal_mode=DELETE")
     finally:
         con.close()
-    before = sum(p.stat().st_size for p in day_files(day))
+    before = _bytes(day_files(day))
     _write_summary(day)
     tmp = zst_path(day).with_name(zst_path(day).name + ".tmp")
     with open(path, "rb") as f, open(tmp, "wb") as g:
@@ -273,7 +284,7 @@ def compress_day(day):
     tmp.replace(zst_path(day))
     for p in (path, path.with_name(f"{day}.sqlite-wal"), path.with_name(f"{day}.sqlite-shm")):
         p.unlink(missing_ok=True)
-    return before, sum(p.stat().st_size for p in day_files(day))
+    return before, _bytes(day_files(day))
 
 
 # ---------- the whole store ----------
@@ -298,11 +309,11 @@ def run(days=None, busy=lambda: False):
         if busy():
             break
         t0 = time.time()
-        before = sum(p.stat().st_size for p in day_files(day))
+        before = _bytes(day_files(day))
         if state(day) == "full":
             slim_day(day, pbs)
         compress_day(day)
-        after = sum(p.stat().st_size for p in day_files(day))
+        after = _bytes(day_files(day))
         log.info("slimmed and compressed %s: %.1f MB -> %.1f MB in %.0f s", day, before / 1e6, after / 1e6, time.time() - t0)
         done.append({"day": day, "before": before, "after": after})
     return done
@@ -313,7 +324,7 @@ def overview():
     out = []
     for day in store.list_days():
         files = day_files(day)
-        out.append({"day": day, "state": state(day), "bytes": sum(p.stat().st_size for p in files),
+        out.append({"day": day, "state": state(day), "bytes": _bytes(files),
                     "eligible": eligible(day)})
-    cache = sum(p.stat().st_size for p in CACHE_DIR.glob("*.sqlite")) if CACHE_DIR.exists() else 0
+    cache = _bytes(CACHE_DIR.glob("*.sqlite")) if CACHE_DIR.exists() else 0
     return {"days": out, "older_than": OLDER_THAN, "good_ratio": GOOD_RATIO, "cache_bytes": cache}

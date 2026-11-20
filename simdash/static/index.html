@@ -16,7 +16,7 @@
     <button data-tab="genie">Corner Genie</button>
     <button data-tab="edges">Track edges</button>
     <button data-tab="shakers">Haptics</button>
-    <button data-tab="leds" hidden>Wheel LEDs</button><!-- shelved 2026-11-06: still at /#leds -->
+    <button data-tab="leds">Wheel LEDs</button>
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
   <div id="hdr-start-grp" class="split-btn" hidden>
@@ -25,7 +25,8 @@
     <div id="hdr-start-menu" class="split-menu" hidden>
       <div class="muted">Also start with AMS2</div>
       <label class="led-check"><input type="checkbox" data-launch="crewchief"> CrewChief</label>
-      <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers (monocoque)</label>
+      <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers</label>
+        <label class="led-check" title="simdash's haptics engine plays the shakers instead of monocoque (switches at once during a session)"><input type="checkbox" data-launch="simdash_shakers"> played by simdash</label>
       <div class="muted hx-menu-h">Haptics mode</div>
       <div class="seg hx-presets"><button data-preset="performance">Performance</button><button data-preset="quiet">Quiet</button></div>
     </div>
@@ -577,7 +578,8 @@
       </div>
       <div class="sys-launch">Also start with AMS2:
         <label class="led-check"><input type="checkbox" data-launch="crewchief"> CrewChief</label>
-        <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers (monocoque)</label>
+        <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers</label>
+        <label class="led-check" title="simdash's haptics engine plays the shakers instead of monocoque (switches at once during a session)"><input type="checkbox" data-launch="simdash_shakers"> played by simdash</label>
       </div>
       <div class="sys-note">Start and Restart go through <span class="num">start-race</span> (also the desktop launcher), which gives a fresh simd plus what is ticked above, and stops them when AMS2 exits. A change applies from the next start.</div>
     </div>
@@ -595,6 +597,15 @@
         <button data-act="monocoque/stop">Stop</button>
       </div>
       <div class="sys-note">Restart after saving in Shakers to apply new settings now.</div>
+    </div>
+    <div class="card sys-card" data-c="engine">
+      <h3><span class="dot"></span>simdash haptics engine <span class="right muted" id="sys-eng-state"></span></h3>
+      <div id="sys-eng"></div>
+      <div class="sys-btns">
+        <button data-act="engine/restart">Restart engine</button>
+        <button data-act="engine/stop">Stop</button>
+      </div>
+      <div class="sys-note">Plays every shaker effect in place of monocoque, from the same settings; saved changes apply at once. Tick "played by simdash" (AMS2 card) to switch.</div>
     </div>
     <div class="card sys-card" data-c="others">
       <h3>CrewChief, shaker card, session</h3>
@@ -620,7 +631,7 @@
   <div class="card">
     <h3>Log <span class="right"><select id="sys-log">
       <option value="monocoque">monocoque</option><option value="start-race">start-race</option>
-      <option value="crewchief">CrewChief</option><option value="simdash">simdash</option>
+      <option value="crewchief">CrewChief</option><option value="haptics">haptics engine</option><option value="simdash">simdash</option>
     </select></span></h3>
     <pre class="sys-logbox" id="sys-logbox"></pre>
   </div>

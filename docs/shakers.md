@@ -111,3 +111,20 @@ settings monocoque started with (it reads its config only at start). A recorded 
 force when it started: saving keeps the previous file as `monocoque.config.bak-<date-time>`, so the first
 backup made after the session start holds them (the current file if none). Where each channel sits on the
 car comes from today's `shakers.json`, which has no history.
+
+## simdash's haptics engine (instead of monocoque)
+
+Tick **played by simdash** next to *Shakers* (System tab, AMS2 card, or the ▾ menu by Start AMS2) and
+simdash plays every shaker effect itself, from the same settings, in place of monocoque. During a
+session the switch takes effect at once (one stops, the other starts), so the two can be compared on
+the same lap.
+
+The engine (`simdash/engine.py`, launched as `~/.local/bin/simdash-haptics`) is a process of its own,
+so the recorder, the database and the web pages never hold it up. Every 10 ms it reads AMS2's shared
+memory directly (no simd in between), works out each effect with the formulas the replay uses, and
+writes 10 ms of 8-channel sound to the shaker card through libpulse-simple with about 30 ms buffered:
+roughly 40-50 ms from the game to the seat. Its writes wait on the card, so the card's clock sets the
+pace and nothing drifts. Saved settings and haptics presets apply at once, without a restart.
+
+The System tab's *simdash haptics engine* card shows what it measures each second: telemetry updates
+read, synthesis time per block, latency to the card and dropouts (blocks that came too late).

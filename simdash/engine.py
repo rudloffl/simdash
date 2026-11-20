@@ -1,0 +1,494 @@
+"""simdash's haptics engine: plays every shaker effect itself, in place of monocoque.
+
+    python -m simdash.engine          (~/.local/bin/simdash-haptics; start-race and the System tab start it)
+
+A process of its own, so the recorder, the database and the web server never hold it up. It reads
+AMS2's shared memory ($pcars2$) directly, once per audio block (every BLOCK s, 100 Hz), turns it
+into each effect's frequency and strength with the formulas replay.py already uses for monocoque's
+effects and simdash's own, and writes the 8-channel signal to the shaker card through
+libpulse-simple. Its writes block until the card has room, so the card's clock paces the loop:
+no drift and a short, fixed buffer (LATENCY).
+
+Settings are the same files as before: monocoque's Sound devices (~/.config/monocoque/monocoque.config)
+and simdash's own effects (effects.json). They are read again whenever they change, so a saved
+change or a preset applies at once, with no restart.
+
+Every second it writes what it is doing to STATUS (the System tab shows it): telemetry rate seen,
+synthesis time per block, the card's latency, and what each channel plays.
+"""
+
+import ctypes
+import ctypes.util
+import fcntl
+import json
+import logging
+import os
+import resource
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from . import replay, shakers
+from .pcars2 import FIELDS, GAME_PLAYING, OFF, Pcars2Reader, _unpack
+
+log = logging.getLogger("simdash.engine")
+
+RATE = replay.RATE      # Hz: 8000, the shakers feel nothing near 4 kHz
+BLOCK = 0.01            # s of sound per step, i.e. a telemetry read every 10 ms
+LATENCY = 0.03          # s of sound buffered ahead of the card (PulseAudio's target length)
+STALE = 0.25            # s without a new sample from the game before going silent
+IDLE = 10.0             # s of silence before letting the card go
+RELOAD = 1.0            # s between looks at the settings files
+STATE = Path.home() / ".local/state"
+STATUS = STATE / "simdash-haptics.json"
+LAST = STATE / "simdash-haptics-last.json"  # the summary of the last run, kept after the engine stops
+RT_PRIORITY = 10        # SCHED_RR priority asked of RTKit: below PipeWire's own threads (20), above everything else
+LOG_EVERY = 30.0        # s between timing lines in the log while playing
+LOCK = STATE / "simdash-haptics.lock"
+
+
+# ---------- telemetry: only the fields the effects use ----------
+
+_KINDS = {name: (kind, count) for name, kind, count, pc in FIELDS if not pc}
+_WANT = {"game_state": "mGameState", "car": "mCarName", "speed": "mSpeed", "rpm": "mRpm", "max_rpm": "mMaxRPM",
+         "gear": "mGear", "abs": "mAntiLockActive", "local_vel": "mLocalVelocity", "ang_vel": "mAngularVelocity",
+         "terrain": "mTerrain", "tyre_rps": "mTyreRPS", "seq": "mSequenceNumber"}
+
+
+class Telemetry(Pcars2Reader):
+    """Pcars2Reader decoding a dozen fields instead of the whole block (no cars, no strings but the car)."""
+
+    def sample(self):
+        buf = self._raw()
+        if buf is None:
+            return None
+        return {k: _unpack(buf, OFF[f], *_KINDS[f]) for k, f in _WANT.items()}
+
+
+# ---------- output: libpulse-simple through ctypes ----------
+
+class _Spec(ctypes.Structure):
+    _fields_ = [("format", ctypes.c_int), ("rate", ctypes.c_uint32), ("channels", ctypes.c_uint8)]
+
+
+class _Map(ctypes.Structure):
+    _fields_ = [("channels", ctypes.c_uint8), ("map", ctypes.c_int * 32)]
+
+
+class _Attr(ctypes.Structure):
+    _fields_ = [(k, ctypes.c_uint32) for k in ("maxlength", "tlength", "prebuf", "minreq", "fragsize")]
+
+
+PA_STREAM_PLAYBACK = 1
+PA_SAMPLE_S16LE = 3
+_ANY = 0xFFFFFFFF  # (uint32_t) -1: the server's default
+
+
+class PulseOut:
+    """One 8-channel playback stream on one sink; write() blocks until the stream has room."""
+
+    _lib = _pulse = None
+
+    def __init__(self, devid, latency=LATENCY):
+        cls = type(self)
+        if cls._lib is None:
+            cls._lib = ctypes.CDLL(ctypes.util.find_library("pulse-simple") or "libpulse-simple.so.0")
+            cls._pulse = ctypes.CDLL(ctypes.util.find_library("pulse") or "libpulse.so.0")
+            cls._lib.pa_simple_new.restype = ctypes.c_void_p
+            cls._lib.pa_simple_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+                                                 ctypes.POINTER(ctypes.c_int)]
+            cls._lib.pa_simple_get_latency.restype = ctypes.c_uint64
+            cls._lib.pa_simple_get_latency.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+            cls._lib.pa_simple_free.argtypes = [ctypes.c_void_p]
+            cls._lib.pa_simple_drain.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+            cls._pulse.pa_strerror.restype = ctypes.c_char_p
+        spec = _Spec(PA_SAMPLE_S16LE, RATE, 8)
+        cmap = _Map()
+        if not self._pulse.pa_channel_map_parse(ctypes.byref(cmap), ",".join(shakers.CHANNEL_MAP).encode()):
+            raise OSError("bad channel map")
+        frame = 2 * 8
+        attr = _Attr(_ANY, int(latency * RATE) * frame, _ANY, int(BLOCK * RATE) * frame, _ANY)
+        err = ctypes.c_int(0)
+        self.s = self._lib.pa_simple_new(None, b"simdash", PA_STREAM_PLAYBACK, devid.encode(), b"simdash haptics",
+                                         ctypes.byref(spec), ctypes.byref(cmap), ctypes.byref(attr), ctypes.byref(err))
+        if not self.s:
+            raise OSError(f"PulseAudio: {self._pulse.pa_strerror(err.value).decode()}")
+        self.devid = devid
+
+    def write(self, pcm):
+        err = ctypes.c_int(0)
+        if self._lib.pa_simple_write(self.s, pcm, len(pcm), ctypes.byref(err)) < 0:
+            raise OSError(f"PulseAudio: {self._pulse.pa_strerror(err.value).decode()}")
+
+    def latency(self):
+        """Seconds between a sample written now and the card playing it."""
+        err = ctypes.c_int(0)
+        return self._lib.pa_simple_get_latency(self.s, ctypes.byref(err)) / 1e6
+
+    def close(self):
+        if self.s:
+            self._lib.pa_simple_free(self.s)
+            self.s = None
+
+
+# ---------- the engine ----------
+
+def _mtime(p):
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+class Engine:
+    def __init__(self, reader=None, out_factory=PulseOut):
+        self.reader = reader or Telemetry()
+        self.out_factory = out_factory
+        self.out = None
+        self.devices, self.streams, self.devid = [], [], ""
+        self.mtimes = None
+        self.checked = 0.0
+        self.car, self.dia, self.dia_checked = None, None, 0.0
+        self.gear = None
+        self.prev = {}          # stream index -> (f, a) at the end of the last block
+        self.seq, self.seq_t = None, 0.0
+        self.quiet_since = time.monotonic()
+        self.retry = 0.0
+        self.stats = self._new_stats()
+        self.levels = {}
+        self.state = "starting"
+        self.wrote = None       # when the last write returned
+        self.run_t0 = time.time()
+        self.total = self._new_total()   # over the whole run, seconds spent playing only
+        self.window = self._new_total()  # the same since the last log line
+        self.logged_state = None
+
+    @staticmethod
+    def _new_total():
+        return {"seconds": 0.0, "samples": 0, "blocks": 0, "late": 0, "synth": 0.0, "synth_max": 0.0, "gap_max": 0.0,
+                "lat_min": None, "lat_max": None, "lat_sum": 0.0, "lat_n": 0, "hz_min": None}
+
+    def _add(self, tot, st, span, lat):
+        hz = st["samples"] / span
+        tot["seconds"] += span
+        tot["samples"] += st["samples"]
+        tot["blocks"] += st["blocks"]
+        tot["late"] += st["late"]
+        tot["synth"] += st["synth"]
+        tot["synth_max"] = max(tot["synth_max"], st["synth_max"])
+        tot["gap_max"] = max(tot["gap_max"], st["gap_max"])
+        if span >= 0.5:  # a lowest rate over a sliver of a second means nothing
+            tot["hz_min"] = hz if tot["hz_min"] is None else min(tot["hz_min"], hz)
+        if lat is not None:
+            tot["lat_min"] = lat if tot["lat_min"] is None else min(tot["lat_min"], lat)
+            tot["lat_max"] = lat if tot["lat_max"] is None else max(tot["lat_max"], lat)
+            tot["lat_sum"] += lat
+            tot["lat_n"] += 1
+
+    @staticmethod
+    def summary(tot):
+        """The timing over some playing seconds, for the log and the System tab."""
+        if tot["seconds"] < 0.5:
+            return None
+        r = lambda v, nd=1: None if v is None else round(v, nd)
+        return {"playing_s": round(tot["seconds"]), "telemetry_hz": r(tot["samples"] / tot["seconds"]),
+                "telemetry_hz_min": r(tot["hz_min"]), "late_blocks": tot["late"],
+                "synth_ms": r(1000 * tot["synth"] / tot["blocks"], 2) if tot["blocks"] else None,
+                "synth_max_ms": r(1000 * tot["synth_max"], 2), "gap_max_ms": r(1000 * tot["gap_max"]),
+                "priority": PRIORITY,
+                "latency_ms": r(tot["lat_sum"] / tot["lat_n"]) if tot["lat_n"] else None,
+                "latency_min_ms": r(tot["lat_min"]), "latency_max_ms": r(tot["lat_max"])}
+
+    @staticmethod
+    def summary_text(sm):
+        return (f"{sm['playing_s']} s playing: telemetry {sm['telemetry_hz']} Hz (min {sm['telemetry_hz_min']}), "
+                f"latency {sm['latency_ms']} ms ({sm['latency_min_ms']}-{sm['latency_max_ms']}), "
+                f"synth {sm['synth_ms']} ms/block (max {sm['synth_max_ms']}), longest gap between writes {sm['gap_max_ms']} ms, "
+                f"dropouts {sm['late_blocks']}")
+
+    @staticmethod
+    def _new_stats():
+        return {"t0": time.monotonic(), "blocks": 0, "samples": 0, "synth": 0.0, "synth_max": 0.0, "late": 0,
+                "gap_max": 0.0}
+
+    # -- settings --
+
+    def reload(self, now):
+        self.checked = now
+        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS))
+        if m == self.mtimes:
+            return
+        self.mtimes = m
+        devices = shakers.devices_at(time.time())[0] + shakers.simdash_devices()
+        try:
+            devid = shakers.load()["devid"]
+        except (OSError, ValueError):
+            devid = ""
+        self.devices = devices
+        self.streams = [replay._Stream(d) for d in devices]
+        self.prev = {}
+        if devid != self.devid and self.out is not None:
+            self.out.close()
+            self.out = None
+        self.devid = devid
+        log.info("%d effects on %s", len(devices), devid or "no card")
+
+    def _diameters(self, car, now):
+        if car != self.car or now - self.dia_checked > 5.0:
+            self.car, self.dia_checked = car, now
+            self.dia = replay.tyre_diameters(car)[0]
+        return self.dia
+
+    # -- one block --
+
+    def targets(self, snap, now):
+        """{stream index: (f, a)} for the continuous effects, and whether a gear kick starts now."""
+        if snap is None:
+            self.state = "no game"
+            return {}, False
+        if snap["seq"] != self.seq:
+            self.seq, self.seq_t = snap["seq"], now
+            self.stats["samples"] += 1
+        if snap["game_state"] != GAME_PLAYING:
+            self.state, self.gear = "idle", None
+            return {}, False
+        if now - self.seq_t > STALE:
+            self.state = "frozen"
+            return {}, False
+        self.state = "playing"
+        shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
+        self.gear = snap["gear"]
+        data = replay.tick_data(snap)
+        slips = replay.wheel_slip(data, 0, self._diameters(snap["car"], now))
+        out = {}
+        for k, dev in enumerate(self.devices):
+            if dev["effect"] != "Gear":
+                out[k] = replay.effect_value(dev, data, 0, slips)
+        return out, shifted
+
+    def synth(self, cur, kick, n):
+        mix = [0.0] * (8 * n)
+        levels = {}
+        for k, st in enumerate(self.streams):
+            if st.dev["effect"] == "Gear":
+                st.kick(mix, n, kick)
+                a = st.dev.get("amplitude", 50) if st.pulse is not None else 0
+            else:
+                f, a = cur.get(k, (0.0, 0.0))
+                f0, a0 = self.prev.get(k, (f, 0.0))
+                st.glide(mix, n, f0 if a0 > 0 else f, a0, f, a)
+            if a > levels.get(st.pan, [0])[0]:
+                levels[st.pan] = [int(round(min(a, 100))), st.dev["effect"]]
+        self.prev = cur
+        self.levels = levels
+        return replay._pcm(mix)
+
+    def step(self):
+        """Read the game, make one block, hand it to the card (blocks until it has room).
+        Returns False when there is nothing to play and no stream open (the caller then waits)."""
+        now = time.monotonic()
+        if now - self.checked > RELOAD:
+            self.reload(now)
+        t0 = time.perf_counter()
+        snap = self.reader.sample()
+        t_read = time.perf_counter() - t0
+        cur, kick = self.targets(snap, now)
+        loud = kick or any(a > 0 for _, a in cur.values()) or any(s.pulse is not None for s in self.streams)
+        if loud:
+            self.quiet_since = now
+        elif self.out is not None and now - self.quiet_since > IDLE:
+            self.out.close()
+            self.out = None
+        if self.out is None:
+            self.wrote = None
+            if not (loud and self.devid and now > self.retry):
+                self.levels = {}
+                return False
+            if self.devid not in {s["name"] for s in shakers.sinks()}:
+                self.state, self.retry = "no card", now + 10.0  # never let PulseAudio pick the speakers
+                return False
+            try:
+                self.out = self.out_factory(self.devid)
+            except OSError as e:
+                log.warning("cannot open %s: %s", self.devid, e)
+                self.retry = now + 10.0
+                return False
+        n = int(BLOCK * RATE)
+        pcm = self.synth(cur, kick, n)
+        dt = time.perf_counter() - t0
+        st = self.stats
+        st["blocks"] += 1
+        st["synth"] += dt
+        st["synth_max"] = max(st["synth_max"], dt)
+        gap = time.monotonic() - self.wrote if self.wrote is not None else 0.0
+        st["gap_max"] = max(st["gap_max"], gap)
+        if gap > LATENCY:
+            # longer than the buffer since the last write: the card (likely) ran dry. Where the time went:
+            # the read and synthesis of this block are timed, the rest is the process waiting for the CPU
+            st["late"] += 1
+            log.warning("dropout: %.1f ms between writes (read %.2f ms, synthesis %.2f ms, the rest waiting)",
+                        1000 * gap, 1000 * t_read, 1000 * (dt - t_read))
+        try:
+            self.out.write(pcm)
+            self.wrote = time.monotonic()
+        except OSError as e:
+            log.warning("%s", e)
+            self.out.close()
+            self.out = None
+        return True
+
+    def status(self):
+        st, now = self.stats, time.monotonic()
+        span = max(1e-6, now - st["t0"])
+        out = {"pid": os.getpid(), "t": time.time(), "state": self.state, "devid": self.devid,
+               "effects": len(self.devices), "card_open": self.out is not None,
+               "telemetry_hz": round(st["samples"] / span, 1), "blocks_hz": round(st["blocks"] / span, 1),
+               "synth_ms": round(1000 * st["synth"] / st["blocks"], 2) if st["blocks"] else None,
+               "synth_max_ms": round(1000 * st["synth_max"], 2), "late_blocks": st["late"],
+               "block_ms": BLOCK * 1000, "latency_ms": None, "levels": self.levels, "priority": PRIORITY}
+        if self.out is not None:
+            try:
+                out["latency_ms"] = round(1000 * (self.out.latency() + BLOCK), 1)
+            except OSError:
+                pass
+        if self.state != self.logged_state:
+            log.info("state: %s", self.state)
+            self.logged_state = self.state
+        if self.state == "playing":
+            for tot in (self.total, self.window):
+                self._add(tot, st, span, out["latency_ms"])
+        out["run"] = self.summary(self.total)
+        self.stats = self._new_stats()
+        return out
+
+    def log_window(self):
+        sm = self.summary(self.window)
+        if sm:
+            log.info("%s", self.summary_text(sm))
+        self.window = self._new_total()
+
+    def finish(self):
+        """At exit: the whole run in the log, and in LAST for the System tab."""
+        self.log_window()
+        sm = self.summary(self.total)
+        if sm:
+            log.info("run total: %s", self.summary_text(sm))
+        try:
+            tmp = LAST.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"started": self.run_t0, "ended": time.time(), "summary": sm}))
+            tmp.replace(LAST)
+        except OSError:
+            pass
+
+    def run(self, stop=lambda: False):
+        last_status = last_log = 0.0
+        while not stop():
+            try:
+                played = self.step()
+            except Exception:  # noqa: BLE001 - keep the shakers alive
+                log.exception("engine step")
+                played = False
+            if not played:
+                time.sleep(0.05)
+            now = time.monotonic()
+            if now - last_status >= 1.0:
+                last_status = now
+                _write_status(self.status())
+            if now - last_log >= LOG_EVERY:
+                last_log = now
+                self.log_window()
+
+
+PRIORITY = "normal"
+
+
+def _rtkit(method, *args):
+    r = subprocess.run(["gdbus", "call", "--system", "--dest", "org.freedesktop.RealtimeKit1",
+                        "--object-path", "/org/freedesktop/RealtimeKit1",
+                        "--method", f"org.freedesktop.RealtimeKit1.{method}", *map(str, args)],
+                       capture_output=True, text=True, timeout=5)
+    return r.returncode == 0, r.stderr.strip()
+
+
+def realtime():
+    """Ask RTKit for real-time scheduling of this (the only) thread, as PipeWire does for its own: the game
+    can then no longer keep the engine off the CPU past its buffer. RTKit wants RLIMIT_RTTIME set first
+    (a thread that would hog the CPU for 200 ms straight is stopped; the engine blocks every 10 ms).
+    Falls back to nice -15, then to normal priority."""
+    # the *WithPID calls: RTKit would otherwise look the thread up in the caller, which is gdbus
+    pid, tid = os.getpid(), threading.get_native_id()
+    try:
+        resource.setrlimit(resource.RLIMIT_RTTIME, (200000, 200000))
+        ok, err = _rtkit("MakeThreadRealtimeWithPID", pid, tid, RT_PRIORITY)
+        if ok:
+            return f"real-time (SCHED_RR {RT_PRIORITY})"
+        ok, err2 = _rtkit("MakeThreadHighPriorityWithPID", pid, tid, "int32 -15")  # typed: a bare -15 reads as an option
+        if ok:
+            log.warning("RTKit refused real-time (%s), got nice -15", err)
+            return "nice -15"
+        log.warning("RTKit refused real-time (%s) and nice (%s)", err, err2)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        log.warning("no RTKit: %s", e)
+    return "normal"
+
+
+def _write_status(d):
+    try:
+        tmp = STATUS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(STATUS)
+    except OSError:
+        pass
+
+
+def read_last():
+    """The summary of the last finished run ({started, ended, summary}), or None."""
+    try:
+        return json.loads(LAST.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def read_status():
+    """The engine's last status, or None if it is not running (or has not written one for 3 s)."""
+    try:
+        d = json.loads(STATUS.read_text())
+    except (OSError, ValueError):
+        return None
+    if time.time() - d.get("t", 0) > 3 or not Path(f"/proc/{d.get('pid')}").exists():
+        return None
+    return d
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+    STATE.mkdir(parents=True, exist_ok=True)
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit("simdash-haptics is already running")
+    global PRIORITY
+    PRIORITY = realtime()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # close the stream cleanly
+    log.info("haptics engine: %d Hz, %.0f ms blocks, %.0f ms buffer, %s", RATE, BLOCK * 1000, LATENCY * 1000, PRIORITY)
+    eng = Engine()
+    try:
+        eng.run()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        eng.finish()
+        if eng.out is not None:
+            eng.out.close()
+        try:
+            STATUS.unlink()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

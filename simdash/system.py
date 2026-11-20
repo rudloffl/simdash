@@ -23,9 +23,13 @@ BIN = Path.home() / ".local/bin"
 STATE = Path.home() / ".local/state"
 LOCK = STATE / "start-race.lock"
 LOGS = {"monocoque": STATE / "monocoque-play.log", "start-race": STATE / "start-race.log",
-        "crewchief": STATE / "crewchief.log", "simdash": STATE / "simdash.log"}
+        "crewchief": STATE / "crewchief.log", "simdash": STATE / "simdash.log",
+        "haptics": STATE / "simdash-haptics.log"}
 LAUNCH_CONF = Path.home() / ".config/start-race.conf"   # sourced by start-race
-LAUNCH_KEYS = {"crewchief": "START_CREWCHIEF", "monocoque": "START_MONOCOQUE"}
+# "monocoque": start the shakers with AMS2; "simdash_shakers": played by simdash's engine (engine.py), not monocoque
+LAUNCH_KEYS = {"crewchief": "START_CREWCHIEF", "monocoque": "START_MONOCOQUE", "simdash_shakers": "SIMDASH_SHAKERS"}
+LAUNCH_OFF = {"simdash_shakers"}  # off unless start-race.conf says otherwise
+ENGINE = r"python[0-9.]* -m simdash\.engine"  # pgrep -f pattern of the engine process
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 _actions = deque(maxlen=20)  # recent actions shown in the page
@@ -105,7 +109,7 @@ def _simapi():
 
 def get_launch():
     """What start-race starts besides simd, simdash and AMS2 (everything by default)."""
-    out = {k: True for k in LAUNCH_KEYS}
+    out = {k: k not in LAUNCH_OFF for k in LAUNCH_KEYS}
     try:
         for line in LAUNCH_CONF.read_text().splitlines():
             key, _, val = line.strip().partition("=")
@@ -128,7 +132,27 @@ def set_launch(patch):
                    + "".join(f"{var}={int(cur[k])}\n" for k, var in LAUNCH_KEYS.items()))
     tmp.replace(LAUNCH_CONF)
     _note("start with AMS2: " + ", ".join(f"{k} {'on' if v else 'off'}" for k, v in cur.items()))
+    if "simdash_shakers" in (patch or {}):
+        _swap_shakers(cur)
     return cur
+
+
+def _swap_shakers(want):
+    """Switching who plays the shakers during a session: stop the one, start the other at once."""
+    if not (_pids("^AMS2AVX") and want["monocoque"]):
+        return
+    if want["simdash_shakers"]:
+        if _kill_monocoque():
+            _note("monocoque stopped")
+        if not _pids(ENGINE, full=True):
+            _start_engine()
+            _note("simdash haptics engine started")
+    else:
+        if _kill_engine():
+            _note("simdash haptics engine stopped")
+        if not _pids("monocoque"):
+            _start_monocoque()
+            _note("monocoque started")
 
 
 def status(rec_live=None):
@@ -171,6 +195,11 @@ def status(rec_live=None):
 
     with _lock:
         out["actions"] = list(_actions)
+    eng = _pids(ENGINE, full=True)
+    from . import engine
+    out["engine"] = {"running": bool(eng), "pid": eng[0] if eng else None, "since": _started(eng[0]) if eng else None,
+                     "log": _tail(LOGS["haptics"], 8), "status": engine.read_status(),
+                     "last": engine.read_last()}
     out["launch"] = get_launch()
     from . import presets
     out["haptic_preset"] = presets.active()
@@ -215,6 +244,38 @@ def restart_monocoque():
 def stop_monocoque():
     n = _kill_monocoque()
     _note("monocoque stopped" if n else "monocoque was not running")
+
+
+def _kill_engine():
+    n = 0
+    for pid in _pids(ENGINE, full=True):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            n += 1
+        except ProcessLookupError:
+            pass
+    for _ in range(30):
+        if not _pids(ENGINE, full=True):
+            break
+        time.sleep(0.1)
+    return n
+
+
+def _start_engine():
+    with open(LOGS["haptics"], "a") as logf:
+        subprocess.Popen([str(BIN / "simdash-haptics")], stdin=subprocess.DEVNULL, stdout=logf,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def restart_engine():
+    n = _kill_engine()
+    _start_engine()
+    _note("haptics engine restarted" if n else "haptics engine started")
+
+
+def stop_engine():
+    n = _kill_engine()
+    _note("haptics engine stopped" if n else "haptics engine was not running")
 
 
 def _stale_simapi(pid):
@@ -276,7 +337,8 @@ def _quit_ams2(timeout=40):
 
 def _session_parts():
     want = get_launch()
-    return ", ".join(["simd", "AMS2"] + [n for k, n in (("crewchief", "CrewChief"), ("monocoque", "monocoque")) if want[k]])
+    shakers_by = "simdash haptics" if want["simdash_shakers"] else "monocoque"
+    return ", ".join(["simd", "AMS2"] + [n for k, n in (("crewchief", "CrewChief"), ("monocoque", shakers_by)) if want[k]])
 
 
 def _start_session(*args):
@@ -311,6 +373,8 @@ ACTIONS = {
     "simd/restart": restart_simd,
     "monocoque/restart": restart_monocoque,
     "monocoque/stop": stop_monocoque,
+    "engine/restart": restart_engine,
+    "engine/stop": stop_engine,
     "ams2/start": start_ams2,
     "ams2/quit": quit_ams2,
     "ams2/restart": restart_ams2,
