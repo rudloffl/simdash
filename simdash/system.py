@@ -172,6 +172,8 @@ def status(rec_live=None):
     with _lock:
         out["actions"] = list(_actions)
     out["launch"] = get_launch()
+    from . import presets
+    out["haptic_preset"] = presets.active()
     return out
 
 

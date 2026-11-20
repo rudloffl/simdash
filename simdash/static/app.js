@@ -3968,6 +3968,8 @@ function renderSystem() {
   document.querySelectorAll("[data-launch]").forEach((c) => {
     if (!sys.launchSaving) c.checked = !!(d.launch || {})[c.dataset.launch];
   });
+  if (!hx.busy && d.haptic_preset) hx.active = d.haptic_preset;
+  renderPresets();
 
   // buttons that make no sense in the current state
   const can = {
@@ -4041,6 +4043,42 @@ document.querySelectorAll("[data-launch]").forEach((c) => (c.onchange = async ()
     renderSystem();
   }
 }));
+
+// haptics mode (presets.py): Performance / Quiet, in the ▾ menu and on the Haptics tab
+const hx = { active: null, busy: false, labels: { performance: "Performance", quiet: "Quiet" } };
+function renderPresets() {
+  document.querySelectorAll("[data-preset]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.preset === hx.active);
+    b.disabled = hx.busy;
+  });
+  $("#hdr-mode").textContent = hx.labels[hx.active] ? `· ${hx.labels[hx.active]}` : "";
+}
+async function pickPreset(name) {
+  if (name === hx.active || hx.busy) return;
+  if (currentTab === "shakers" && sh.dirty && !confirm("Your unsaved shaker changes will be lost. Switch the haptics mode?")) return;
+  hx.busy = true;
+  renderPresets();
+  try {
+    if (hp.saveTimer) {  // a pending pedal change belongs to the mode being left
+      clearTimeout(hp.saveTimer);
+      hp.saveTimer = null;
+      await fetch("/api/haptics", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hapticsPatch()) });
+    }
+    const r = await fetch(`/api/haptics/presets/${name}`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || "Could not switch the haptics mode"); return; }
+    hx.active = d.active;
+    sh.dirty = false;
+    if (currentTab === "shakers") { loadShakers(); loadHaptics(); }
+  } catch {
+    alert("Could not switch the haptics mode");
+  } finally {
+    hx.busy = false;
+    renderPresets();
+  }
+}
+document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); pickPreset(b.dataset.preset); }));
+fetch("/api/haptics/presets").then((r) => r.json()).then((d) => { if (!hx.busy) { hx.active = d.active; renderPresets(); } }).catch(() => {});
 
 // refresh every 2 s on the System tab, every 15 s elsewhere for the tab's warning dot
 setInterval(() => {

@@ -690,3 +690,10 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .pedal-g[data-pedal="brake"] { --pc: var(--s-brake); }
 .pedal-g[data-pedal="clutch"] { --pc: var(--s-clutch); }
 #sh-car .pedal-g { cursor: pointer; }
+
+/* haptic presets (header ▾ menu and Haptics tab) */
+.hdr-mode { font-weight: 400; opacity: 0.8; }
+.hdr-mode:empty { display: none; }
+.hx-menu-h { margin: 10px 0 6px; }
+.hx-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; font-size: 13px; }
+.hx-presets button:disabled { opacity: 0.6; cursor: wait; }

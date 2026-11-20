@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import edges, genie, haptics, leds, replay, shakers, slim, store, system
+from . import edges, genie, haptics, leds, presets, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -592,6 +592,23 @@ def create_app(recorder=None):
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True}
+
+    @app.get("/api/haptics/presets")
+    def haptic_presets():
+        return presets.info()
+
+    @app.post("/api/haptics/presets/{name}")
+    async def haptic_preset_select(name: str):
+        try:
+            changed = await asyncio.to_thread(presets.select, name)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except OSError as e:
+            raise HTTPException(500, str(e))
+        restarted = changed and shakers.monocoque_running()
+        if restarted:  # monocoque reads its config only at start
+            await asyncio.to_thread(system.restart_monocoque)
+        return {**presets.info(), "monocoque_restarted": restarted}
 
     @app.get("/api/haptics/state")
     def haptics_state():

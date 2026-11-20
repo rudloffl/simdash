@@ -20,12 +20,14 @@
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
   <div id="hdr-start-grp" class="split-btn" hidden>
-    <button id="hdr-start" class="primary sys-act" data-act="ams2/start" title="start-race: simd, AMS2, and what is ticked in the menu next to it">Start AMS2</button>
+    <button id="hdr-start" class="primary sys-act" data-act="ams2/start" title="start-race: simd, AMS2, and what is ticked in the menu next to it">Start AMS2 <span id="hdr-mode" class="hdr-mode"></span></button>
     <button id="hdr-start-more" class="primary" aria-haspopup="true" aria-expanded="false" title="What starts with AMS2">▾</button>
     <div id="hdr-start-menu" class="split-menu" hidden>
       <div class="muted">Also start with AMS2</div>
       <label class="led-check"><input type="checkbox" data-launch="crewchief"> CrewChief</label>
       <label class="led-check"><input type="checkbox" data-launch="monocoque"> Shakers (monocoque)</label>
+      <div class="muted hx-menu-h">Haptics mode</div>
+      <div class="seg hx-presets"><button data-preset="performance">Performance</button><button data-preset="quiet">Quiet</button></div>
     </div>
   </div>
   <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
@@ -429,6 +431,11 @@
 </section>
 
 <section id="tab-shakers" class="tab">
+  <div class="hx-mode">
+    <span>Haptics mode</span>
+    <div class="seg hx-presets"><button data-preset="performance">Performance</button><button data-preset="quiet">Quiet</button></div>
+    <span class="muted">Shakers and pedals together. Pick it before starting AMS2; changes made below are kept in the selected mode.</span>
+  </div>
   <details class="card acc" id="hx-acc-replay" open>
   <summary><h3>Replay a race on the shakers and pedals <span class="right muted" id="rp-note"></span></h3></summary>
       <div class="rp-bar">
