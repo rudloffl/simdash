@@ -128,8 +128,8 @@ memory directly (no simd in between), works out each effect with the formulas of
 through libpulse-simple. Its writes wait on the card, so the card's clock sets the pace and nothing drifts.
 Saved settings and haptics presets apply at once, without a restart.
 
-It runs at real-time priority (RTKit, SCHED_RR 10), and so do its other threads (pedals, file writer,
-PipeWire monitor: SCHED_RR 9), since they share Python's interpreter lock with the audio loop. Python's
+It runs at real-time priority (RTKit, SCHED_RR 10), and so do its pedal and file writer threads
+(SCHED_RR 9), since they share Python's interpreter lock with the audio loop. Python's
 garbage collector is off while it plays (everything made at startup is frozen; collections run only while
 idle), and its status file is written from a thread of its own into `/run/user/<uid>` (memory), so the loop
 never waits on the disk.
@@ -160,7 +160,7 @@ and **dropouts**.
 - A **late write** is the engine writing later than its buffer. Not necessarily heard; the log says where the
   time went (reading the game, synthesis, the status, the card latency query, settings, feedback, or waiting
   for the CPU).
-- A **dropout** is the card really running dry: PipeWire's xrun count for the card (`pw-top`, every 5 s).
+- A **dropout** is the card really running dry: PipeWire's xrun count for the card (`pw-top`, every 30 s).
 
 ### What was felt
 

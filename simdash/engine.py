@@ -680,7 +680,7 @@ class PwMonitor:
     """What PipeWire reports for the shaker card and the engine's stream (pw-top, every EVERY s, in a thread of
     its own): the card's quantum and rate, and each node's error count (xruns: the card really ran dry)."""
 
-    EVERY = 5.0
+    EVERY = 30.0  # the error counts add up, so nothing is missed between looks; pw-top costs a process each time
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -711,7 +711,7 @@ class PwMonitor:
         return out
 
     def _run(self):
-        on_start("pw-monitor")
+        # normal priority: it mostly waits on pw-top, and holds Python's lock only to parse a few lines
         while True:
             try:
                 r = subprocess.run(["pw-top", "-b", "-n", "2"], capture_output=True, text=True, timeout=10)
