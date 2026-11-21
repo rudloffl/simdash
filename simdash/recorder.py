@@ -321,6 +321,9 @@ class Recorder(threading.Thread):
                 haptics.driver_thread.feed(snap, slips)  # Moza pedal haptics
             except Exception:
                 log.exception("pedal haptics")
+            # what the pedals play now (one tick behind the feed), for the live car
+            det = haptics.driver_thread.snapshot().get("detail") or {}
+            live["pedals"] = {k: v.get("strength", 0) for k, v in det.items()}
         self.set_live(live, trace_row)
         return True
 

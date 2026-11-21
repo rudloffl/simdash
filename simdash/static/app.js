@@ -382,6 +382,7 @@ function renderLive() {
   const liveSh = {};
   for (const [ch, [a, fx]] of Object.entries(d.shakers || {})) liveSh[ch] = { a, fx };
   paintShakerCar("#live-car .spot", liveSh, d.status === "recording" || d.status === "mapping");
+  paintPedals("#live-car .pedal-g", d.pedals || {});
   if (!d.car) {
     $("#session-line").innerHTML = `<span class="muted">${esc(d.detail || "Waiting for AMS2")}</span>`;
     drawTrace();
@@ -1797,20 +1798,21 @@ $("#d-delete").onclick = async () => {
 
 // ---------- shakers (monocoque Sound effects) ----------
 const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle",
-  Kerb: "--s-clutch", OffTrack: "--surf-gravel", Oversteer: "--critical" };
+  Kerb: "--s-clutch", OffTrack: "--surf-gravel", Oversteer: "--critical", Impact: "--nat-wall" };
 const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension",
-  Kerb: "Kerb", OffTrack: "Off track", Oversteer: "Oversteer" };
+  Kerb: "Kerb", OffTrack: "Off track", Oversteer: "Oversteer", Impact: "Impact (obstacles)" };
 // played by simdash itself from AMS2's telemetry, not by monocoque
-const OWN_FX = new Set(["Kerb", "OffTrack", "Oversteer"]);
+const OWN_FX = new Set(["Kerb", "OffTrack", "Oversteer", "Suspension", "Impact"]);
 const FX_DEFAULTS = {
   Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
   Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
   TyreSlip: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "amplify", frequency: 32, amplitude: 50, amplitudeMax: 95 },
   TyreLock: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "amplify", frequency: 40, amplitude: 50, amplitudeMax: 95 },
   ABS: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.3, modulation: "none", frequency: 45, amplitude: 70 },
-  Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.1, modulation: "amplify", frequency: 20, amplitude: 30, amplitudeMax: 90 },
+  Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.08, full: 0.4, modulation: "amplify", frequency: 35, amplitude: 30, amplitudeMax: 100, noise: 8 },
   Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
   OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
+  Impact: { wheels: ["FL", "FR", "RL", "RR"], threshold: 3, full: 12, modulation: "amplify", frequency: 28, amplitude: 50, amplitudeMax: 100, noise: 10 },
   // a pitch no other effect uses, weak at the first hint and strong when the rear is really going
   Oversteer: { wheels: ["RL", "RR"], threshold: 5, full: 10, modulation: "amplify", frequency: 55, amplitude: 35, amplitudeMax: 100, noise: 0 },
 };
@@ -1821,7 +1823,8 @@ const FX_HINT = {
   TyreSlip: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
   TyreLock: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
-  Suspension: "AMS2: not mapped by simapi, gives no vibration.",
+  Suspension: "Bumps, kerbs and landings, from how fast these wheels' suspension moves (AMS2's suspension velocity, read by simdash; monocoque never got it). Cornering and braking move it slowly: on your laps 99 % of the time on track stays under 0.11 m/s, kerbs reach 0.2 to 0.4, landings and off-track 0.4 to 1. Starts at the first speed, full at the second; each hit fades over 60 ms. One effect per corner shaker, on its own wheel, places the bump. Played by simdash; with the haptics engine it applies at once.",
+  Impact: "Walls, barriers, other cars: a sudden jump of the car's sideways or forward/backward acceleration away from what it was a moment before, in g (steady cornering or braking never counts, even 5-6 g in a formula car). On your laps driving moves it about 1 g; hits gave 6 to 20 g. Starts at the first value, full at the second; each knock fades over 150 ms. The car is pushed away from what it hits, so the wheels pick the side: FL plays for an obstacle at the front left, both fronts for a frontal hit, all four for any hit (the seat shaker). Landings are left to Suspension. Played by simdash.",
   Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
   OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
   Oversteer: "RL plays while the rear slides to the left, RR to the right: one Oversteer effect on each rear shaker tells you which way the car is going; both on one shaker plays either way. Played by simdash (not monocoque) as the rear steps out: from the rear tyres' slip angle (how far the rear axle slides sideways), starting at the first angle and full at the second. Grip is a few degrees; on your laps 5° comes 2 to 4 times a minute, about as often as you countersteer, so it warns just before. Lower it for an earlier hint, raise it if it plays in every corner. A shaker on the seat or seat back feels most like the rear going. Applies a few seconds after saving.",
@@ -1991,6 +1994,14 @@ function renderEffects() {
     if (mod === "amplify") f += fxField(e, i, "amplitudeMax", "Strength max", 0, 100, 1, "%");
     if (e.effect === "Gear") f += fxField(e, i, "duration", "Duration", 0.05, 1, 0.05, "s");
     if (wheel && !OWN_FX.has(e.effect)) f += fxField(e, i, "threshold", "Threshold", 0, 1, 0.05);
+    if (e.effect === "Impact") {
+      f += fxField(e, i, "threshold", "Starts at", 1, 20, 0.5, "g");
+      f += fxField(e, i, "full", "Full at", 2, 40, 1, "g");
+    }
+    if (e.effect === "Suspension") {
+      f += fxField(e, i, "threshold", "Starts at", 0.02, 1, 0.01, "m/s");
+      f += fxField(e, i, "full", "Full at", 0.05, 2, 0.05, "m/s");
+    }
     if (e.effect === "Oversteer") {
       const ws = e.wheels || ["RL", "RR"];
       f += `<label>Rear sliding to<span class="wheel-chips">${[["RL", "the left"], ["RR", "the right"]].map(([w, t]) => `<button type="button" class="chip${ws.includes(w) ? " on" : ""}" data-wheel="${w}" data-i="${i}" title="plays while the rear slides to ${t}">${w}</button>`).join("")}</span></label>`;
@@ -2272,8 +2283,10 @@ function buildShakerCar(svg, layout, channels) {
         <circle r="25"/><text>${channels[ch]}</text></g>`;
     });
   }
-  $(svg).innerHTML = body + spots + (svg === "#rp-car" ? pedalGlyphs() : "");
+  const pedals = svg === "#rp-car" || svg === "#live-car";
+  $(svg).innerHTML = body + spots + (pedals ? pedalGlyphs() : "");
   if (svg === "#rp-car") paintPedals();
+  if (svg === "#live-car") paintPedals("#live-car .pedal-g", live.data?.pedals || {});
 }
 
 // the three pedals in the footwell of the car top views (Haptics tab), lit while their haptics play
@@ -2283,10 +2296,11 @@ function pedalGlyphs() {
     `<g class="pedal-g" data-pedal="${p}" transform="translate(${x} 112)"><title>${p[0].toUpperCase() + p.slice(1)} pedal haptics</title>
       <rect x="-6" y="-13" width="12" height="26" rx="3"/><text y="24">${p[0].toUpperCase()}</text></g>`).join("");
 }
-function paintPedals() {
-  const playing = hp.playing || [], fitted = hp.setup?.settings?.fitted || {};
-  document.querySelectorAll(".pedal-g").forEach((g) => {
-    const p = g.dataset.pedal, fx = playing.filter((x) => x.startsWith(p + ":")).map((x) => hp.setup?.names[x.split(":")[1]] || x.split(":")[1]);
+// sel/strength: the Live car paints from the live feed ({"brake:abs": strength %}), the Haptics tab from its own poll
+function paintPedals(sel = "#sh-spots .pedal-g, #rp-car .pedal-g", strength = null) {
+  const playing = strength ? Object.keys(strength) : hp.playing || [], fitted = hp.setup?.settings?.fitted || {};
+  document.querySelectorAll(sel).forEach((g) => {
+    const p = g.dataset.pedal, fx = playing.filter((x) => x.startsWith(p + ":")).map((x) => (hp.setup?.names[x.split(":")[1]] || x.split(":")[1]) + (strength ? ` ${strength[x]}%` : ""));
     g.classList.toggle("on", fx.length > 0);
     g.classList.toggle("unfitted", fitted[p] === false);
     const t = g.querySelector("title");
@@ -2317,6 +2331,8 @@ async function loadShakerCars() {
       const d = await (await fetch("/api/shakers")).json();
       Object.assign(shCar, { layout: d.layout, channels: d.options.channels });
     } catch { return; }
+    // pedal effect names and fitted motors for the Live car's pedals
+    if (!hp.setup) fetch("/api/haptics").then((r) => r.ok && r.json()).then((h) => { if (h && !hp.setup) hp.setup = h; }).catch(() => {});
   }
   for (const svg of ["#live-car", "#sess-car"]) buildShakerCar(svg, shCar.layout, shCar.channels);
   if (hist.shakers) paintSessionCar();

@@ -128,3 +128,23 @@ pace and nothing drifts. Saved settings and haptics presets apply at once, witho
 
 The System tab's *simdash haptics engine* card shows what it measures each second: telemetry updates
 read, synthesis time per block, latency to the card and dropouts (blocks that came too late).
+
+## Suspension (bumps)
+
+Played by simdash (monocoque never got AMS2's suspension through simapi): how fast the chosen wheels'
+suspension moves, AMS2's `mSuspensionVelocity`, in m/s up or down. Cornering and braking move it
+slowly (on track 99 % of samples stay under 0.11 m/s); kerbs reach 0.2-0.4 m/s, landings and off-track
+0.4-1. The effect starts at *Starts at* (default 0.08 m/s) and is full at *Full at* (0.4 m/s). With the
+haptics engine the suspension is read every 10 ms and each hit fades over 60 ms, so a single sharp bump
+is felt; one effect per corner shaker, each on its own wheel, places the bump where it happens. On a
+recorded Interlagos session (McLaren GT3) it played 2-6 % of the time on track and about 30 % on kerbs.
+
+## Impact (obstacles)
+
+Played by simdash: walls, barriers and other cars, from a sudden jump of the car's horizontal acceleration
+(AMS2 `mLocalAcceleration`, sideways and forward/backward) away from its level over the last quarter second.
+Steady cornering and braking never count, even the 5-6 g of a formula car; on recorded laps (2026-11-20)
+driving moves it about 1 g from one sample to the next, while hits gave 6 to 20 g (a single absurd sample,
+401 g, is ignored). *Starts at* 3 g, *Full at* 12 g; each knock fades over 150 ms. The car is pushed away
+from what it hits, so the wheels pick the side the obstacle is on: an effect on FL plays for a front-left
+hit, all four wheels play for any hit (the seat shaker). Vertical jolts (landings) are left to Suspension.

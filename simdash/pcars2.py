@@ -353,6 +353,7 @@ def decode(buf):
         "local_acc": r["mLocalAcceleration"],
         "terrain": r["mTerrain"],
         "tyre_rps": r["mTyreRPS"],
+        "susp_vel": r["mSuspensionVelocity"],
         "tyre_slip_speed": r["mTyreSlipSpeed"],
         "tyre_wear": r["mTyreWear"],
         "brake_temp": r["mBrakeTempCelsius"],

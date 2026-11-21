@@ -46,7 +46,9 @@ STATE = Path.home() / ".local/state"
 STATUS = STATE / "simdash-haptics.json"
 LAST = STATE / "simdash-haptics-last.json"  # the summary of the last run, kept after the engine stops
 RT_PRIORITY = 10        # SCHED_RR priority asked of RTKit: below PipeWire's own threads (20), above everything else
-LOG_EVERY = 30.0        # s between timing lines in the log while playing
+LOG_EVERY = 30.0
+# s over which a hit fades (a 10 ms spike alone is too short to feel): bumps, and the heavier knock of an obstacle
+RELEASE = {"Suspension": 0.06, "Impact": 0.15}        # s between timing lines in the log while playing
 LOCK = STATE / "simdash-haptics.lock"
 
 
@@ -55,7 +57,8 @@ LOCK = STATE / "simdash-haptics.lock"
 _KINDS = {name: (kind, count) for name, kind, count, pc in FIELDS if not pc}
 _WANT = {"game_state": "mGameState", "car": "mCarName", "speed": "mSpeed", "rpm": "mRpm", "max_rpm": "mMaxRPM",
          "gear": "mGear", "abs": "mAntiLockActive", "local_vel": "mLocalVelocity", "ang_vel": "mAngularVelocity",
-         "terrain": "mTerrain", "tyre_rps": "mTyreRPS", "seq": "mSequenceNumber"}
+         "terrain": "mTerrain", "tyre_rps": "mTyreRPS", "susp_vel": "mSuspensionVelocity",
+         "local_acc": "mLocalAcceleration", "seq": "mSequenceNumber"}
 
 
 class Telemetry(Pcars2Reader):
@@ -154,6 +157,8 @@ class Engine:
         self.car, self.dia, self.dia_checked = None, None, 0.0
         self.gear = None
         self.prev = {}          # stream index -> (f, a) at the end of the last block
+        self.held = {}          # Suspension / Impact stream index -> (f, a, time): its last hit, fading out
+        self.acc_base = replay.AccBase()
         self.seq, self.seq_t = None, 0.0
         self.quiet_since = time.monotonic()
         self.retry = 0.0
@@ -229,7 +234,7 @@ class Engine:
             devid = ""
         self.devices = devices
         self.streams = [replay._Stream(d) for d in devices]
-        self.prev = {}
+        self.prev, self.held = {}, {}
         if devid != self.devid and self.out is not None:
             self.out.close()
             self.out = None
@@ -261,13 +266,25 @@ class Engine:
         self.state = "playing"
         shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
         self.gear = snap["gear"]
-        data = replay.tick_data(snap)
+        data = replay.tick_data(snap, self.acc_base)
         slips = replay.wheel_slip(data, 0, self._diameters(snap["car"], now))
         out = {}
         for k, dev in enumerate(self.devices):
-            if dev["effect"] != "Gear":
+            if dev["effect"] in RELEASE:
+                out[k] = self._bump(k, replay.effect_value(dev, data, 0, slips), now, RELEASE[dev["effect"]])
+            elif dev["effect"] != "Gear":
                 out[k] = replay.effect_value(dev, data, 0, slips)
         return out, shifted
+
+    def _bump(self, k, fa, now, release):
+        """A hit holds and fades over release s unless a stronger one comes."""
+        f, a = fa
+        hf, ha, ht = self.held.get(k, (f, 0.0, now))
+        ha *= max(0.0, 1 - (now - ht) / release)
+        if a >= ha:
+            self.held[k] = (f, a, now)
+            return f, a
+        return hf, ha
 
     def synth(self, cur, kick, n):
         mix = [0.0] * (8 * n)

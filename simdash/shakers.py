@@ -26,15 +26,24 @@ OWN_EFFECTS = store.DATA_DIR / "effects.json"  # simdash's own effects (SIMDASH_
 RATE = 44100
 CHANNEL_MAP = ["front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right", "side-left", "side-right"]
 CHANNEL_SHORT = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
-EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack", "Oversteer"]
-# played by simdash itself from AMS2's per-wheel terrain (monocoque has no surface effect), kept in
+EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack", "Oversteer", "Impact"]
+# played by simdash itself from AMS2's per-wheel terrain (monocoque has no surface effect), the rear slip
+# angle and the suspension (simapi does not map AMS2's: monocoque's Suspension never played), kept in
 # simdash's own file so monocoque never reads an effect it does not know
-SIMDASH_EFFECTS = {"Kerb", "OffTrack", "Oversteer"}
+SIMDASH_EFFECTS = {"Kerb", "OffTrack", "Oversteer", "Suspension", "Impact"}
 SURFACE_CLASS = {"Kerb": 1, "OffTrack": 2}  # pcars2.SURFACE class each one reacts to
-WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension"} | set(SURFACE_CLASS)
+WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension", "Impact"} | set(SURFACE_CLASS)
 # Oversteer: the rear slip angle (pcars2.rear_slide_deg), from "threshold" degrees to full at "full" degrees;
 # its wheels say which way: RL plays while the rear slides to the left, RR to the right (pcars2: > 0 = left)
 OVERSTEER_DEFAULTS = {"threshold": 5.0, "full": 10.0}
+# Suspension: how fast the effect's wheels' suspension moves (AMS2 mSuspensionVelocity, m/s), from "threshold"
+# to full at "full". Recorded 2026-11-20 (GT3, MINI): on track 99 % of samples stay under 0.11 m/s (roll, pitch),
+# kerbs reach 0.2-0.4, landings and off-track 0.4-1.0
+SUSPENSION_DEFAULTS = {"threshold": 0.08, "full": 0.4}
+# Impact: a sudden jump of the car's horizontal acceleration away from its recent level (g), from "threshold" to
+# full at "full". Recorded 2026-11-20: driving moves it ~1 g between samples (formula cars hold 5-6 g, but
+# steadily), hitting things gives 6-20 g; the wheels say which side of the car the obstacle must be on
+IMPACT_DEFAULTS = {"threshold": 3.0, "full": 12.0}
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
 WHEELS = ["FL", "FR", "RL", "RR"]
 TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
@@ -329,6 +338,16 @@ def expand(effects, devid):
 def _clean_own(e):
     """One of simdash's own effects, with any wheel set (simdash plays it, so no splitting)."""
     out = {"device": "Sound", "effect": _norm_effect(e.get("effect"))}
+    if out["effect"] == "Suspension":
+        th = float(e.get("threshold") if e.get("threshold") not in (None, "") else SUSPENSION_DEFAULTS["threshold"])
+        full = float(e.get("full") if e.get("full") not in (None, "") else SUSPENSION_DEFAULTS["full"])
+        out["threshold"] = max(0.01, min(1.0, th))
+        out["full"] = max(out["threshold"] + 0.02, min(2.0, full))
+    if out["effect"] == "Impact":
+        th = float(e.get("threshold") if e.get("threshold") not in (None, "") else IMPACT_DEFAULTS["threshold"])
+        full = float(e.get("full") if e.get("full") not in (None, "") else IMPACT_DEFAULTS["full"])
+        out["threshold"] = max(1.0, min(20.0, th))
+        out["full"] = max(out["threshold"] + 0.5, min(40.0, full))
     if out["effect"] == "Oversteer":
         th = float(e.get("threshold") if e.get("threshold") not in (None, "") else OVERSTEER_DEFAULTS["threshold"])
         full = float(e.get("full") if e.get("full") not in (None, "") else OVERSTEER_DEFAULTS["full"])
@@ -573,7 +592,7 @@ def render(e, mode="effect"):
             s.rest(0.7)
     else:
         # three slides: strength rises from the threshold to full
-        th = 0 if eff == "Oversteer" else e.get("threshold", 0) or 0
+        th = 0 if eff in ("Oversteer", "Suspension", "Impact") else e.get("threshold", 0) or 0
         for _ in range(3):
             for k in range(35):
                 x = th + (1 - th) * k / 34

@@ -38,18 +38,20 @@ def read_session(ref):
             raise LookupError("no such session")
         rows = con.execute(
             "SELECT t.id, t.ts, e.x, e.z, e.lap, e.speed, e.rpm, e.gear, e.throttle, e.brake, "
-            "e.local_vel_y, e.local_vel_z, e.abs_active, e.local_vel_x, e.angular_vel_y, e.clutch FROM tick t JOIN telemetry e ON e.tick_id = t.id "
+            "e.local_vel_y, e.local_vel_z, e.abs_active, e.local_vel_x, e.angular_vel_y, e.clutch, e.local_acc_x, e.local_acc_z "
+            "FROM tick t JOIN telemetry e ON e.tick_id = t.id "
             "WHERE t.session_id=? ORDER BY t.ts", (sid,)).fetchall()
-        rps, terrain, slip, susp, max_rpm, flags = {}, {}, {}, {}, [], []
+        rps, terrain, slip, susp, susp_vel, max_rpm, flags = {}, {}, {}, {}, {}, [], []
         if rows:
             lo, hi = rows[0][0], rows[-1][0]
-            for tick, wheel, v, ter, sl, su in con.execute(
-                    "SELECT tick_id, wheel, rps, terrain, slip, suspension_travel FROM wheel WHERE tick_id BETWEEN ? AND ?",
-                    (lo, hi)):
+            for tick, wheel, v, ter, sl, su, sv in con.execute(
+                    "SELECT tick_id, wheel, rps, terrain, slip, suspension_travel, suspension_velocity FROM wheel "
+                    "WHERE tick_id BETWEEN ? AND ?", (lo, hi)):
                 rps.setdefault(tick, [0.0] * 4)[wheel] = v or 0.0
                 terrain.setdefault(tick, [None] * 4)[wheel] = ter
                 slip.setdefault(tick, [None] * 4)[wheel] = sl
                 susp.setdefault(tick, [0.0] * 4)[wheel] = su or 0.0
+                susp_vel.setdefault(tick, [0.0] * 4)[wheel] = sv or 0.0
             max_rpm = con.execute(
                 "SELECT tick_id, max_rpm FROM player_state WHERE tick_id <= ? AND tick_id >= "
                 "COALESCE((SELECT MAX(tick_id) FROM player_state WHERE tick_id <= ?), 0) ORDER BY tick_id",
@@ -62,7 +64,8 @@ def read_session(ref):
     con.close()
     d = {k: [] for k in ("ts", "x", "z", "lap", "speed", "rpm", "maxrpm", "gear", "throttle", "brake",
                          "vel_fwd", "vel_up", "abs", "rps", "terrain", "vel_x", "yaw",
-                         "clutch", "car_flags", "slip", "susp")}
+                         "clutch", "car_flags", "slip", "susp", "susp_vel", "acc", "acc_base")}
+    base = AccBase()
     k, cur_max, kf, cur_flags = 0, 0, 0, 0
     for r in rows:
         while k < len(max_rpm) and max_rpm[k][0] <= r[0]:
@@ -73,11 +76,14 @@ def read_session(ref):
             kf += 1
         d["clutch"].append(r[15] or 0.0); d["car_flags"].append(cur_flags)
         d["slip"].append(slip.get(r[0])); d["susp"].append(susp.get(r[0]))
+        d["susp_vel"].append(susp_vel.get(r[0]) or [0.0] * 4)  # slimmed days keep no wheel rows: no bumps
         d["ts"].append(r[1]); d["x"].append(r[2]); d["z"].append(r[3]); d["lap"].append(r[4])
         d["speed"].append(r[5] or 0.0); d["rpm"].append(r[6] or 0.0); d["maxrpm"].append(cur_max)
         d["gear"].append(r[7] or 0); d["throttle"].append(r[8] or 0.0); d["brake"].append(r[9] or 0.0)
         d["vel_up"].append(r[10] or 0.0); d["vel_fwd"].append(r[11] or 0.0); d["abs"].append(r[12] or 0)
         d["vel_x"].append(r[13] or 0.0); d["yaw"].append(r[14] or 0.0)
+        acc = (r[16] or 0.0, r[17] or 0.0)
+        d["acc"].append(acc); d["acc_base"].append(base.update(acc, r[1]))
         d["rps"].append(rps.get(r[0], [0.0] * 4))
         d["terrain"].append(terrain.get(r[0], [None] * 4))
     return {"car": s["car"], "track": s["track"], "variation": s["variation"], **d}
@@ -163,6 +169,66 @@ def oversteer_play(dev, data, i):
     return max(0.01, min(1.0, (a - th) / max(0.5, full - th)))
 
 
+def suspension_play(dev, data, i):
+    """simdash's Suspension: the fastest-moving suspension of the effect's wheels (m/s, up or down) past the
+    threshold, full at "full": bumps, kerbs and landings, not the slow roll and pitch of cornering and braking."""
+    v = max((abs(data["susp_vel"][i][WHEEL_IDX[w]]) for w in dev.get("wheels", ())), default=0.0)
+    th = float(dev.get("threshold", shakers.SUSPENSION_DEFAULTS["threshold"]))
+    full = float(dev.get("full", shakers.SUSPENSION_DEFAULTS["full"]))
+    if v <= th:
+        return 0.0
+    return max(0.01, min(1.0, (v - th) / max(0.01, full - th)))
+
+
+class AccBase:
+    """The car's recent horizontal acceleration (local x, z, m/s²): an average over the last ~TAU s, before the
+    current sample. Impact measures how far a sample jumps from it."""
+
+    TAU = 0.25
+
+    def __init__(self):
+        self.v, self.t = None, None
+
+    def update(self, acc, t):
+        """The baseline the sample acc (at time t) is compared with; then acc joins it."""
+        if self.v is None or t - self.t > 1.0:  # first sample, or after a pause
+            self.v = acc
+        prev = self.v
+        if math.hypot(acc[0] - prev[0], acc[1] - prev[1]) / G > IMPACT_GLITCH:
+            return prev  # a glitch: compared (and ignored by impact_play), never averaged in
+        k = min(1.0, max(0.0, t - self.t) / self.TAU) if self.t is not None else 1.0
+        self.v = (prev[0] + (acc[0] - prev[0]) * k, prev[1] + (acc[1] - prev[1]) * k)
+        self.t = t
+        return prev
+
+
+G = 9.80665
+IMPACT_GLITCH = 60.0  # g: AMS2 sometimes reports one absurd sample (401 g at 59 km/h): not a hit
+# where each wheel is, as (forward, left)
+WHEEL_DIR = {"FL": (1, 1), "FR": (1, -1), "RL": (-1, 1), "RR": (-1, -1)}
+
+
+def impact_play(dev, data, i):
+    """simdash's Impact: the jump of the horizontal acceleration from its recent level past the threshold (g), full
+    at "full". The car is pushed away from what it hits, so the obstacle lies opposite the jump: an effect on some
+    wheels plays when the obstacle is on their side (all four: any hit)."""
+    (ax, az), (bx, bz) = data["acc"][i], data["acc_base"][i]
+    dx, dz = (ax - bx) / G, (az - bz) / G
+    m = math.hypot(dx, dz)
+    th = float(dev.get("threshold", shakers.IMPACT_DEFAULTS["threshold"]))
+    full = float(dev.get("full", shakers.IMPACT_DEFAULTS["full"]))
+    if m <= th or m > IMPACT_GLITCH:
+        return 0.0
+    x = max(0.01, min(1.0, (m - th) / max(0.5, full - th)))
+    wheels = dev.get("wheels") or list(WHEEL_DIR)
+    if len(wheels) == 4:
+        return x
+    # local x points left and -z forward; the obstacle is opposite the push: forward dz, left -dx
+    of, ol = dz / m, -dx / m
+    cos = max((of * f + ol * l) / math.sqrt(2) for f, l in (WHEEL_DIR[w] for w in wheels))
+    return x * max(0.0, min(1.0, cos / math.sqrt(0.5)))
+
+
 def effect_value(dev, data, i, slips):
     """(frequency, amplitude %) of a continuous effect at tick i; amplitude 0 = silent."""
     if dev["effect"] == "Engine":
@@ -170,6 +236,10 @@ def effect_value(dev, data, i, slips):
         return shakers._modulated(dev, round(data["rpm"][i]) / mx if mx > 0 else 0.0)
     if dev["effect"] == "Oversteer":
         x = oversteer_play(dev, data, i)
+    elif dev["effect"] == "Suspension":
+        x = suspension_play(dev, data, i)
+    elif dev["effect"] == "Impact":
+        x = impact_play(dev, data, i)
     elif dev["effect"] in shakers.SIMDASH_EFFECTS:
         x = surface_play(dev, data, i)
     else:
@@ -309,12 +379,17 @@ class Timeline:
 
 # ---------- live: what monocoque is playing now ----------
 
-def tick_data(snap):
-    """One live sample as a one-tick recording, the input of effect_value() and wheel_slip() (tick 0)."""
+def tick_data(snap, acc_base=None):
+    """One live sample as a one-tick recording, the input of effect_value() and wheel_slip() (tick 0).
+    acc_base: the AccBase following this stream of samples (Impact), updated here."""
     lv = snap["local_vel"]
+    la = snap.get("local_acc") or (0.0, 0.0, 0.0)
+    acc = (la[0], la[2])
+    base = acc_base.update(acc, time.monotonic()) if acc_base is not None else acc
     return {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
             "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
-            "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]]}
+            "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]],
+            "susp_vel": [list(snap.get("susp_vel") or (0.0,) * 4)], "acc": [acc], "acc_base": [base]}
 
 
 class Live:
@@ -329,6 +404,7 @@ class Live:
         self.checked = 0.0
         self.gear = None
         self.kicks = {}  # device index -> time its gear kick ends
+        self.acc_base = AccBase()
 
     def _refresh(self, car, now):
         from . import engine, system
@@ -350,7 +426,7 @@ class Live:
         """{channel: [strength %, effect]} for the shakers playing now; {} without monocoque."""
         if now - self.checked > self.REFRESH or snap["car"] != self.car:
             self._refresh(snap["car"], now)
-        data = tick_data(snap)
+        data = tick_data(snap, self.acc_base)
         shifted = self.gear is not None and snap["gear"] != self.gear and snap["gear"] + 1 > 1
         self.gear = snap["gear"]
         slips = wheel_slip(data, 0, self.dia)
