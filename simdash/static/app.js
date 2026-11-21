@@ -1821,7 +1821,7 @@ const FX_DEFAULTS = {
   Suspension: { wheels: ["FL", "FR", "RL", "RR"], threshold: 0.08, full: 0.4, modulation: "amplify", frequency: 35, amplitude: 30, amplitudeMax: 100, noise: 8 },
   Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
   OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
-  Impact: { wheels: ["FL", "FR", "RL", "RR"], threshold: 3, full: 12, modulation: "amplify", frequency: 28, amplitude: 50, amplitudeMax: 100, noise: 10 },
+  Impact: { wheels: ["FL", "FR", "RL", "RR"], threshold: 3, full: 12, duration: 0.4, modulation: "amplify", frequency: 28, amplitude: 50, amplitudeMax: 100, noise: 10 },
   // a pitch no other effect uses, weak at the first hint and strong when the rear is really going
   Oversteer: { wheels: ["RL", "RR"], threshold: 5, full: 10, modulation: "amplify", frequency: 55, amplitude: 35, amplitudeMax: 100, noise: 0 },
 };
@@ -1833,7 +1833,7 @@ const FX_HINT = {
   TyreLock: "AMS2: needs the car's tyre diameters, which simdash learns and gives monocoque.",
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
   Suspension: "Bumps, kerbs and landings, from how fast these wheels' suspension moves (AMS2's suspension velocity, read by simdash; monocoque never got it). Cornering and braking move it slowly: on your laps 99 % of the time on track stays under 0.11 m/s, kerbs reach 0.2 to 0.4, landings and off-track 0.4 to 1. Starts at the first speed, full at the second; each hit fades over 60 ms. One effect per corner shaker, on its own wheel, places the bump. Played by simdash; with the haptics engine it applies at once.",
-  Impact: "Walls, barriers, other cars: a sudden jump of the car's sideways or forward/backward acceleration away from what it was a moment before, in g (steady cornering or braking never counts, even 5-6 g in a formula car). On your laps driving moves it about 1 g; hits gave 6 to 20 g. Starts at the first value, full at the second; each knock fades over 150 ms. The car is pushed away from what it hits, so the wheels pick the side: FL plays for an obstacle at the front left, both fronts for a frontal hit, all four for any hit (the seat shaker). Landings are left to Suspension. Played by simdash.",
+  Impact: "Walls, barriers, other cars: a sudden jump of the car's sideways or forward/backward acceleration away from what it was a moment before, in g (steady cornering or braking never counts, even 5-6 g in a formula car). On your laps driving moves it about 1 g; hits gave 6 to 20 g. Starts at the first value, full at the second. Each knock lasts the third value: held at full for its first 30 %, then fading out (0.4 s: about 11 vibrations at 28 Hz). The car is pushed away from what it hits, so the wheels pick the side: FL plays for an obstacle at the front left, both fronts for a frontal hit, all four for any hit (the seat shaker). Landings are left to Suspension. Played by simdash.",
   Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
   OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
   Oversteer: "RL plays while the rear slides to the left, RR to the right: one Oversteer effect on each rear shaker tells you which way the car is going; both on one shaker plays either way. Played by simdash (not monocoque) as the rear steps out: from the rear tyres' slip angle (how far the rear axle slides sideways), starting at the first angle and full at the second. Grip is a few degrees; on your laps 5° comes 2 to 4 times a minute, about as often as you countersteer, so it warns just before. Lower it for an earlier hint, raise it if it plays in every corner. A shaker on the seat or seat back feels most like the rear going. Applies a few seconds after saving.",
@@ -2006,6 +2006,7 @@ function renderEffects() {
     if (e.effect === "Impact") {
       f += fxField(e, i, "threshold", "Starts at", 1, 20, 0.5, "g");
       f += fxField(e, i, "full", "Full at", 2, 40, 1, "g");
+      f += fxField(e, i, "duration", "Lasts", 0.1, 1.5, 0.05, "s");
     }
     if (e.effect === "Suspension") {
       f += fxField(e, i, "threshold", "Starts at", 0.02, 1, 0.01, "m/s");
@@ -2353,6 +2354,7 @@ function setReplayState(st) {
   rp.stAt = performance.now();
   $("#rp-play").textContent = st.playing ? "Pause" : "Play";
   if (st.error) $("#rp-note").textContent = st.error;
+  else if (st.playing && st.via) $("#rp-note").textContent = st.via === "engine" ? "playing through the haptics engine" : "playing on its own stream";
 }
 const replayTs = () => {
   const st = rp.st;

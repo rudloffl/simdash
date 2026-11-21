@@ -20,6 +20,7 @@ RATE = 8000           # Hz; shaker frequencies stay far below 4 kHz, and it keep
 CHUNK = 0.05          # s of audio per synthesis step
 AHEAD = 0.12          # s of audio generated ahead of the clock
 LATENCY = 0.1         # s between generating a sample and feeling it (pacat + PulseAudio)
+ENGINE_LATENCY = 0.19 # the same through the haptics engine: AHEAD to AHEAD + CHUNK queued there, plus its 45 ms
 GAP = 2.0             # s without ticks (pause, menus) skipped during playback
 GEAR_FADE = 0.005     # monocoque's gear pulse fade-out
 
@@ -279,9 +280,47 @@ def effect_value(dev, data, i, slips):
     return shakers._modulated(dev, x) if x > 0 else (0.0, 0.0)
 
 
+def knock_envelope(dev):
+    """(hold, release) s for the effects that come as hits (a 10 ms spike alone is too short to feel), else None.
+    Suspension: a bump fades over 60 ms. Impact: the knock holds for 30 % of its duration, then fades."""
+    if dev["effect"] == "Suspension":
+        return 0.0, 0.06
+    if dev["effect"] == "Impact":
+        d = float(dev.get("duration", shakers.IMPACT_DEFAULTS["duration"]))
+        return 0.3 * d, 0.7 * d
+    return None
+
+
+class Knock:
+    """A hit holds, then fades out linearly, unless a stronger one comes."""
+
+    def __init__(self, hold, release):
+        self.hold, self.release = hold, max(1e-3, release)
+        self.f, self.a, self.t = 0.0, 0.0, None
+
+    def level(self, t):
+        if self.t is None:
+            return 0.0
+        dt = t - self.t - self.hold
+        return self.a if dt <= 0 else self.a * max(0.0, 1 - dt / self.release)
+
+    def update(self, f, a, t):
+        """(f, a) to play at time t for a new value (f, a) of the effect."""
+        cur = self.level(t)
+        if a > 0 and a >= cur:
+            self.f, self.a, self.t = f, a, t
+            return f, a
+        return (self.f, cur) if cur > 0 else (f, 0.0)
+
+
 def effect_track(dev, data, dia):
     """Per tick (frequency, amplitude %) of one continuous effect; amplitude 0 = silent."""
-    return [effect_value(dev, data, i, wheel_slip(data, i, dia)) for i in range(len(data["ts"]))]
+    track = [effect_value(dev, data, i, wheel_slip(data, i, dia)) for i in range(len(data["ts"]))]
+    env = knock_envelope(dev)
+    if env:  # as the engine plays it
+        k = Knock(*env)
+        track = [k.update(f, a, t) for (f, a), t in zip(track, data["ts"])]
+    return track
 
 
 def gear_events(data):
@@ -641,6 +680,8 @@ class Player:
         self.proc = None
         self.error = ""
         self.pedals = True     # also play the Moza pedal haptics
+        self.engine = None     # link.EngineOut while the sound goes through the haptics engine
+        self.latency = LATENCY
 
     # -- clock --
     def now(self):
@@ -653,9 +694,10 @@ class Player:
             tl = self.tl
             t = self.now()
             if self.playing and self.audio:
-                t -= LATENCY * self.speed  # what is being felt, not what is being generated
+                t -= self.latency * self.speed  # what is being felt, not what is being generated
             return {"ref": tl.ref if tl else None, "playing": self.playing, "ts": t, "speed": self.speed, "pedals": self.pedals,
-                    "audio": self.audio, "error": self.error, "t0": tl.t0 if tl else None, "t1": tl.t1 if tl else None}
+                    "audio": self.audio, "error": self.error, "t0": tl.t0 if tl else None, "t1": tl.t1 if tl else None,
+                    "via": "engine" if self.engine is not None else "pacat" if self.audio else None}
 
     # -- control --
     def load(self, ref, effects, devid):
@@ -705,10 +747,36 @@ class Player:
     def _open(self, devid):
         return _pacat(devid, "shaker replay")
 
+    def _write(self, pcm):
+        """Sound to the engine or to pacat; False when it went away."""
+        try:
+            if self.engine is not None:
+                self.engine.write(pcm)
+            else:
+                self.proc.stdin.write(pcm)
+                self.proc.stdin.flush()
+            return True
+        except (BrokenPipeError, OSError):
+            return False
+
+    def _feed_pedals(self, values):
+        if self.engine is not None:
+            try:
+                self.engine.message({"pedals": values, "source": "replay"})
+            except OSError:
+                pass
+        else:
+            haptics.driver_thread.feed_values(values, "replay")
+
     def _run(self, devid):
-        self.proc = self._open(devid)
-        self.audio = self.proc is not None
-        if self.proc is None and devid:
+        from . import link
+        self.engine, self.proc = None, None
+        if link.usable(devid):  # one stream on the card, mixed with the live effects; the engine holds the pedals
+            self.engine, self.latency = link.EngineOut(), ENGINE_LATENCY
+        else:
+            self.proc, self.latency = self._open(devid), LATENCY
+        self.audio = self.engine is not None or self.proc is not None
+        if not self.audio and devid:
             self.error = "shaker card not connected: showing only"
         gen = None  # replay time the next chunk starts at
         try:
@@ -727,25 +795,27 @@ class Player:
                         t = jump
                         gen = None
                     if gen is None or gen < t - 0.05 or gen > t + 2 * AHEAD * speed:  # started or seeked
+                        if gen is not None and self.engine is not None:
+                            self.engine.flush()  # the engine drops the sound queued before the seek
                         gen = t
                     pedal_values = None
                     if self.pedals:
-                        felt = t - LATENCY * speed if self.audio else t  # in step with the shakers
+                        felt = t - self.latency * speed if self.audio else t  # in step with the shakers
                         pedal_values = tl.pedal_values(tl.index(max(tl.t0, felt)))
                     chunks = []
                     while gen < t + AHEAD * speed:
                         chunks.append(self._synth(tl, gen, speed))
                         gen += CHUNK * speed
                 if pedal_values:
-                    haptics.driver_thread.feed_values(pedal_values, "replay")
-                if self.proc and chunks:
-                    try:
-                        self.proc.stdin.write(b"".join(chunks))
-                        self.proc.stdin.flush()
-                    except (BrokenPipeError, OSError):
-                        self.error = "the shaker card went away"
+                    self._feed_pedals(pedal_values)
+                if self.audio and chunks and not self._write(b"".join(chunks)):
+                    self.error = "the haptics engine stopped" if self.engine is not None else "the shaker card went away"
+                    if self.proc:
                         self.proc.kill()
-                        self.proc, self.audio = None, False
+                    self.proc, self.audio = None, False
+                    if self.engine is not None:
+                        self.engine.close()
+                        self.engine = None
                 time.sleep(0.02)
         finally:
             if self.proc:
@@ -755,6 +825,10 @@ class Player:
                     pass
                 self.proc.terminate()
             self.proc = None
+            if self.engine is not None:
+                self.engine.flush()  # paused or ended: stop at once rather than play out the queue
+                self.engine.close()
+                self.engine = None
 
     def _synth(self, tl, t, speed):
         """CHUNK seconds of 8-channel s16le starting at replay time t."""

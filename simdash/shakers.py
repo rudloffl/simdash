@@ -43,7 +43,7 @@ SUSPENSION_DEFAULTS = {"threshold": 0.08, "full": 0.4}
 # Impact: a sudden jump of the car's horizontal acceleration away from its recent level (g), from "threshold" to
 # full at "full". Recorded 2026-11-20: driving moves it ~1 g between samples (formula cars hold 5-6 g, but
 # steadily), hitting things gives 6-20 g; the wheels say which side of the car the obstacle must be on
-IMPACT_DEFAULTS = {"threshold": 3.0, "full": 12.0}
+IMPACT_DEFAULTS = {"threshold": 3.0, "full": 12.0, "duration": 0.4}  # duration: s a knock lasts (held, then fading)
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
 WHEELS = ["FL", "FR", "RL", "RR"]
 TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
@@ -348,6 +348,8 @@ def _clean_own(e):
         full = float(e.get("full") if e.get("full") not in (None, "") else IMPACT_DEFAULTS["full"])
         out["threshold"] = max(1.0, min(20.0, th))
         out["full"] = max(out["threshold"] + 0.5, min(40.0, full))
+        d = e.get("duration")
+        out["duration"] = max(0.1, min(1.5, float(d if d not in (None, "") else IMPACT_DEFAULTS["duration"])))
     if out["effect"] == "Oversteer":
         th = float(e.get("threshold") if e.get("threshold") not in (None, "") else OVERSTEER_DEFAULTS["threshold"])
         full = float(e.get("full") if e.get("full") not in (None, "") else OVERSTEER_DEFAULTS["full"])
@@ -604,14 +606,42 @@ def render(e, mode="effect"):
 
 _play_lock = threading.Lock()
 _player = None
+_engine_test = None  # the link.EngineOut a test is being sent through, while it plays
 
 
 def stop():
-    global _player
+    global _player, _engine_test
     with _play_lock:
         if _player and _player.poll() is None:
             _player.kill()
         _player = None
+        sent, _engine_test = _engine_test, None
+    if sent is not None:
+        from . import link
+        link.flush()  # the engine drops what is still queued (the test's own socket may be closed by now)
+
+
+def _play_on_engine(pcm, vol):
+    """The test through simdash's haptics engine (link.py): one stream on the card, mixed with the live effects."""
+    global _engine_test
+    from array import array
+    from . import link, replay
+    a = array("h", link.resample(pcm, RATE, replay.RATE))
+    if vol < 1:
+        for i, v in enumerate(a):
+            a[i] = int(v * vol)
+    out = link.EngineOut()
+    with _play_lock:
+        _engine_test = out
+
+    def feed():
+        try:
+            out.write(a.tobytes())
+        except OSError:
+            pass
+        finally:
+            out.close()
+    threading.Thread(target=feed, daemon=True).start()
 
 
 def play(e, devid, mode="effect"):
@@ -623,6 +653,10 @@ def play(e, devid, mode="effect"):
     pcm = render(e, mode).tobytes()
     vol = int(max(0, min(100, int(e.get("volume", 100)))) / 100 * 65536) if mode == "effect" else 65536
     stop()
+    from . import link
+    if link.usable(devid):
+        _play_on_engine(pcm, vol / 65536)
+        return len(pcm) / 16 / RATE
     p = subprocess.Popen(["pacat", "--playback", f"--device={devid}", "--format=s16le", f"--rate={RATE}",
                           "--channels=8", "--channel-map=" + ",".join(CHANNEL_MAP), f"--volume={vol}",
                           "--client-name=simdash", "--stream-name=shaker test", "--latency-msec=60"],

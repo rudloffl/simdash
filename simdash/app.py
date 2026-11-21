@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import edges, felt, genie, haptics, leds, presets, replay, shakers, slim, store, system
+from . import edges, felt, genie, haptics, leds, link, presets, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -621,7 +621,12 @@ def create_app(recorder=None):
     @app.post("/api/haptics/test")
     def haptics_test(body: dict):
         try:
-            haptics.driver_thread.start_test(str(body.get("pedal")), str(body.get("effect")))
+            pedal, effect = str(body.get("pedal")), str(body.get("effect"))
+            if pedal not in haptics.PEDALS or effect not in haptics.SLOTS:
+                raise ValueError("unknown pedal or effect")
+            # the haptics engine holds the pedals while it runs: the test goes through it
+            if not (link.engine_devid() is not None and link.send({"pedal_test": [pedal, effect]})):
+                haptics.driver_thread.start_test(pedal, effect)
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True}

@@ -133,7 +133,15 @@ read, synthesis time per block, latency to the card and dropouts (blocks that ca
 
 The engine also drives the Moza pedal haptics (same settings as the [Pedal haptics](pedal-haptics.md)
 section), fed from the same 100 Hz samples instead of the recorder's 20 Hz; the recorder leaves the
-pedals alone while the engine runs. Replay and the Test buttons still play from simdash itself.
+pedals alone while the engine runs.
+
+The race replay and the Test buttons (shakers and pedals) also go through the engine while it runs on the
+card the page plays to: simdash renders the sound and sends it on a second socket
+(`~/.local/state/simdash-haptics.sock`; `simdash/link.py`), the engine mixes it with the live effects, and
+the pedal commands go to the engine's pedal connection. So there is one stream on the card and one
+connection to the pedals, and a replay can play while AMS2 runs (the game's own effects win on the pedals).
+Through the engine the replay is felt about 0.19 s after it is generated (the cursor and the pedals allow
+for it). Without the engine, or for another card, they play on their own `pacat` stream as before.
 
 ### What was felt
 
@@ -161,7 +169,7 @@ Played by simdash: walls, barriers and other cars, from a sudden jump of the car
 Steady cornering and braking never count, even the 5-6 g of a formula car; on recorded laps (2026-11-20)
 driving moves it about 1 g from one sample to the next, while hits gave 6 to 20 g, and a crash at 190 km/h
 over 50 g. A reading over 60 g counts only when the car's velocity changed with it: AMS2 sometimes reports
-absurd values (401 g for one sample, 329 g for a second) with the speed unchanged, and those are ignored. *Starts at* 3 g, *Full at* 12 g; each knock fades over 150 ms. The car is pushed away
+absurd values (401 g for one sample, 329 g for a second) with the speed unchanged, and those are ignored. *Starts at* 3 g, *Full at* 12 g. Each knock *Lasts* 0.4 s by default (0.1-1.5): held at full for the first 30 %, then fading out, so even a 10 ms spike gives about 11 vibrations at 28 Hz (it used to fade over 150 ms, too short to feel well). The replay plays it the same way. The car is pushed away
 from what it hits, so the wheels pick the side the obstacle is on: an effect on FL plays for a front-left
 hit, all four wheels play for any hit (the seat shaker). The signs were checked on recorded laps: the
 acceleration reads left and backward positive (cornering left, braking), as the code assumes. Vertical jolts (landings) are left to Suspension.

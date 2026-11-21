@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import felt, haptics, replay, shakers
+from . import felt, haptics, link, replay, shakers
 from .pcars2 import FIELDS, GAME_PLAYING, OFF, Pcars2Reader, _unpack
 
 log = logging.getLogger("simdash.engine")
@@ -47,8 +47,6 @@ STATUS = STATE / "simdash-haptics.json"
 LAST = STATE / "simdash-haptics-last.json"  # the summary of the last run, kept after the engine stops
 RT_PRIORITY = 10        # SCHED_RR priority asked of RTKit: below PipeWire's own threads (20), above everything else
 LOG_EVERY = 30.0
-# s over which a hit fades (a 10 ms spike alone is too short to feel): bumps, and the heavier knock of an obstacle
-RELEASE = {"Suspension": 0.06, "Impact": 0.15}        # s between timing lines in the log while playing
 LOCK = STATE / "simdash-haptics.lock"
 
 
@@ -150,8 +148,9 @@ def _mtime(p):
 
 
 class Engine:
-    def __init__(self, reader=None, out_factory=PulseOut, pedals=None, sender=None):
+    def __init__(self, reader=None, out_factory=PulseOut, pedals=None, sender=None, inbox=None):
         self.reader = reader or Telemetry()
+        self.inbox = inbox      # link.Inbox: replay and test sound and pedal commands from simdash
         self.pedals = pedals    # haptics.Driver: the Moza pedals, fed from the same samples (main() passes it)
         self.sender = sender    # felt.Sender: what plays, back to simdash
         self.out_factory = out_factory
@@ -162,7 +161,7 @@ class Engine:
         self.car, self.dia, self.dia_checked = None, None, 0.0
         self.gear = None
         self.prev = {}          # stream index -> (f, a) at the end of the last block
-        self.held = {}          # Suspension / Impact stream index -> (f, a, time): its last hit, fading out
+        self.held = {}          # Suspension / Impact stream index -> replay.Knock: its last hit, held then fading
         self.acc_base = replay.AccBase()
         self.seq, self.seq_t = None, 0.0
         self.quiet_since = time.monotonic()
@@ -280,8 +279,10 @@ class Engine:
             self.pedals.feed_values(self.pedal_values(snap, slips), "game")
         out = {}
         for k, dev in enumerate(self.devices):
-            if dev["effect"] in RELEASE:
-                out[k] = self._bump(k, replay.effect_value(dev, data, 0, slips), now, RELEASE[dev["effect"]])
+            env = replay.knock_envelope(dev)
+            if env:
+                knock = self.held.get(k) or self.held.setdefault(k, replay.Knock(*env))
+                out[k] = knock.update(*replay.effect_value(dev, data, 0, slips), now)
             elif dev["effect"] != "Gear":
                 out[k] = replay.effect_value(dev, data, 0, slips)
         return out, shifted
@@ -295,6 +296,22 @@ class Engine:
         g["susp"] = list(snap["susp"])
         return g
 
+    def command(self, d):
+        """A command from simdash (link.py): replay samples and Test buttons for the pedals."""
+        if self.pedals is None:
+            return
+        if "pedal_test" in d:
+            pedal, effect = d["pedal_test"]
+            self.pedals.reload()  # the page saves its settings just before
+            try:
+                self.pedals.start_test(str(pedal), str(effect))
+            except ValueError:
+                pass
+        elif "pedals" in d and self.state != "playing":  # the game wins over a replay
+            g = d["pedals"]
+            if isinstance(g, dict):
+                self.pedals.feed_values(g, "replay")
+
     def feedback(self):
         """What plays now, to simdash (Live page, session recording), while there is something to tell."""
         if self.sender is None:
@@ -304,16 +321,6 @@ class Engine:
             pd = {k: v.get("strength", 0) for k, v in (self.pedals.snapshot().get("detail") or {}).items()}
         if self.state == "playing" or pd:
             self.sender.send(self.played, pd)
-
-    def _bump(self, k, fa, now, release):
-        """A hit holds and fades over release s unless a stronger one comes."""
-        f, a = fa
-        hf, ha, ht = self.held.get(k, (f, 0.0, now))
-        ha *= max(0.0, 1 - (now - ht) / release)
-        if a >= ha:
-            self.held[k] = (f, a, now)
-            return f, a
-        return hf, ha
 
     def synth(self, cur, kick, n):
         mix = [0.0] * (8 * n)
@@ -333,6 +340,8 @@ class Engine:
                 levels[st.pan] = [int(round(min(a, 100))), st.dev["effect"]]
         self.prev = cur
         self.levels, self.played = levels, played
+        if self.inbox is not None:
+            self.inbox.mix_into(mix, n)  # a replay or test from simdash, over the live effects
         return replay._pcm(mix)
 
     def step(self):
@@ -341,11 +350,14 @@ class Engine:
         now = time.monotonic()
         if now - self.checked > RELOAD:
             self.reload(now)
+        if self.inbox is not None:
+            self.inbox.drain(self.command)
         t0 = time.perf_counter()
         snap = self.reader.sample()
         t_read = time.perf_counter() - t0
         cur, kick = self.targets(snap, now)
-        loud = kick or any(a > 0 for _, a in cur.values()) or any(s.pulse is not None for s in self.streams)
+        loud = (kick or any(a > 0 for _, a in cur.values()) or any(s.pulse is not None for s in self.streams)
+                or (self.inbox is not None and self.inbox.pending()))
         if loud:
             self.quiet_since = now
         elif self.out is not None and now - self.quiet_since > IDLE:
@@ -398,6 +410,8 @@ class Engine:
                "synth_ms": round(1000 * st["synth"] / st["blocks"], 2) if st["blocks"] else None,
                "synth_max_ms": round(1000 * st["synth_max"], 2), "late_blocks": st["late"],
                "block_ms": BLOCK * 1000, "latency_ms": None, "levels": self.levels, "priority": PRIORITY}
+        if self.inbox is not None:
+            out["queued_s"] = round(len(self.inbox.buf) / link.FRAME / RATE, 2)
         if self.pedals is not None:
             p = self.pedals.snapshot()
             out["pedals"] = {"port": p.get("port"), "playing": p.get("playing", []), "error": p.get("error")}
@@ -531,13 +545,17 @@ def main():
     PRIORITY = realtime()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # close the stream cleanly
     log.info("haptics engine: %d Hz, %.0f ms blocks, %.0f ms buffer, %s", RATE, BLOCK * 1000, LATENCY * 1000, PRIORITY)
-    eng = Engine(pedals=haptics.driver_thread, sender=felt.Sender())
+    inbox = link.Inbox(RATE)
+    if not inbox.open():
+        log.warning("no command socket: replay and tests keep their own streams")
+    eng = Engine(pedals=haptics.driver_thread, sender=felt.Sender(), inbox=inbox)
     try:
         eng.run()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         eng.finish()
+        inbox.close()
         if eng.out is not None:
             eng.out.close()
         try:
