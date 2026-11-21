@@ -24,7 +24,7 @@ the pages below.
 | [Progress](docs/progress.md) | One track and car over every session: best lap, best sectors, median and spread, time per corner against your best ever. |
 | [Corner Genie](docs/corner-genie.md) | A card after each corner while you drive (time, braking point, speeds, a tip). Every pass through a corner compared, any car, with a speed heatmap of the lines, a replay and the inputs. |
 | [Track edges](docs/track-edges.md) | Map where each track really ends by driving over its edges; natural colours, altitude profile, 3D. |
-| [Shakers](docs/shakers.md) | Bass shaker setup for Monocoque on a top view of the car, kerb, off-track and oversteer effects, replay of a session on the shakers. |
+| [Shakers](docs/shakers.md) | Bass shakers on a top view of the car, played by simdash's haptics engine (or monocoque): effects, limiter, replay of a session on the shakers. Measurements in [notes](docs/haptics-notes.md). |
 | [System](docs/system.md) | The telemetry chain from AMS2 to the shakers (monocoque or simdash's own haptics engine), each link green / yellow / red, restart buttons, logs, database size. |
 | [Pedal haptics](docs/pedal-haptics.md) | Moza pedal haptic module driven from AMS2: engine, ABS, TC, gear shift, slip, bite point, road texture. |
 | [Wheel LEDs](docs/wheel-leds.md) | Shift light on a Moza rim's RPM LEDs (shelved, at `/#leds`). |

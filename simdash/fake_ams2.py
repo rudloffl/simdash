@@ -5,6 +5,10 @@
 Writes a $pcars2$-layout file (never the real /dev/shm/$pcars2$ unless you
 point it there) with a few cars lapping a made-up circuit. After --laps laps
 the race finishes and the game goes back to the front end.
+
+For the haptics, every lap of the player has (see SCRIPT): sustained cornering g in the bends (the pace is set
+for 1.6 g), a kerb on the left wheels, an ABS stop into the slowest bend and a wall hit on the left; the
+suspension moves a little all the time (mSuspensionVelocity) and a lot on the kerb.
 """
 
 import argparse
@@ -19,6 +23,11 @@ from .pcars2 import OFF, STR_LEN
 
 SIZE = 102288
 TICK = 1 / 60
+G = 9.81
+# where on each lap (fraction of the lap) the scripted haptics events happen, for the player
+SCRIPT = {"kerb": (0.20, 0.215), "wall": 0.60}
+KERB = 10        # AMS2 terrain: rumble strips
+JERK = 60.0      # m/s³: how fast the cars change from braking to accelerating
 
 
 def track_point(u):
@@ -86,9 +95,12 @@ def main():
     best = [-1.0] * n
     last = [0.0] * n
     speed = [0.0] * n
+    accel = [0.0] * n     # m/s², ramped: a real car does not go from full braking to full throttle in one sample
     seq = 0
     t = 0.0
     prev_v = 0.0
+    hit_lap = -1          # the lap the wall was last hit on
+    knock = 0.0           # s left of the sideways push after the hit
     k_radius = 0.33
 
     put("mVersion", "I", 13)
@@ -120,7 +132,9 @@ def main():
             for i in range(n):
                 c = abs(curvature(pos_d[i]))
                 target = pace[i] * min(75.0, math.sqrt(1.6 * 9.81 / max(c, 1e-4)))
-                a = 9.0 if target > speed[i] else -14.0
+                want = 9.0 if target > speed[i] + 0.5 else -14.0 if target < speed[i] - 0.5 else 0.0
+                accel[i] += max(-JERK * dt, min(JERK * dt, want - accel[i]))
+                a = accel[i]
                 speed[i] = max(0.0, min(target, speed[i] + a * dt)) if a > 0 else max(target, speed[i] + a * dt)
                 pos_d[i] += speed[i] * dt
                 if pos_d[i] >= (laps_done[i] + 1) * length:
@@ -168,6 +182,13 @@ def main():
                     terr.append(7 if w > 6 else 10 if w > 5 else 0)  # grass, rumble strips, road
                 put("mTerrain", "4I", *terr)
 
+            # the wall hit: once a lap, the car is pushed right (the wall is on its left) and loses 15 % of its speed
+            u = (pos_d[0] % length) / length if pos_d[0] >= 0 else 0.0
+            wall_now = laps_done[0] != hit_lap and u >= SCRIPT["wall"] and speed[0] > 10
+            if wall_now:
+                hit_lap = laps_done[0]
+                knock = 0.15
+                speed[0] *= 0.85
             v = speed[0]
             acc = (v - prev_v) / dt
             prev_v = v
@@ -188,8 +209,26 @@ def main():
             put("mBrake", "f", brk)
             put("mSteering", "f", max(-1.0, min(1.0, c * 40)))
             put("mFuelLevel", "f", 0.8 - 0.0001 * t)
-            put("mLocalVelocity", "3f", 1.5 * c * v, 0.0, -v)
-            put("mLocalAcceleration", "3f", v * v * c, 0.0, -acc)
+            push = 3.0 * knock / 0.15 if knock > 0 else 0.0   # m/s to the right, fading
+            knock = max(0.0, knock - dt)
+            put("mLocalVelocity", "3f", 1.5 * c * v - push, 0.0, -v)
+            if wall_now:  # one sample of the hit: 15 g to the right, and the speed lost; local x points left
+                put("mLocalAcceleration", "3f", -15 * G, 0.0, 0.0)
+            else:
+                # as a car could: the grip caps the cornering (the made-up track's hairpins would give 10 g at the
+                # fake's speeds), and the forward/backward part is the ramped acceleration, not the speed's jumps
+                put("mLocalAcceleration", "3f", max(-1.8 * G, min(1.8 * G, v * v * c)), 0.0, -accel[0])
+            # ABS: working while the brake is hard on (the stops into the slow bends)
+            put("mAntiLockActive", "?", brk > 0.8)
+            # suspension: a little road texture all the time, the kerb shakes the left wheels
+            on_kerb = SCRIPT["kerb"][0] <= u < SCRIPT["kerb"][1]
+            sv = [random.uniform(-0.03, 0.03) for _ in range(4)]
+            if on_kerb:
+                bump = 0.35 * math.sin(2 * math.pi * 12 * t)
+                sv[0], sv[2] = bump, -bump
+            put("mSuspensionVelocity", "4f", *sv)
+            if not args.edges:
+                put("mTerrain", "4I", KERB if on_kerb else 0, 0, KERB if on_kerb else 0, 0)
             put("mAngularVelocity", "3f", 0.0, v * c, 0.0)
             put("mTyreRPS", "4f", *rps)
             put("mTyreTreadTemp", "4f", 360.0, 361.0, 358.0, 359.0)

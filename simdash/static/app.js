@@ -1824,9 +1824,10 @@ const FX_DEFAULTS = {
   Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
   OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
   Impact: { wheels: ["FL", "FR", "RL", "RR"], threshold: 3, full: 12, duration: 0.4, modulation: "amplify", frequency: 28, amplitude: 50, amplitudeMax: 100, noise: 10 },
-  GForce: { wheels: ["FL", "FR", "RL", "RR"], threshold: 1.0, full: 2.0, modulation: "amplify", frequency: 24, amplitude: 20, amplitudeMax: 60, noise: 4 },
+  // GForce and Speed start silent (volume 0): they play much of the lap and can mask the slip, lock and kerb cues
+  GForce: { volume: 0, wheels: ["FL", "FR", "RL", "RR"], threshold: 1.0, full: 2.0, modulation: "amplify", frequency: 24, amplitude: 20, amplitudeMax: 60, noise: 4 },
   RevLimiter: { wheels: [], threshold: 0.97, modulation: "amplify", frequency: 50, amplitude: 40, amplitudeMax: 90, noise: 0 },
-  Speed: { wheels: [], threshold: 100, full: 250, modulation: "amplify", frequency: 18, amplitude: 10, amplitudeMax: 40, noise: 10 },
+  Speed: { volume: 0, wheels: [], threshold: 100, full: 250, modulation: "amplify", frequency: 18, amplitude: 10, amplitudeMax: 40, noise: 10 },
   // a pitch no other effect uses, weak at the first hint and strong when the rear is really going
   Oversteer: { wheels: ["RL", "RR"], threshold: 5, full: 10, modulation: "amplify", frequency: 55, amplitude: 35, amplitudeMax: 100, noise: 0 },
 };
@@ -1839,9 +1840,9 @@ const FX_HINT = {
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
   Suspension: "Bumps, kerbs and landings, from how fast these wheels' suspension moves (AMS2's suspension velocity, read by simdash; monocoque never got it). Cornering and braking move it slowly: on your laps 99 % of the time on track stays under 0.11 m/s, kerbs reach 0.2 to 0.4, landings and off-track 0.4 to 1. Starts at the first speed, full at the second; each hit fades over 60 ms. One effect per corner shaker, on its own wheel, places the bump. Played by simdash; with the haptics engine it applies at once.",
   Impact: "Walls, barriers, other cars: a sudden jump of the car's sideways or forward/backward acceleration away from what it was a moment before, in g (steady cornering or braking never counts, even 5-6 g in a formula car). On your laps driving moves it about 1 g; hits gave 6 to 20 g. Starts at the first value, full at the second. Each knock lasts the third value: held at full for its first 30 %, then fading out (0.4 s: about 11 vibrations at 28 Hz). The car is pushed away from what it hits, so the wheels pick the side: FL plays for an obstacle at the front left, both fronts for a frontal hit, all four for any hit (the seat shaker). Landings are left to Suspension. Played by simdash.",
-  GForce: "The weight of the car in the corners and under braking: the car's sustained acceleration (averaged over a quarter second, so bumps and knocks do not count), in g, starting at the first value and full at the second. The wheels pick where the weight goes: braking loads the fronts, accelerating the rears, a left corner the right-hand wheels; all four play in any direction. On your laps GT3 cars hold 1.6-1.7 g in most corners and up to 2 g under braking, road cars and the kart 1-1.5 g. Keep it soft and low so it sits under the other effects. Played by simdash.",
+  GForce: "Starts silent: raise its volume, and keep it soft (it plays a quarter of a GT3 lap and can mask slip, lock-up and kerbs). The weight of the car in the corners and under braking: the car's sustained acceleration (averaged over a quarter second, so bumps and knocks do not count), in g, starting at the first value and full at the second. The wheels pick where the weight goes: braking loads the fronts, accelerating the rears, a left corner the right-hand wheels; all four play in any direction. On your laps GT3 cars hold 1.6-1.7 g in most corners and up to 2 g under braking, road cars and the kart 1-1.5 g; formula cars 5-6 g, so raise Full at for them (or keep one setting per car type in a haptics preset). Played by simdash.",
   RevLimiter: "A shift cue: plays as the RPM passes the given fraction of the car's max, full at the max. On your laps the engine is above 97 % of max for 2-5 % of the driving. A pitch of its own (50 Hz) tells it apart from the Engine effect. Played by simdash.",
-  Speed: "A low rumble growing with speed, from the first speed (km/h) to full at the second, like the road and wind at speed. Keep it weak: it plays most of the lap. Played by simdash.",
+  Speed: "Starts silent: raise its volume, and keep it weak (it plays most of the lap). A low rumble growing with speed, from the first speed (km/h) to full at the second, like the road and wind at speed. Keep it weak: it plays most of the lap. Played by simdash.",
   Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
   OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
   Oversteer: "RL plays while the rear slides to the left, RR to the right: one Oversteer effect on each rear shaker tells you which way the car is going; both on one shaker plays either way. Played by simdash (not monocoque) as the rear steps out: from the rear tyres' slip angle (how far the rear axle slides sideways), starting at the first angle and full at the second. Grip is a few degrees; on your laps 5° comes 2 to 4 times a minute, about as often as you countersteer, so it warns just before. Lower it for an earlier hint, raise it if it plays in every corner. A shaker on the seat or seat back feels most like the rear going. Applies a few seconds after saving.",
@@ -1993,6 +1994,22 @@ function fxField(e, i, key, label, min, max, step, unit = "") {
     <input type="number" min="${min}" max="${max}" step="${step}" value="${v}" data-k="${key}" data-i="${i}"></span></label>`;
 }
 
+// two sines a few Hz apart on one shaker beat: their sum swells and fades at the difference, which feels like a
+// pulse that is not in the game. Only fixed pitches are compared (a swept one passes another's only for a moment),
+// and not the short hits (knocks, gear kicks, bumps) nor effects that cannot play together
+const BEAT_HZ = 5;
+const SHORT_FX = new Set(["Impact", "Gear", "Suspension"]);
+const EXCLUSIVE_FX = [new Set(["TyreSlip", "TyreLock"]), new Set(["Kerb", "OffTrack"])];
+const together = (a, b) => a !== b && !EXCLUSIVE_FX.some((g) => g.has(a) && g.has(b));
+function beatNote(i) {
+  const e = sh.effects[i], f = +e.frequency || 0;
+  if (!f || e.modulation === "frequency" || SHORT_FX.has(e.effect)) return "";
+  const close = sh.effects.filter((x, k) => k !== i && x.pan === e.pan && together(e.effect, x.effect)
+    && x.modulation !== "frequency" && !SHORT_FX.has(x.effect) && Math.abs((+x.frequency || 0) - f) < BEAT_HZ)
+    .map((x) => FX_NAME[x.effect] || x.effect);
+  return close.length ? `<b class="warn">Within ${BEAT_HZ} Hz of ${esc([...new Set(close)].join(", "))} on this shaker: when both play they beat (a pulse at the difference). Move one at least ${BEAT_HZ} Hz away. </b>` : "";
+}
+
 function renderEffects() {
   const o = sh.opts;
   if (!sh.effects.length) {
@@ -2048,7 +2065,7 @@ function renderEffects() {
         <button class="del" data-act="del" data-i="${i}" title="Remove this effect">Remove</button>
       </div>
       <div class="fx-fields">${f}</div>
-      <div class="fx-hint">${wheel && !OWN_FX.has(e.effect) ? wheelNote(e) : !e.wheels?.length && wheel ? '<b class="warn">Pick at least one wheel. </b>' : ""}${FX_HINT[e.effect] || ""}</div></div>`;
+      <div class="fx-hint">${beatNote(i)}${wheel && !OWN_FX.has(e.effect) ? wheelNote(e) : !e.wheels?.length && wheel ? '<b class="warn">Pick at least one wheel. </b>' : ""}${FX_HINT[e.effect] || ""}</div></div>`;
   }).join("");
 
   const box = $("#sh-effects");
@@ -2162,6 +2179,7 @@ function markShakersDirty(rerender) {
     renderWheels();
   }
   renderShakerState();
+  if (!document.activeElement?.closest?.("#so-card")) renderShaping();  // the Continuous column follows the effects
 }
 
 // tyres on the car: the hovered effect's wheels, else the active effect's (clickable)
@@ -2258,11 +2276,33 @@ function renderShaping() {
   const chs = Object.keys(layout).map(Number).sort((a, b) => a - b);
   $("#so-channels tbody").innerHTML = chs.map((ch) => {
     const l = layout[ch], g = s.gains[ch] ?? 100;
+    const cont = continuousPeak(ch);
     return `<tr data-ch="${ch}"><td>${ch} · ${esc(l.label || SPOT_NAME[l.spot] || "")}</td>
       <td><span class="row"><input type="range" min="0" max="150" step="1" value="${g}" data-gain="${ch}">
         <input type="number" min="0" max="150" step="1" value="${g}" data-gain="${ch}" style="width:64px"> %</span></td>
+      <td class="num" title="Engine, slip, surfaces, G-force... at their strongest together (knocks and gear kicks not counted)" style="color:${cont > 50 ? "var(--critical)" : "inherit"}">${cont} %</td>
       <td class="so-red num muted">–</td></tr>`;
-  }).join("") || `<tr><td colspan="3" class="muted">Place the shakers above first</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="muted">Place the shakers above first</td></tr>`;
+}
+// the continuous effects of a shaker at their strongest together, in % of full scale (as the engine plays them:
+// strength x the cube of the volume). The short hits (knocks, gear kicks, bumps) are left out, they need the room on
+// top; of effects that cannot play together (wheelspin / lock-up, kerb / off track) only the louder counts
+function continuousPeak(ch) {
+  const by = {};
+  for (const e of sh.effects || []) {
+    if (e.pan !== ch || SHORT_FX.has(e.effect)) continue;
+    const a = e.modulation === "amplify" ? (+e.amplitudeMax || +e.amplitude || 0) : (+e.amplitude || 0);
+    by[e.effect] = Math.max(by[e.effect] || 0, a / 100 * Math.pow((e.volume ?? 100) / 100, 3));
+  }
+  let sum = 0;
+  const done = new Set();
+  for (const g of EXCLUSIVE_FX) {
+    const m = [...g].filter((x) => x in by).map((x) => by[x]);
+    if (m.length) sum += Math.max(...m);
+    g.forEach((x) => done.add(x));
+  }
+  for (const [k, v] of Object.entries(by)) if (!done.has(k)) sum += v;
+  return Math.round(sum * 100);
 }
 function shapingPatch() {
   const p = { gains: { ...so.s.gains } };
@@ -4025,52 +4065,12 @@ function engineRun(sm, title) {
     ["Telemetry", `${sm.telemetry_hz} Hz, lowest ${sm.telemetry_hz_min} Hz`],
     ["Latency", lat],
     ["Synthesis", `${sm.synth_ms} ms per block, max ${sm.synth_max_ms} ms`],
-    ["Dropouts", sm.late_blocks ? `<span class="bad">${sm.late_blocks}</span>` : "none"],
+    ["Dropouts", sm.xruns ? `<span class="bad">${sm.xruns}</span> (PipeWire xruns)` : sm.xruns === 0 ? "none (PipeWire xruns)" : "–"],
+    ["Late writes", sm.late_blocks ? `${sm.late_blocks}` : "none"],
     sm.gap_max_ms != null && ["Longest wait", `${sm.gap_max_ms} ms between writes`],
     sm.priority && ["Priority", esc(sm.priority)],
   ]) + "</dl>";
 }
-function renderEngineLatency(en, es) {
-  const sel = $("#eng-buffer"), cur = (en.settings || {}).buffer_ms;
-  if (sel.dataset.v !== String(cur) && document.activeElement !== sel) {
-    sel.innerHTML = (en.buffers || []).map((b) => `<option value="${b}" ${b === cur ? "selected" : ""}>${b} ms${b === 30 ? " (default)" : ""}</option>`).join("");
-    sel.dataset.v = String(cur);
-  }
-  const t = en.test, running = !!(es && es.latency_test);
-  $("#eng-test").hidden = running;
-  $("#eng-test").disabled = !es;
-  $("#eng-test").title = es ? "Start, then drive: one minute per buffer" : "The engine runs during an AMS2 session";
-  $("#eng-test-cancel").hidden = !running;
-  let html = "";
-  if (running) {
-    const lt = es.latency_test;
-    html += `<p>Testing <b>${lt.buffer_ms} ms</b> (${lt.i + 1} of ${lt.of}): ${lt.playing_s} of ${lt.seconds} s driven${es.state !== "playing" ? ' · <span class="muted">waiting for you to drive</span>' : ""}</p>`;
-  }
-  if (t && t.results && t.results.length) {
-    const clean = t.results.filter((r) => !r.dropouts).map((r) => r.buffer_ms);
-    const best = clean.length ? Math.min(...clean) : null;
-    html += `<table class="eng-test"><thead><tr><th>Buffer</th><th>Latency</th><th>Max</th><th>Dropouts</th><th>Longest wait</th><th></th></tr></thead><tbody>`
-      + t.results.map((r) => `<tr${r.buffer_ms === best ? ' class="best"' : ""}><td>${r.buffer_ms} ms</td><td>${r.latency_ms ?? "–"} ms</td><td>${r.latency_max_ms ?? "–"} ms</td>
-        <td>${r.dropouts ? `<span class="bad">${r.dropouts}</span>` : "0"}</td><td>${r.gap_max_ms} ms</td>
-        <td>${r.buffer_ms === cur ? '<span class="muted">in use</span>' : `<button data-buffer="${r.buffer_ms}">Use</button>`}</td></tr>`).join("")
-      + `</tbody></table><div class="sys-note">${t.done ? (t.cancelled ? "Cancelled" : "Finished") : "So far"}, started ${new Date(t.started * 1000).toLocaleTimeString()}${best != null && t.done ? ` · shortest without dropouts: <b>${best} ms</b>` : ""}</div>`;
-  }
-  $("#eng-test-out").innerHTML = html;
-}
-async function setEngineBuffer(b) {
-  await fetch("/api/engine/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ buffer_ms: +b }) });
-  $("#eng-buffer").dataset.v = "";
-  loadSystem?.();
-}
-$("#eng-buffer").onchange = (e) => setEngineBuffer(e.target.value);
-$("#eng-test-out").addEventListener("click", (e) => { if (e.target.dataset.buffer) setEngineBuffer(e.target.dataset.buffer); });
-async function engineTest(action) {
-  const r = await fetch("/api/engine/latency-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
-  if (!r.ok) alert((await r.json()).detail || "Failed");
-  loadSystem?.();
-}
-$("#eng-test").onclick = () => engineTest("start");
-$("#eng-test-cancel").onclick = () => engineTest("cancel");
 const fmtSecs = (s) => s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
 
 function dl(rows) {
@@ -4106,13 +4106,14 @@ function renderSystem() {
     ["Process", en.pid ? `pid ${en.pid}, up ${fmtAge(en.since, d.now)}` : "–"],
     es && ["Telemetry", `${es.telemetry_hz} Hz read (blocks of ${es.block_ms} ms, ${es.blocks_hz}/s)`],
     es && ["Synthesis", es.synth_ms == null ? "idle" : `${es.synth_ms} ms per block, max ${es.synth_max_ms} ms`],
-    es && ["Latency", es.latency_ms == null ? "card closed (silent)" : `${es.latency_ms} ms to the card (buffer ${es.buffer_ms ?? 30} ms)`],
-    es && ["Dropouts", es.late_blocks ? `<span class="bad">${es.late_blocks} in the last second</span>` : "none"],
+    es && ["Latency", es.latency_ms == null ? "card closed (silent)" : `${es.latency_ms} ms to the card (buffer ${es.buffer_ms ?? 20} ms)`],
+    es && es.quantum && ["PipeWire", `quantum ${es.quantum} on the card`],
+    es && ["Dropouts", es.xruns ? `<span class="bad">${es.xruns} in the last second</span>` : "none"],
+    es && ["Late writes", es.late_blocks ? `${es.late_blocks} in the last second` : "none"],
     es && ["Effects", `${es.effects}`],
     !es && ["Last log", `<span class="muted">${esc((en.log || []).slice(-1)[0] || "–")}</span>`],
   ]) + "</dl>" + engineRun(es ? es.run : en.last && en.last.summary, es ? "This run, while playing" :
     en.last ? `Last run, ended ${new Date(en.last.ended * 1000).toLocaleTimeString()}` : "");
-  renderEngineLatency(en, es);
   $("#sys-ams2-state").textContent = st.ams2[1];
   $("#sys-simd-state").textContent = st.simd[1];
   $("#sys-mono-state").textContent = st.monocoque[1];

@@ -366,6 +366,7 @@ class Driver:
         self.settings = None
         self.fx = Effects()
         self.state = {"source": "idle", "playing": [], "error": None}
+        self.on_start = None   # called in the thread as it starts (the haptics engine makes it real-time)
 
     def feed(self, snap, slips):
         susp = (snap.get("raw") or {}).get("mSuspensionTravel")
@@ -456,6 +457,8 @@ class Driver:
             pass
 
     def _run(self):
+        if self.on_start:
+            self.on_start("pedals")
         sent = {}              # (pedal, effect) -> (time sent, wanted tuple)
         quiet_since, retry_at, err = None, 0.0, None
         while True:

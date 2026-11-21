@@ -199,8 +199,7 @@ def status(rec_live=None):
     from . import engine
     out["engine"] = {"running": bool(eng), "pid": eng[0] if eng else None, "since": _started(eng[0]) if eng else None,
                      "log": _tail(LOGS["haptics"], 8), "status": engine.read_status(),
-                     "last": engine.read_last(), "settings": engine.load_settings(), "buffers": engine.BUFFERS_MS,
-                     "test": engine.read_test()}
+                     "last": engine.read_last()}
     out["launch"] = get_launch()
     from . import presets
     out["haptic_preset"] = presets.active()

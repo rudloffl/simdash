@@ -123,13 +123,16 @@ the same lap.
 
 The engine (`simdash/engine.py`, launched as `~/.local/bin/simdash-haptics`) is a process of its own,
 so the recorder, the database and the web pages never hold it up. Every 10 ms it reads AMS2's shared
-memory directly (no simd in between), works out each effect with the formulas the replay uses, and
-writes 10 ms of 8-channel sound to the shaker card through libpulse-simple with about 30 ms buffered:
-roughly 40-50 ms from the game to the seat. Its writes wait on the card, so the card's clock sets the
-pace and nothing drifts. Saved settings and haptics presets apply at once, without a restart.
+memory directly (no simd in between), works out each effect with the formulas of `simdash/effects.py`
+(the ones the replay and the session views use too), and writes 10 ms of 8-channel sound to the shaker card
+through libpulse-simple. Its writes wait on the card, so the card's clock sets the pace and nothing drifts.
+Saved settings and haptics presets apply at once, without a restart.
 
-The System tab's *simdash haptics engine* card shows what it measures each second: telemetry updates
-read, synthesis time per block, latency to the card and dropouts (blocks that came too late).
+It runs at real-time priority (RTKit, SCHED_RR 10), and so do its other threads (pedals, file writer,
+PipeWire monitor: SCHED_RR 9), since they share Python's interpreter lock with the audio loop. Python's
+garbage collector is off while it plays (everything made at startup is frozen; collections run only while
+idle), and its status file is written from a thread of its own into `/run/user/<uid>` (memory), so the loop
+never waits on the disk.
 
 The engine also drives the Moza pedal haptics (same settings as the [Pedal haptics](pedal-haptics.md)
 section), fed from the same 100 Hz samples instead of the recorder's 20 Hz; the recorder leaves the
@@ -140,87 +143,105 @@ card the page plays to: simdash renders the sound and sends it on a second socke
 (`~/.local/state/simdash-haptics.sock`; `simdash/link.py`), the engine mixes it with the live effects, and
 the pedal commands go to the engine's pedal connection. So there is one stream on the card and one
 connection to the pedals, and a replay can play while AMS2 runs (the game's own effects win on the pedals).
-Through the engine the replay is felt about 0.19 s after it is generated (the cursor and the pedals allow
+Through the engine the replay is felt about 0.17 s after it is generated (the cursor and the pedals allow
 for it). Without the engine, or for another card, they play on their own `pacat` stream as before.
+
+### Latency, late writes and dropouts
+
+The System tab's *simdash haptics engine* card shows each second: telemetry updates read, synthesis time per
+block, the **latency** to the card (PipeWire's estimate), PipeWire's **quantum** on the card, **late writes**
+and **dropouts**.
+
+- The latency is set by the request size the stream announces to PipeWire (2.5 ms), not by its buffer (20 ms):
+  pipewire-pulse sizes its own queue from it. Measured on the shaker card: about 28 ms from the engine to the
+  card, against ~46 ms when it announced 10 ms. Forcing PipeWire's quantum lower gains little (see the
+  [notes](haptics-notes.md)): the rest is the USB card. The game sample adds up to 10 ms (5 on average); the
+  card's own delay to the amplifier is not counted.
+- A **late write** is the engine writing later than its buffer. Not necessarily heard; the log says where the
+  time went (reading the game, synthesis, the status, the card latency query, settings, feedback, or waiting
+  for the CPU).
+- A **dropout** is the card really running dry: PipeWire's xrun count for the card (`pw-top`, every 5 s).
 
 ### What was felt
 
 The engine tells simdash what it plays, once per 10 ms block, over a local socket
 (`~/.local/state/simdash-felt.sock`; `simdash/felt.py`): every effect playing on each shaker channel and
-each pedal effect, with its strength (the Live car shows each shaker's strongest). simdash shows it on the Live car (shakers and pedals) and records it
-with the session (`felt` table: the strongest of each since the previous 20 Hz sample, so a 10 ms knock
-is kept). The session's race replay then shows what was really played, with that day's settings and the
-fades, rather than a recomputation; sessions played by monocoque are still recomputed as below.
-
-### Latency: buffer and latency test
-
-The engine keeps a short **buffer** of sound queued ahead of the card (30 ms by default; 15 to 40 on the
-System tab's engine card, `engine.json`). Shorter is felt sooner; but if the computer keeps the engine waiting
-longer than the buffer, the card runs dry for a moment (a dropout). Not under 15 ms: the engine writes 10 ms
-blocks. **Latency test** (System tab, while the engine runs) plays 30, 20 then 15 ms for one minute of driving
-each, and shows for each the latency measured to the card, the dropouts and the longest wait between writes;
-**Use** keeps one. The game-to-engine step adds up to 10 ms more (5 on average), and the card's own delay to the
-amplifier is not measured. Each dropout in the log now says where the time went (reading the game, synthesis,
-the status file, asking the card for its latency, settings, feedback, or waiting for the CPU).
-
-First test (2026-11-20, BMW M4 GT3 at Laguna Seca): 30 ms 49.1 ms latency and 4 dropouts in a minute, 20 ms
-50.6 ms and 1, 15 ms 49.7 ms and 0. The buffer does not change the latency: about 50 ms is set further down
-(PipeWire's cycle and the USB card). The dropouts (about 31 ms) were the status file: replacing a file on
-ext4 can wait for a disk flush. The engine now writes its files from a thread of its own, and its status in
-`/run/user/<uid>` (memory).
+each pedal effect, with its strength (the Live car shows each shaker's strongest). simdash shows it on the
+Live car (shakers and pedals) and records it with the session (`felt` table: the strongest of each since the
+previous 20 Hz sample, so a 10 ms knock is kept). The session's race replay then shows what was really
+played, with that day's settings and the fades, rather than a recomputation; sessions played by monocoque
+are still recomputed as below.
 
 ### Output: limiter, ducking, volumes
 
-The engine adds up every effect on a shaker, and the sum can go past what the card can play: on a race of
-2026-11-20 the seat (Engine + Gear + Impact...) peaked at 2.5 times full scale and was clipped 1.4 % of the
-time, the corners 0.15 %. A clipped sine turns into a harsh buzz and hides a knock under the rest. The
-**Output** card on the Haptics tab (`shaping.json`, applied at once):
+The engine adds up every effect on a shaker, and the sum can go past what the card can play; a clipped sine
+turns into a harsh buzz and hides a knock under the rest. The **Output** card on the Haptics tab
+(`shaping.json`, applied at once):
 
 - **Limiter** (on by default): a shaker whose sum would pass the **Ceiling** (95 %) is turned down smoothly
-  for that 10 ms block instead, and comes back over **Release** (150 ms). The table shows, live, how far each
-  shaker is turned down: often lit means its effects add up to too much (lower the loudest one).
+  (over the first 1.5 ms of that 10 ms block), and comes back over **Release** (150 ms). The table shows, live,
+  how far each shaker is turned down: often lit means its effects add up to too much (lower the loudest one).
 - **Ducking** (50 %): the continuous effects (Engine, slip, surfaces...) drop by this much on a shaker while a
   knock (Impact) or gear kick plays on it, then come back over 100 ms, so the knock stands out.
 - **Volume** per shaker and **Master**, after the effects' own volumes.
+- **Continuous**: what a shaker's always-on effects reach together at their strongest (bumps, knocks and gear
+  kicks not counted; of wheelspin and lock-up, or kerb and off track, only the louder). Keep it under about
+  50 % so the hits have room on top; above, it shows red.
 
-On that race this left no clipped sample; the limiter worked 16 % of the time on the seat (up to -54 %) and
-2-6 % on the corners. It costs nothing measurable (0.45 ms per 10 ms block, as before). Replays and tests
-played without the engine (own `pacat` stream) do not get it.
+The Effects list also warns when two fixed-pitch effects on one shaker, which can play together, are within
+5 Hz of each other: their sum swells and fades at the difference (beating), a pulse that is not in the game.
+
+Replays and tests played without the engine (own `pacat` stream) get none of this.
 
 ## G-force, Rev limiter, Speed (played by simdash)
 
-SimHub-style effects, played by simdash (engine, Live, replay):
+SimHub-style effects, played by simdash (engine, Live, replay). G-force and Speed start silent (volume 0)
+when added: they play much of the lap and can mask the slip, lock-up and kerb cues, so raise them gently.
 
 - **G-force (load)**: the car's sustained horizontal acceleration (the 0.25 s average Impact compares with, so
   bumps and knocks do not count), from *Starts at* (1 g) to *Full at* (2 g), on the wheels the weight shifts
   onto: braking loads the fronts, accelerating the rears, a left corner the right-hand side; all four wheels play
-  in any direction. Recorded 2026-11-20: GT3 cars hold 1.6-1.7 g in most corners (p90) and up to 2 g; road cars
-  and the kart 1-1.5 g. On a BMW M4 GT3 race at Interlagos the default plays 25 % of the time.
-- **Rev limiter**: a shift cue from *Starts at* (97 % of the car's max RPM) to full at the max. The engine is
-  above 97 % for 2-5 % of the driving on the recorded laps.
+  in any direction. 2 g suits GT and road cars; formula cars hold 5-6 g, so raise *Full at* for them (or keep
+  one setting per car type in a haptics preset). Above 6 g it is a crash, left to Impact.
+- **Rev limiter**: a shift cue from *Starts at* (97 % of the car's max RPM) to full at the max.
 - **Speed**: a low rumble from 100 km/h, full at 250.
 
-Traction control was left out: AMS2's TC flag (`mCarFlags` 0x40) is set during half the on-throttle driving,
-on the kart too, which has no TC, so it does not say when TC cuts in.
+Traction control has no effect: AMS2's TC flag (`mCarFlags` 0x40) is set during much of the on-throttle
+driving, on cars without TC too, so it does not say when TC cuts in.
 
 ## Suspension (bumps)
 
 Played by simdash (monocoque never got AMS2's suspension through simapi): how fast the chosen wheels'
 suspension moves, AMS2's `mSuspensionVelocity`, in m/s up or down. Cornering and braking move it
-slowly (on track 99 % of samples stay under 0.11 m/s); kerbs reach 0.2-0.4 m/s, landings and off-track
-0.4-1. The effect starts at *Starts at* (default 0.08 m/s) and is full at *Full at* (0.4 m/s). With the
-haptics engine the suspension is read every 10 ms and each hit fades over 60 ms, so a single sharp bump
-is felt; one effect per corner shaker, each on its own wheel, places the bump where it happens. On a
-recorded Interlagos session (McLaren GT3) it played 2-6 % of the time on track and about 30 % on kerbs.
+slowly; kerbs, landings and off-track move it fast. The effect starts at *Starts at* (default 0.08 m/s) and
+is full at *Full at* (0.4 m/s). With the haptics engine the suspension is read every 10 ms and each hit
+fades over 60 ms, so a single sharp bump is felt; one effect per corner shaker, each on its own wheel, places
+the bump where it happens.
 
 ## Impact (obstacles)
 
 Played by simdash: walls, barriers and other cars, from a sudden jump of the car's horizontal acceleration
 (AMS2 `mLocalAcceleration`, sideways and forward/backward) away from its level over the last quarter second.
-Steady cornering and braking never count, even the 5-6 g of a formula car; on recorded laps (2026-11-20)
-driving moves it about 1 g from one sample to the next, while hits gave 6 to 20 g, and a crash at 190 km/h
-over 50 g. A reading over 60 g counts only when the car's velocity changed with it: AMS2 sometimes reports
-absurd values (401 g for one sample, 329 g for a second) with the speed unchanged, and those are ignored. *Starts at* 3 g, *Full at* 12 g. Each knock *Lasts* 0.4 s by default (0.1-1.5): held at full for the first 30 %, then fading out, so even a 10 ms spike gives about 11 vibrations at 28 Hz (it used to fade over 150 ms, too short to feel well). The replay plays it the same way. The car is pushed away
-from what it hits, so the wheels pick the side the obstacle is on: an effect on FL plays for a front-left
-hit, all four wheels play for any hit (the seat shaker). The signs were checked on recorded laps: the
-acceleration reads left and backward positive (cornering left, braking), as the code assumes. Vertical jolts (landings) are left to Suspension.
+Steady cornering and braking never count, even the 5-6 g of a formula car. *Starts at* 3 g, *Full at* 12 g.
+A reading over 60 g counts only when the car's velocity changed with it: AMS2 sometimes reports absurd values
+with the speed unchanged, and those are ignored. Each knock *Lasts* 0.4 s by default (0.1-1.5): held at full
+for the first 30 %, then fading out, so even a 10 ms spike gives about 11 vibrations at 28 Hz. The replay plays
+it the same way. The car is pushed away from what it hits, so the wheels pick the side the obstacle is on: an
+effect on FL plays for a front-left hit, all four wheels play for any hit (the seat shaker). AMS2's
+acceleration reads left and backward positive (x left, z backward), as the code assumes. Vertical jolts
+(landings) are left to Suspension.
+
+## Tests
+
+`pip install -r requirements-dev.txt`, then `python -m pytest tests` runs the unit tests of the effect formulas
+(`effects.py`) and the engine's output shaping. `python -m simdash.fake_ams2` (with `SIMDASH_SHM` pointing at a
+file of your own) plays a made-up race whose player car, every lap, corners at up to 1.8 g, rides a kerb on its
+left wheels, stops hard with ABS and hits a wall on its left.
+
+## Plan: the engine's own effect list
+
+The engine still reads monocoque's effects (Engine, Gear, TyreSlip, TyreLock, ABS) from
+`~/.config/monocoque/monocoque.config`, as monocoque does, and simdash's own from `effects.json`. Once monocoque
+is dropped, all effects move into simdash's file: one list, no libconfig writer, no splitting of wheel
+effects into one stream per tyre, and per-effect settings monocoque cannot read (thresholds in physical
+units, durations) for every effect. Until then the two files stay, so switching back to monocoque keeps working.
