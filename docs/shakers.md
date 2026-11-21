@@ -163,6 +163,12 @@ each, and shows for each the latency measured to the card, the dropouts and the 
 amplifier is not measured. Each dropout in the log now says where the time went (reading the game, synthesis,
 the status file, asking the card for its latency, settings, feedback, or waiting for the CPU).
 
+First test (2026-11-20, BMW M4 GT3 at Laguna Seca): 30 ms 49.1 ms latency and 4 dropouts in a minute, 20 ms
+50.6 ms and 1, 15 ms 49.7 ms and 0. The buffer does not change the latency: about 50 ms is set further down
+(PipeWire's cycle and the USB card). The dropouts (about 31 ms) were the status file: replacing a file on
+ext4 can wait for a disk flush. The engine now writes its files from a thread of its own, and its status in
+`/run/user/<uid>` (memory).
+
 ### Output: limiter, ducking, volumes
 
 The engine adds up every effect on a shaker, and the sum can go past what the card can play: on a race of

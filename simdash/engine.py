@@ -49,7 +49,10 @@ STALE = 0.25            # s without a new sample from the game before going sile
 IDLE = 10.0             # s of silence before letting the card go
 RELOAD = 1.0            # s between looks at the settings files
 STATE = Path.home() / ".local/state"
-STATUS = STATE / "simdash-haptics.json"
+# in memory (tmpfs), so writing it never waits on the disk: on ext4, replacing a file can wait for a flush (31 ms
+# seen, a dropout each time)
+RUN_DIR = Path(f"/run/user/{os.getuid()}") if Path(f"/run/user/{os.getuid()}").is_dir() else STATE
+STATUS = RUN_DIR / "simdash-haptics.json"
 LAST = STATE / "simdash-haptics-last.json"  # the summary of the last run, kept after the engine stops
 RT_PRIORITY = 10        # SCHED_RR priority asked of RTKit: below PipeWire's own threads (20), above everything else
 LOG_EVERY = 30.0
@@ -438,10 +441,8 @@ class Engine:
         d["current"] = None if t["done"] else {"buffer_ms": t["buffers"][t["i"]], "playing_s": round(t["cur"]["playing_s"]),
                                                "dropouts": t["cur"]["dropouts"]}
         try:
-            tmp = TEST_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(d))
-            tmp.replace(TEST_FILE)
-        except OSError:
+            _writer.put(TEST_FILE, json.dumps(d))
+        except (TypeError, ValueError):
             pass
 
     def command(self, d):
@@ -739,13 +740,52 @@ def read_test():
         return None
 
 
+class _Writer:
+    """Writes files from a thread of its own (normal priority), so the real-time loop never waits on a file
+    system: put() only hands over the text; a newer text for the same file replaces one not yet written."""
+
+    def __init__(self):
+        self.lock = threading.Condition()
+        self.todo = {}
+        self.thread = None
+
+    def put(self, path, text):
+        with self.lock:
+            self.todo[path] = text
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._run, daemon=True, name="writer")
+                self.thread.start()
+            self.lock.notify()
+
+    def _run(self):
+        while True:
+            with self.lock:
+                while not self.todo:
+                    self.lock.wait()
+                todo, self.todo = self.todo, {}
+            for path, text in todo.items():
+                try:
+                    tmp = path.with_suffix(".tmp")
+                    tmp.write_text(text)
+                    tmp.replace(path)
+                except OSError:
+                    pass
+
+    def flush(self, timeout=2.0):
+        """At exit: wait for what is queued."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            with self.lock:
+                if not self.todo:
+                    return
+            time.sleep(0.02)
+
+
+_writer = _Writer()
+
+
 def _write_status(d):
-    try:
-        tmp = STATUS.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d))
-        tmp.replace(STATUS)
-    except OSError:
-        pass
+    _writer.put(STATUS, json.dumps(d))
 
 
 def read_last():
@@ -793,6 +833,7 @@ def main():
         inbox.close()
         if eng.out is not None:
             eng.out.close()
+        _writer.flush()  # the latency test's last results; then no status is left behind
         try:
             STATUS.unlink()
         except OSError:
