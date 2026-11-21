@@ -152,6 +152,17 @@ with the session (`felt` table: the strongest of each since the previous 20 Hz s
 is kept). The session's race replay then shows what was really played, with that day's settings and the
 fades, rather than a recomputation; sessions played by monocoque are still recomputed as below.
 
+### Latency: buffer and latency test
+
+The engine keeps a short **buffer** of sound queued ahead of the card (30 ms by default; 15 to 40 on the
+System tab's engine card, `engine.json`). Shorter is felt sooner; but if the computer keeps the engine waiting
+longer than the buffer, the card runs dry for a moment (a dropout). Not under 15 ms: the engine writes 10 ms
+blocks. **Latency test** (System tab, while the engine runs) plays 30, 20 then 15 ms for one minute of driving
+each, and shows for each the latency measured to the card, the dropouts and the longest wait between writes;
+**Use** keeps one. The game-to-engine step adds up to 10 ms more (5 on average), and the card's own delay to the
+amplifier is not measured. Each dropout in the log now says where the time went (reading the game, synthesis,
+the status file, asking the card for its latency, settings, feedback, or waiting for the CPU).
+
 ### Output: limiter, ducking, volumes
 
 The engine adds up every effect on a shaker, and the sum can go past what the card can play: on a race of
@@ -169,6 +180,22 @@ time, the corners 0.15 %. A clipped sine turns into a harsh buzz and hides a kno
 On that race this left no clipped sample; the limiter worked 16 % of the time on the seat (up to -54 %) and
 2-6 % on the corners. It costs nothing measurable (0.45 ms per 10 ms block, as before). Replays and tests
 played without the engine (own `pacat` stream) do not get it.
+
+## G-force, Rev limiter, Speed (played by simdash)
+
+SimHub-style effects, played by simdash (engine, Live, replay):
+
+- **G-force (load)**: the car's sustained horizontal acceleration (the 0.25 s average Impact compares with, so
+  bumps and knocks do not count), from *Starts at* (1 g) to *Full at* (2 g), on the wheels the weight shifts
+  onto: braking loads the fronts, accelerating the rears, a left corner the right-hand side; all four wheels play
+  in any direction. Recorded 2026-11-20: GT3 cars hold 1.6-1.7 g in most corners (p90) and up to 2 g; road cars
+  and the kart 1-1.5 g. On a BMW M4 GT3 race at Interlagos the default plays 25 % of the time.
+- **Rev limiter**: a shift cue from *Starts at* (97 % of the car's max RPM) to full at the max. The engine is
+  above 97 % for 2-5 % of the driving on the recorded laps.
+- **Speed**: a low rumble from 100 km/h, full at 250.
+
+Traction control was left out: AMS2's TC flag (`mCarFlags` 0x40) is set during half the on-throttle driving,
+on the kart too, which has no TC, so it does not say when TC cuts in.
 
 ## Suspension (bumps)
 

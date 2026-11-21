@@ -620,6 +620,18 @@
         <button data-act="engine/restart">Restart engine</button>
         <button data-act="engine/stop">Stop</button>
       </div>
+      <h3 class="sub-h">Latency</h3>
+      <div class="sys-btns eng-lat">
+        <label class="muted" for="eng-buffer">Buffer</label> <select id="eng-buffer"></select>
+        <button id="eng-test">Latency test</button>
+        <button id="eng-test-cancel" hidden>Cancel test</button>
+      </div>
+      <div id="eng-test-out"></div>
+      <div class="sys-note">The buffer is the sound queued ahead of the card: shorter is felt sooner, but if the
+        computer is busy for longer than the buffer the shakers drop out for a moment. <b>Latency test</b> tries
+        30, 20 then 15 ms for one minute of driving each (start it, then drive) and shows the latency measured and
+        the dropouts of each; pick the shortest without dropouts. Game sample to engine adds up to 10 ms (5 on
+        average); the card's own delay to the amplifier is not measured.</div>
       <div class="sys-note">Plays every shaker effect in place of monocoque, from the same settings; saved changes apply at once. Tick "played by simdash" (AMS2 card) to switch.</div>
     </div>
     <div class="card sys-card" data-c="others">

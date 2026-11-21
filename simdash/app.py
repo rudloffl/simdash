@@ -685,6 +685,24 @@ def create_app(recorder=None):
             raise HTTPException(404, "no such log")
         return {"lines": system._tail(system.LOGS[name], 40)}
 
+    @app.put("/api/engine/settings")
+    def engine_settings(d: dict):
+        from . import engine
+        try:
+            return engine.save_settings(d)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/engine/latency-test")
+    def engine_latency_test(d: dict):
+        """Start or cancel the latency test in the running engine (it runs while you drive)."""
+        action = d.get("action")
+        if action not in ("start", "cancel"):
+            raise HTTPException(400, "action: start or cancel")
+        if link.engine_devid() is None or not link.send({"latency_test": action}):
+            raise HTTPException(409, "the haptics engine is not running (it starts with an AMS2 session)")
+        return {"ok": True}
+
     @app.post("/api/system/{component}/{action}")
     async def system_action(component: str, action: str):
         fn = system.ACTIONS.get(f"{component}/{action}")

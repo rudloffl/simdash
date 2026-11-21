@@ -262,6 +262,46 @@ def impact_play(dev, data, i):
     return x * max(0.0, min(1.0, cos / math.sqrt(0.5)))
 
 
+def gforce_play(dev, data, i):
+    """simdash's GForce: the car's sustained horizontal acceleration (the 0.25 s average Impact compares with) past
+    the threshold (g), full at "full", on the wheels the weight shifts onto: braking loads the fronts, accelerating
+    the rears, a left corner the right side. All four wheels: any direction."""
+    bx, bz = data["acc_base"][i]
+    lf, ll = bz / G, -bx / G      # local x points left, z backward: the load goes where the car is pushed from
+    m = math.hypot(lf, ll)
+    th = float(dev.get("threshold", shakers.GFORCE_DEFAULTS["threshold"]))
+    full = float(dev.get("full", shakers.GFORCE_DEFAULTS["full"]))
+    if m <= th or m > 6.0:  # past 6 g it is a crash, Impact's
+        return 0.0
+    x = max(0.01, min(1.0, (m - th) / max(0.1, full - th)))
+    wheels = dev.get("wheels") or list(WHEEL_DIR)
+    if len(wheels) == 4:
+        return x
+    cos = max((lf * f + ll * l) / m / math.sqrt(2) for f, l in (WHEEL_DIR[w] for w in wheels))
+    return x * max(0.0, min(1.0, cos / math.sqrt(0.5)))
+
+
+def rev_play(dev, data, i):
+    """simdash's RevLimiter: the RPM past "threshold" of the max, full at the max (a shift cue)."""
+    mx = data["maxrpm"][i]
+    if mx <= 0:
+        return 0.0
+    r, th = data["rpm"][i] / mx, float(dev.get("threshold", shakers.REV_DEFAULTS["threshold"]))
+    if r < th:
+        return 0.0
+    return max(0.01, min(1.0, (r - th) / max(0.005, 1.0 - th)))
+
+
+def speed_play(dev, data, i):
+    """simdash's Speed: a rumble from "threshold" km/h, full at "full"."""
+    kmh = data["speed"][i] * 3.6
+    th = float(dev.get("threshold", shakers.SPEED_DEFAULTS["threshold"]))
+    full = float(dev.get("full", shakers.SPEED_DEFAULTS["full"]))
+    if kmh <= th:
+        return 0.0
+    return max(0.01, min(1.0, (kmh - th) / max(1.0, full - th)))
+
+
 def effect_value(dev, data, i, slips):
     """(frequency, amplitude %) of a continuous effect at tick i; amplitude 0 = silent."""
     if dev["effect"] == "Engine":
@@ -273,6 +313,12 @@ def effect_value(dev, data, i, slips):
         x = suspension_play(dev, data, i)
     elif dev["effect"] == "Impact":
         x = impact_play(dev, data, i)
+    elif dev["effect"] == "GForce":
+        x = gforce_play(dev, data, i)
+    elif dev["effect"] == "RevLimiter":
+        x = rev_play(dev, data, i)
+    elif dev["effect"] == "Speed":
+        x = speed_play(dev, data, i)
     elif dev["effect"] in shakers.SIMDASH_EFFECTS:
         x = surface_play(dev, data, i)
     else:

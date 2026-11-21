@@ -1807,11 +1807,13 @@ $("#d-delete").onclick = async () => {
 
 // ---------- shakers (monocoque Sound effects) ----------
 const FX_COLOUR = { Engine: "--s-speed", Gear: "--s-angle", TyreSlip: "--s-spin", TyreLock: "--s-lock", ABS: "--s-brake", Suspension: "--s-throttle",
-  Kerb: "--s-clutch", OffTrack: "--surf-gravel", Oversteer: "--critical", Impact: "--nat-wall" };
+  Kerb: "--s-clutch", OffTrack: "--surf-gravel", Oversteer: "--critical", Impact: "--nat-wall",
+  GForce: "--nat-runoff", RevLimiter: "--warning", Speed: "--nat-road" };
 const FX_NAME = { Engine: "Engine", Gear: "Gear shift", TyreSlip: "Wheelspin", TyreLock: "Lock-up", ABS: "ABS", Suspension: "Suspension",
-  Kerb: "Kerb", OffTrack: "Off track", Oversteer: "Oversteer", Impact: "Impact (obstacles)" };
+  Kerb: "Kerb", OffTrack: "Off track", Oversteer: "Oversteer", Impact: "Impact (obstacles)",
+  GForce: "G-force (load)", RevLimiter: "Rev limiter", Speed: "Speed" };
 // played by simdash itself from AMS2's telemetry, not by monocoque
-const OWN_FX = new Set(["Kerb", "OffTrack", "Oversteer", "Suspension", "Impact"]);
+const OWN_FX = new Set(["Kerb", "OffTrack", "Oversteer", "Suspension", "Impact", "GForce", "RevLimiter", "Speed"]);
 const FX_DEFAULTS = {
   Engine: { modulation: "frequency", frequency: 15, frequencyMax: 30, amplitude: 80, noise: 0 },
   Gear: { frequency: 15, amplitude: 100, duration: 0.25 },
@@ -1822,6 +1824,9 @@ const FX_DEFAULTS = {
   Kerb: { wheels: ["FL", "FR", "RL", "RR"], modulation: "frequency", frequency: 30, frequencyMax: 60, amplitude: 70, noise: 6 },
   OffTrack: { wheels: ["FL", "FR", "RL", "RR"], modulation: "amplify", frequency: 22, amplitude: 40, amplitudeMax: 80, noise: 12 },
   Impact: { wheels: ["FL", "FR", "RL", "RR"], threshold: 3, full: 12, duration: 0.4, modulation: "amplify", frequency: 28, amplitude: 50, amplitudeMax: 100, noise: 10 },
+  GForce: { wheels: ["FL", "FR", "RL", "RR"], threshold: 1.0, full: 2.0, modulation: "amplify", frequency: 24, amplitude: 20, amplitudeMax: 60, noise: 4 },
+  RevLimiter: { wheels: [], threshold: 0.97, modulation: "amplify", frequency: 50, amplitude: 40, amplitudeMax: 90, noise: 0 },
+  Speed: { wheels: [], threshold: 100, full: 250, modulation: "amplify", frequency: 18, amplitude: 10, amplitudeMax: 40, noise: 10 },
   // a pitch no other effect uses, weak at the first hint and strong when the rear is really going
   Oversteer: { wheels: ["RL", "RR"], threshold: 5, full: 10, modulation: "amplify", frequency: 55, amplitude: 35, amplitudeMax: 100, noise: 0 },
 };
@@ -1834,6 +1839,9 @@ const FX_HINT = {
   ABS: "AMS2: probably never fires (simapi reads the ABS flag as a number).",
   Suspension: "Bumps, kerbs and landings, from how fast these wheels' suspension moves (AMS2's suspension velocity, read by simdash; monocoque never got it). Cornering and braking move it slowly: on your laps 99 % of the time on track stays under 0.11 m/s, kerbs reach 0.2 to 0.4, landings and off-track 0.4 to 1. Starts at the first speed, full at the second; each hit fades over 60 ms. One effect per corner shaker, on its own wheel, places the bump. Played by simdash; with the haptics engine it applies at once.",
   Impact: "Walls, barriers, other cars: a sudden jump of the car's sideways or forward/backward acceleration away from what it was a moment before, in g (steady cornering or braking never counts, even 5-6 g in a formula car). On your laps driving moves it about 1 g; hits gave 6 to 20 g. Starts at the first value, full at the second. Each knock lasts the third value: held at full for its first 30 %, then fading out (0.4 s: about 11 vibrations at 28 Hz). The car is pushed away from what it hits, so the wheels pick the side: FL plays for an obstacle at the front left, both fronts for a frontal hit, all four for any hit (the seat shaker). Landings are left to Suspension. Played by simdash.",
+  GForce: "The weight of the car in the corners and under braking: the car's sustained acceleration (averaged over a quarter second, so bumps and knocks do not count), in g, starting at the first value and full at the second. The wheels pick where the weight goes: braking loads the fronts, accelerating the rears, a left corner the right-hand wheels; all four play in any direction. On your laps GT3 cars hold 1.6-1.7 g in most corners and up to 2 g under braking, road cars and the kart 1-1.5 g. Keep it soft and low so it sits under the other effects. Played by simdash.",
+  RevLimiter: "A shift cue: plays as the RPM passes the given fraction of the car's max, full at the max. On your laps the engine is above 97 % of max for 2-5 % of the driving. A pitch of its own (50 Hz) tells it apart from the Engine effect. Played by simdash.",
+  Speed: "A low rumble growing with speed, from the first speed (km/h) to full at the second, like the road and wind at speed. Keep it weak: it plays most of the lap. Played by simdash.",
   Kerb: "Played by simdash (not monocoque) while one of these wheels is on a kerb, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving, no monocoque restart.",
   OffTrack: "Played by simdash (not monocoque) while one of these wheels is on grass, gravel, sand or runoff, from AMS2's raw terrain. Pitch or strength rises with speed (full at 200 km/h). Applies a few seconds after saving.",
   Oversteer: "RL plays while the rear slides to the left, RR to the right: one Oversteer effect on each rear shaker tells you which way the car is going; both on one shaker plays either way. Played by simdash (not monocoque) as the rear steps out: from the rear tyres' slip angle (how far the rear axle slides sideways), starting at the first angle and full at the second. Grip is a few degrees; on your laps 5° comes 2 to 4 times a minute, about as often as you countersteer, so it warns just before. Lower it for an earlier hint, raise it if it plays in every corner. A shaker on the seat or seat back feels most like the rear going. Applies a few seconds after saving.",
@@ -2008,6 +2016,15 @@ function renderEffects() {
       f += fxField(e, i, "threshold", "Starts at", 1, 20, 0.5, "g");
       f += fxField(e, i, "full", "Full at", 2, 40, 1, "g");
       f += fxField(e, i, "duration", "Lasts", 0.1, 1.5, 0.05, "s");
+    }
+    if (e.effect === "GForce") {
+      f += fxField(e, i, "threshold", "Starts at", 0.1, 4, 0.1, "g");
+      f += fxField(e, i, "full", "Full at", 0.2, 6, 0.1, "g");
+    }
+    if (e.effect === "RevLimiter") f += fxField(e, i, "threshold", "Starts at (of max RPM)", 0.5, 0.995, 0.005);
+    if (e.effect === "Speed") {
+      f += fxField(e, i, "threshold", "Starts at", 0, 350, 5, "km/h");
+      f += fxField(e, i, "full", "Full at", 10, 400, 5, "km/h");
     }
     if (e.effect === "Suspension") {
       f += fxField(e, i, "threshold", "Starts at", 0.02, 1, 0.01, "m/s");
@@ -4009,10 +4026,51 @@ function engineRun(sm, title) {
     ["Latency", lat],
     ["Synthesis", `${sm.synth_ms} ms per block, max ${sm.synth_max_ms} ms`],
     ["Dropouts", sm.late_blocks ? `<span class="bad">${sm.late_blocks}</span>` : "none"],
-    sm.gap_max_ms != null && ["Longest wait", `${sm.gap_max_ms} ms between writes (buffer 30 ms)`],
+    sm.gap_max_ms != null && ["Longest wait", `${sm.gap_max_ms} ms between writes`],
     sm.priority && ["Priority", esc(sm.priority)],
   ]) + "</dl>";
 }
+function renderEngineLatency(en, es) {
+  const sel = $("#eng-buffer"), cur = (en.settings || {}).buffer_ms;
+  if (sel.dataset.v !== String(cur) && document.activeElement !== sel) {
+    sel.innerHTML = (en.buffers || []).map((b) => `<option value="${b}" ${b === cur ? "selected" : ""}>${b} ms${b === 30 ? " (default)" : ""}</option>`).join("");
+    sel.dataset.v = String(cur);
+  }
+  const t = en.test, running = !!(es && es.latency_test);
+  $("#eng-test").hidden = running;
+  $("#eng-test").disabled = !es;
+  $("#eng-test").title = es ? "Start, then drive: one minute per buffer" : "The engine runs during an AMS2 session";
+  $("#eng-test-cancel").hidden = !running;
+  let html = "";
+  if (running) {
+    const lt = es.latency_test;
+    html += `<p>Testing <b>${lt.buffer_ms} ms</b> (${lt.i + 1} of ${lt.of}): ${lt.playing_s} of ${lt.seconds} s driven${es.state !== "playing" ? ' · <span class="muted">waiting for you to drive</span>' : ""}</p>`;
+  }
+  if (t && t.results && t.results.length) {
+    const clean = t.results.filter((r) => !r.dropouts).map((r) => r.buffer_ms);
+    const best = clean.length ? Math.min(...clean) : null;
+    html += `<table class="eng-test"><thead><tr><th>Buffer</th><th>Latency</th><th>Max</th><th>Dropouts</th><th>Longest wait</th><th></th></tr></thead><tbody>`
+      + t.results.map((r) => `<tr${r.buffer_ms === best ? ' class="best"' : ""}><td>${r.buffer_ms} ms</td><td>${r.latency_ms ?? "–"} ms</td><td>${r.latency_max_ms ?? "–"} ms</td>
+        <td>${r.dropouts ? `<span class="bad">${r.dropouts}</span>` : "0"}</td><td>${r.gap_max_ms} ms</td>
+        <td>${r.buffer_ms === cur ? '<span class="muted">in use</span>' : `<button data-buffer="${r.buffer_ms}">Use</button>`}</td></tr>`).join("")
+      + `</tbody></table><div class="sys-note">${t.done ? (t.cancelled ? "Cancelled" : "Finished") : "So far"}, started ${new Date(t.started * 1000).toLocaleTimeString()}${best != null && t.done ? ` · shortest without dropouts: <b>${best} ms</b>` : ""}</div>`;
+  }
+  $("#eng-test-out").innerHTML = html;
+}
+async function setEngineBuffer(b) {
+  await fetch("/api/engine/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ buffer_ms: +b }) });
+  $("#eng-buffer").dataset.v = "";
+  loadSystem?.();
+}
+$("#eng-buffer").onchange = (e) => setEngineBuffer(e.target.value);
+$("#eng-test-out").addEventListener("click", (e) => { if (e.target.dataset.buffer) setEngineBuffer(e.target.dataset.buffer); });
+async function engineTest(action) {
+  const r = await fetch("/api/engine/latency-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+  if (!r.ok) alert((await r.json()).detail || "Failed");
+  loadSystem?.();
+}
+$("#eng-test").onclick = () => engineTest("start");
+$("#eng-test-cancel").onclick = () => engineTest("cancel");
 const fmtSecs = (s) => s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
 
 function dl(rows) {
@@ -4048,12 +4106,13 @@ function renderSystem() {
     ["Process", en.pid ? `pid ${en.pid}, up ${fmtAge(en.since, d.now)}` : "–"],
     es && ["Telemetry", `${es.telemetry_hz} Hz read (blocks of ${es.block_ms} ms, ${es.blocks_hz}/s)`],
     es && ["Synthesis", es.synth_ms == null ? "idle" : `${es.synth_ms} ms per block, max ${es.synth_max_ms} ms`],
-    es && ["Latency", es.latency_ms == null ? "card closed (silent)" : `${es.latency_ms} ms to the card`],
+    es && ["Latency", es.latency_ms == null ? "card closed (silent)" : `${es.latency_ms} ms to the card (buffer ${es.buffer_ms ?? 30} ms)`],
     es && ["Dropouts", es.late_blocks ? `<span class="bad">${es.late_blocks} in the last second</span>` : "none"],
     es && ["Effects", `${es.effects}`],
     !es && ["Last log", `<span class="muted">${esc((en.log || []).slice(-1)[0] || "–")}</span>`],
   ]) + "</dl>" + engineRun(es ? es.run : en.last && en.last.summary, es ? "This run, while playing" :
     en.last ? `Last run, ended ${new Date(en.last.ended * 1000).toLocaleTimeString()}` : "");
+  renderEngineLatency(en, es);
   $("#sys-ams2-state").textContent = st.ams2[1];
   $("#sys-simd-state").textContent = st.simd[1];
   $("#sys-mono-state").textContent = st.monocoque[1];

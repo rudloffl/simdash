@@ -26,13 +26,14 @@ OWN_EFFECTS = store.DATA_DIR / "effects.json"  # simdash's own effects (SIMDASH_
 RATE = 44100
 CHANNEL_MAP = ["front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right", "side-left", "side-right"]
 CHANNEL_SHORT = ["FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR"]
-EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack", "Oversteer", "Impact"]
+EFFECTS = ["Engine", "Gear", "TyreSlip", "TyreLock", "ABS", "Suspension", "Kerb", "OffTrack", "Oversteer", "Impact",
+           "GForce", "RevLimiter", "Speed"]
 # played by simdash itself from AMS2's per-wheel terrain (monocoque has no surface effect), the rear slip
 # angle and the suspension (simapi does not map AMS2's: monocoque's Suspension never played), kept in
 # simdash's own file so monocoque never reads an effect it does not know
-SIMDASH_EFFECTS = {"Kerb", "OffTrack", "Oversteer", "Suspension", "Impact"}
+SIMDASH_EFFECTS = {"Kerb", "OffTrack", "Oversteer", "Suspension", "Impact", "GForce", "RevLimiter", "Speed"}
 SURFACE_CLASS = {"Kerb": 1, "OffTrack": 2}  # pcars2.SURFACE class each one reacts to
-WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension", "Impact"} | set(SURFACE_CLASS)
+WHEEL_EFFECTS = {"TyreSlip", "TyreLock", "ABS", "Suspension", "Impact", "GForce"} | set(SURFACE_CLASS)
 # Oversteer: the rear slip angle (pcars2.rear_slide_deg), from "threshold" degrees to full at "full" degrees;
 # its wheels say which way: RL plays while the rear slides to the left, RR to the right (pcars2: > 0 = left)
 OVERSTEER_DEFAULTS = {"threshold": 5.0, "full": 10.0}
@@ -44,6 +45,17 @@ SUSPENSION_DEFAULTS = {"threshold": 0.08, "full": 0.4}
 # full at "full". Recorded 2026-11-20: driving moves it ~1 g between samples (formula cars hold 5-6 g, but
 # steadily), hitting things gives 6-20 g; the wheels say which side of the car the obstacle must be on
 IMPACT_DEFAULTS = {"threshold": 3.0, "full": 12.0, "duration": 0.4}  # duration: s a knock lasts (held, then fading)
+# GForce: the car's sustained horizontal acceleration (g, averaged over 0.25 s), from "threshold" to full at "full",
+# on the wheels the weight shifts onto (braking: fronts, cornering: the outside). Recorded 2026-11-20: GT3 corners
+# 1.6-1.7 g (p90), up to 2.0; road cars and the kart 1.0-1.5
+GFORCE_DEFAULTS = {"threshold": 1.0, "full": 2.0}
+# RevLimiter: the RPM as a fraction of the max, from "threshold" to full at the max (a shift cue). Recorded:
+# above 0.97 for 2-5 % of the driving, above 0.99 at most 1 %
+REV_DEFAULTS = {"threshold": 0.97}
+# Speed: a rumble growing with speed, km/h from "threshold" to full at "full"
+SPEED_DEFAULTS = {"threshold": 100.0, "full": 250.0}
+# own effects that need no wheel
+NO_WHEEL_EFFECTS = {"RevLimiter", "Speed"}
 TYRES = ["All", "Fronts", "Rears", "FrontLeft", "FrontRight", "RearLeft", "RearRight"]
 WHEELS = ["FL", "FR", "RL", "RR"]
 TYRE_WHEELS = {"All": WHEELS, "Fronts": ["FL", "FR"], "Rears": ["RL", "RR"], "FrontLeft": ["FL"],
@@ -350,12 +362,25 @@ def _clean_own(e):
         out["full"] = max(out["threshold"] + 0.5, min(40.0, full))
         d = e.get("duration")
         out["duration"] = max(0.1, min(1.5, float(d if d not in (None, "") else IMPACT_DEFAULTS["duration"])))
+    def num(k, defaults):
+        v = e.get(k)
+        return float(v if v not in (None, "") else defaults[k])
+    if out["effect"] == "GForce":
+        out["threshold"] = max(0.1, min(4.0, num("threshold", GFORCE_DEFAULTS)))
+        out["full"] = max(out["threshold"] + 0.1, min(6.0, num("full", GFORCE_DEFAULTS)))
+    if out["effect"] == "RevLimiter":
+        out["threshold"] = max(0.5, min(0.995, num("threshold", REV_DEFAULTS)))
+    if out["effect"] == "Speed":
+        out["threshold"] = max(0.0, min(350.0, num("threshold", SPEED_DEFAULTS)))
+        out["full"] = max(out["threshold"] + 10, min(400.0, num("full", SPEED_DEFAULTS)))
     if out["effect"] == "Oversteer":
         th = float(e.get("threshold") if e.get("threshold") not in (None, "") else OVERSTEER_DEFAULTS["threshold"])
         full = float(e.get("full") if e.get("full") not in (None, "") else OVERSTEER_DEFAULTS["full"])
         out["threshold"] = max(1.0, min(30.0, th))
         out["full"] = max(out["threshold"] + 0.5, min(45.0, full))
         out["wheels"] = [w for w in ("RL", "RR") if w in (e.get("wheels") or ["RL", "RR"])] or ["RL", "RR"]
+    elif out["effect"] in NO_WHEEL_EFFECTS:
+        out["wheels"] = []
     else:
         out["wheels"] = [w for w in WHEELS if w in (e.get("wheels") or [])]
         if not out["wheels"]:
@@ -632,7 +657,7 @@ def render(e, mode="effect"):
             s.rest(0.7)
     else:
         # three slides: strength rises from the threshold to full
-        th = 0 if eff in ("Oversteer", "Suspension", "Impact") else e.get("threshold", 0) or 0
+        th = 0 if eff in ("Oversteer", "Suspension", "Impact", "GForce", "RevLimiter", "Speed") else e.get("threshold", 0) or 0
         for _ in range(3):
             for k in range(35):
                 x = th + (1 - th) * k / 34

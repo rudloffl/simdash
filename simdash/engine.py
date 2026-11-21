@@ -39,7 +39,12 @@ log = logging.getLogger("simdash.engine")
 
 RATE = replay.RATE      # Hz: 8000, the shakers feel nothing near 4 kHz
 BLOCK = 0.01            # s of sound per step, i.e. a telemetry read every 10 ms
-LATENCY = 0.03          # s of sound buffered ahead of the card (PulseAudio's target length)
+LATENCY = 0.03          # s of sound buffered ahead of the card (PulseAudio's target length), unless SETTINGS says
+SETTINGS = Path.home() / ".local/share/simdash/engine.json"   # {"buffer_ms": ...}: the System tab's choice
+BUFFERS_MS = (15, 20, 25, 30, 40)    # not under 15: the engine writes 10 ms blocks, a 10 ms buffer runs dry every block
+TEST_BUFFERS_MS = (30, 20, 15)       # the latency test, in this order
+TEST_SECONDS = 60.0                  # of playing (driving) per buffer
+TEST_FILE = Path.home() / ".local/state/simdash-latency-test.json"
 STALE = 0.25            # s without a new sample from the game before going silent
 IDLE = 10.0             # s of silence before letting the card go
 RELOAD = 1.0            # s between looks at the settings files
@@ -202,6 +207,9 @@ def _mtime(p):
 class Engine:
     def __init__(self, reader=None, out_factory=PulseOut, pedals=None, sender=None, inbox=None):
         self.reader = reader or Telemetry()
+        self.buffer = LATENCY   # s: the stream's buffer (load_settings, or the latency test's current one)
+        self.test = None        # the latency test while it runs (start_test)
+        self.spent = {}         # what else took time since the last write (s), for the dropout log
         self.inbox = inbox      # link.Inbox: replay and test sound and pedal commands from simdash
         self.shaper = Shaper()
         self.duck = [0.0] * 8   # how far each channel's continuous effects are ducked now (0..1)
@@ -282,14 +290,17 @@ class Engine:
 
     def reload(self, now):
         self.checked = now
-        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS), _mtime(haptics.SETTINGS), _mtime(shakers.SHAPING))
+        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS), _mtime(haptics.SETTINGS), _mtime(shakers.SHAPING),
+             _mtime(SETTINGS))
         if m == self.mtimes:
             return
+        if (self.mtimes is None or m[4] != self.mtimes[4]) and self.test is None:
+            self.set_buffer(load_settings()["buffer_ms"] / 1000)
         if self.mtimes is None or m[3] != self.mtimes[3]:
             self.shaper.set(shakers.load_shaping())
-            if self.mtimes is not None and m[:3] == self.mtimes[:3]:
-                self.mtimes = m
-                return  # only the shaping changed: the effects keep playing as they are
+        if self.mtimes is not None and m[:3] == self.mtimes[:3]:
+            self.mtimes = m
+            return  # only the shaping or the buffer changed: the effects keep playing as they are
         if self.pedals is not None and (self.mtimes is None or m[2] != self.mtimes[2]):
             self.pedals.reload()
         self.mtimes = m
@@ -355,8 +366,92 @@ class Engine:
         g["susp"] = list(snap["susp"])
         return g
 
+    def set_buffer(self, buffer):
+        """A new buffer length (s): the stream is opened again with it at the next block."""
+        if abs(buffer - self.buffer) < 1e-6:
+            return
+        self.buffer = buffer
+        if self.out is not None:
+            self.out.close()
+            self.out = None
+        log.info("buffer %.0f ms", buffer * 1000)
+
+    # -- latency test: each buffer in turn for TEST_SECONDS of driving, counting dropouts --
+
+    def start_test(self, buffers=TEST_BUFFERS_MS, seconds=None):
+        seconds = seconds or TEST_SECONDS
+        self.test = {"buffers": [b for b in buffers if b in BUFFERS_MS], "seconds": seconds, "i": 0,
+                     "results": [], "started": time.time(), "done": False, "cur": self._new_test_run()}
+        log.info("latency test: %s ms, %.0f s of driving each", self.test["buffers"], seconds)
+        self.set_buffer(self.test["buffers"][0] / 1000)
+        self._write_test()
+
+    @staticmethod
+    def _new_test_run():
+        return {"playing_s": 0.0, "dropouts": 0, "gap_max_ms": 0.0, "lat_sum": 0.0, "lat_n": 0, "lat_max": None}
+
+    def cancel_test(self):
+        if self.test is not None:
+            log.info("latency test cancelled")
+            self.test["done"], self.test["cancelled"] = True, True
+            self._write_test()
+            self.test = None
+            self.set_buffer(load_settings()["buffer_ms"] / 1000)
+
+    def _test_tick(self, span, st, lat):
+        """Once a second (status): add the playing second to the buffer being tested; move on when it has enough."""
+        t = self.test
+        if t is None or self.state != "playing":
+            return
+        c = t["cur"]
+        c["playing_s"] += span
+        c["dropouts"] += st["late"]
+        c["gap_max_ms"] = max(c["gap_max_ms"], 1000 * st["gap_max"])
+        if lat is not None:
+            c["lat_sum"] += lat
+            c["lat_n"] += 1
+            c["lat_max"] = lat if c["lat_max"] is None else max(c["lat_max"], lat)
+        if c["playing_s"] >= t["seconds"]:
+            b = t["buffers"][t["i"]]
+            t["results"].append({"buffer_ms": b, "playing_s": round(c["playing_s"]), "dropouts": c["dropouts"],
+                                 "gap_max_ms": round(c["gap_max_ms"], 1),
+                                 "latency_ms": round(c["lat_sum"] / c["lat_n"], 1) if c["lat_n"] else None,
+                                 "latency_max_ms": round(c["lat_max"], 1) if c["lat_max"] is not None else None})
+            log.info("latency test: %d ms buffer: %s", b, t["results"][-1])
+            t["i"] += 1
+            t["cur"] = self._new_test_run()
+            if t["i"] >= len(t["buffers"]):
+                t["done"] = True
+                self._write_test()
+                self.test = None
+                self.set_buffer(load_settings()["buffer_ms"] / 1000)
+                return
+            self.set_buffer(t["buffers"][t["i"]] / 1000)
+        self._write_test()
+
+    def _write_test(self):
+        t = self.test
+        if t is None:
+            return
+        d = {k: t[k] for k in ("buffers", "seconds", "results", "started", "done")}
+        d["cancelled"] = t.get("cancelled", False)
+        d["current"] = None if t["done"] else {"buffer_ms": t["buffers"][t["i"]], "playing_s": round(t["cur"]["playing_s"]),
+                                               "dropouts": t["cur"]["dropouts"]}
+        try:
+            tmp = TEST_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(d))
+            tmp.replace(TEST_FILE)
+        except OSError:
+            pass
+
     def command(self, d):
         """A command from simdash (link.py): replay samples and Test buttons for the pedals."""
+        if "latency_test" in d:
+            if d["latency_test"] == "cancel":
+                self.cancel_test()
+            else:
+                self.start_test()
+            return
         if self.pedals is None:
             return
         if "pedal_test" in d:
@@ -429,10 +524,14 @@ class Engine:
         """Read the game, make one block, hand it to the card (blocks until it has room).
         Returns False when there is nothing to play and no stream open (the caller then waits)."""
         now = time.monotonic()
+        c0 = time.perf_counter()
         if now - self.checked > RELOAD:
             self.reload(now)
+            self._spent("settings", c0)
         if self.inbox is not None:
+            c1 = time.perf_counter()
             self.inbox.drain(self.command)
+            self._spent("commands", c1)
         t0 = time.perf_counter()
         snap = self.reader.sample()
         t_read = time.perf_counter() - t0
@@ -453,7 +552,7 @@ class Engine:
                 self.state, self.retry = "no card", now + 10.0  # never let PulseAudio pick the speakers
                 return False
             try:
-                self.out = self.out_factory(self.devid)
+                self.out = self.out_factory(self.devid, self.buffer)
             except OSError as e:
                 log.warning("cannot open %s: %s", self.devid, e)
                 self.retry = now + 10.0
@@ -467,20 +566,26 @@ class Engine:
         st["synth_max"] = max(st["synth_max"], dt)
         gap = time.monotonic() - self.wrote if self.wrote is not None else 0.0
         st["gap_max"] = max(st["gap_max"], gap)
-        if gap > LATENCY:
-            # longer than the buffer since the last write: the card (likely) ran dry. Where the time went:
-            # the read and synthesis of this block are timed, the rest is the process waiting for the CPU
+        if gap > self.buffer:
+            # longer than the buffer since the last write: the card (likely) ran dry. Where the time went: the
+            # read, the synthesis and the other work since the last write are timed, the rest is waiting for the CPU
             st["late"] += 1
-            log.warning("dropout: %.1f ms between writes (read %.2f ms, synthesis %.2f ms, the rest waiting)",
-                        1000 * gap, 1000 * t_read, 1000 * (dt - t_read))
+            other = "".join(f", {k} {1000 * v:.2f} ms" for k, v in sorted(self.spent.items()) if v >= 0.0005)
+            known = t_read + (dt - t_read) + sum(self.spent.values())
+            log.warning("dropout: %.1f ms between writes (read %.2f ms, synthesis %.2f ms%s, the rest %.1f ms waiting)",
+                        1000 * gap, 1000 * t_read, 1000 * (dt - t_read), other, 1000 * max(0.0, gap - known))
         try:
             self.out.write(pcm)
             self.wrote = time.monotonic()
+            self.spent = {}
         except OSError as e:
             log.warning("%s", e)
             self.out.close()
             self.out = None
         return True
+
+    def _spent(self, what, since):
+        self.spent[what] = self.spent.get(what, 0.0) + time.perf_counter() - since
 
     def status(self):
         st, now = self.stats, time.monotonic()
@@ -500,10 +605,18 @@ class Engine:
             p = self.pedals.snapshot()
             out["pedals"] = {"port": p.get("port"), "playing": p.get("playing", []), "error": p.get("error")}
         if self.out is not None:
+            c0 = time.perf_counter()
             try:
                 out["latency_ms"] = round(1000 * (self.out.latency() + BLOCK), 1)
             except OSError:
                 pass
+            self._spent("card latency query", c0)
+        out["buffer_ms"] = round(self.buffer * 1000)
+        self._test_tick(span, st, out["latency_ms"])
+        if self.test is not None:
+            out["latency_test"] = {"buffer_ms": round(self.buffer * 1000), "i": self.test["i"],
+                                   "of": len(self.test["buffers"]), "playing_s": round(self.test["cur"]["playing_s"]),
+                                   "seconds": self.test["seconds"]}
         if self.state != self.logged_state:
             log.info("state: %s", self.state)
             self.logged_state = self.state
@@ -541,19 +654,29 @@ class Engine:
             except Exception:  # noqa: BLE001 - keep the shakers alive
                 log.exception("engine step")
                 played = False
+            c0 = time.perf_counter()
             try:
                 self.feedback()
             except Exception:  # noqa: BLE001
                 log.exception("feedback")
+            self._spent("feedback", c0)
             if not played:
                 time.sleep(0.05 if self.state != "playing" else 0.01)  # no card: still feed the pedals often
             now = time.monotonic()
             if now - last_status >= 1.0:
                 last_status = now
-                _write_status(self.status())
+                q0 = self.spent.get("card latency query", 0.0)
+                c0 = time.perf_counter()
+                st = self.status()  # times its card latency query itself
+                c1 = time.perf_counter()
+                self.spent["status"] = self.spent.get("status", 0.0) + (c1 - c0) - (self.spent.get("card latency query", 0.0) - q0)
+                _write_status(st)
+                self._spent("status file", c1)
             if now - last_log >= LOG_EVERY:
                 last_log = now
+                c0 = time.perf_counter()
                 self.log_window()
+                self._spent("log", c0)
 
 
 PRIORITY = "normal"
@@ -587,6 +710,33 @@ def realtime():
     except (OSError, ValueError, subprocess.SubprocessError) as e:
         log.warning("no RTKit: %s", e)
     return "normal"
+
+
+def load_settings():
+    try:
+        b = int(json.loads(SETTINGS.read_text()).get("buffer_ms", LATENCY * 1000))
+    except (OSError, ValueError, TypeError, AttributeError):
+        b = int(LATENCY * 1000)
+    return {"buffer_ms": b if b in BUFFERS_MS else int(LATENCY * 1000)}
+
+
+def save_settings(d):
+    b = int(d.get("buffer_ms", LATENCY * 1000))
+    if b not in BUFFERS_MS:
+        raise ValueError(f"buffer must be one of {BUFFERS_MS} ms")
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"buffer_ms": b}))
+    tmp.replace(SETTINGS)
+    return {"buffer_ms": b}
+
+
+def read_test():
+    """The last latency test (running or finished), or None."""
+    try:
+        return json.loads(TEST_FILE.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def _write_status(d):
@@ -628,7 +778,8 @@ def main():
     global PRIORITY
     PRIORITY = realtime()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # close the stream cleanly
-    log.info("haptics engine: %d Hz, %.0f ms blocks, %.0f ms buffer, %s", RATE, BLOCK * 1000, LATENCY * 1000, PRIORITY)
+    log.info("haptics engine: %d Hz, %.0f ms blocks, %.0f ms buffer, %s", RATE, BLOCK * 1000,
+             load_settings()["buffer_ms"], PRIORITY)
     inbox = link.Inbox(RATE)
     if not inbox.open():
         log.warning("no command socket: replay and tests keep their own streams")
