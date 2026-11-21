@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import edges, genie, haptics, leds, presets, replay, shakers, slim, store, system
+from . import edges, felt, genie, haptics, leds, presets, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -340,22 +340,55 @@ def create_app(recorder=None):
             prev[idx] = mode
         return list(cars.values())
 
+    def recorded_felt(con, sid):
+        """What the haptics engine played, as recorded (felt table), per sample; None if nothing was."""
+        try:
+            rows = con.execute("SELECT t.id, f.out, f.effect, f.strength FROM felt f JOIN tick t ON t.id = f.tick_id "
+                               "WHERE t.session_id=? ORDER BY t.id", (sid,)).fetchall()
+        except sqlite3.OperationalError:  # a day from before the felt table
+            return None
+        if not rows:
+            return None
+        ticks = con.execute("SELECT t.id, t.ts FROM tick t JOIN telemetry e ON e.tick_id = t.id "
+                            "WHERE t.session_id=? ORDER BY t.id", (sid,)).fetchall()
+        at = {tid: i for i, (tid, _) in enumerate(ticks)}
+        n = len(ticks)
+        channels, pedals = {}, {}
+        for tid, out, fx, a in rows:
+            i = at.get(tid)
+            if i is None:
+                continue
+            pedal = felt.OUT_PEDAL.get(out)
+            if pedal:
+                pedals.setdefault(f"{pedal}:{fx}", {})[i] = a  # sparse: pedal effects are short and rare
+                continue
+            ch = channels.setdefault(str(out), {"a": [0] * n, "fx": [None] * n})
+            if a > ch["a"][i]:
+                ch["a"][i], ch["fx"][i] = a, fx
+        return {"ts": [round(ts, 3) for _, ts in ticks], "channels": channels,
+                "pedals": {k: [[i, a] for i, a in sorted(v.items())] for k, v in pedals.items()},
+                "config": None, "source": "felt"}
+
     @app.get("/api/sessions/{ref}/shakers")
     def session_shakers(ref: str):
-        """What each shaker played, per tick, with the monocoque settings in force when the session started."""
+        """What each shaker (and pedal) played, per tick: as the haptics engine recorded it, or else recomputed
+        with the monocoque settings in force when the session started."""
         con, sid = open_ref(ref)
         with con:
             row = con.execute("SELECT started_at FROM session WHERE id=?", (sid,)).fetchone()
+            rec = recorded_felt(con, sid) if row is not None else None
         con.close()
         if row is None:
             raise HTTPException(404, "no such session")
+        if rec:
+            return rec
         devices, path = shakers.devices_at(row[0])
         devices += shakers.simdash_devices()  # simdash's own effects: today's settings, no history
         try:
             tl = replay.Timeline(ref, devices=devices)
         except LookupError:
             return {"ts": [], "channels": {}, "config": path}
-        return {"ts": [round(t, 3) for t in tl.data["ts"]], "channels": tl.channels(), "config": path}
+        return {"ts": [round(t, 3) for t in tl.data["ts"]], "channels": tl.channels(), "config": path, "source": "computed"}
 
     @app.get("/api/sessions/{ref}/cars_at")
     def cars_at(ref: str, ts: float):
@@ -612,7 +645,12 @@ def create_app(recorder=None):
 
     @app.get("/api/haptics/state")
     def haptics_state():
-        return {**haptics.driver_thread.snapshot(), "found": haptics.known_port()}
+        st = haptics.driver_thread.snapshot()
+        eng = felt.receiver.now()
+        if st.get("source") == "idle" and eng and eng[1]:  # the haptics engine drives the pedals
+            st = {**st, "source": "engine", "playing": sorted(eng[1]),
+                  "detail": {k: {"strength": a, "why": "simdash haptics engine"} for k, a in eng[1].items()}}
+        return {**st, "found": haptics.known_port()}
 
     # ---- system: telemetry chain status and restarts ----
 

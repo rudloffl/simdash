@@ -106,7 +106,9 @@ learned itself are left alone, and the previous file is kept as `diameters.confi
 ## Shakers on the Live and Sessions maps
 
 The small car next to the [Live](live.md) track map and the [session](sessions.md)'s race replay shows each
-shaker lit in the colour of the strongest effect it plays, computed like the replay above. Live uses the
+shaker lit in the colour of the strongest effect it plays, and the three pedals lit while their haptics
+play. With simdash's haptics engine this is what the engine played (see *What was felt* below). With
+monocoque it is computed like the replay above. Live uses the
 settings monocoque started with (it reads its config only at start). A recorded session uses the settings in
 force when it started: saving keeps the previous file as `monocoque.config.bak-<date-time>`, so the first
 backup made after the session start holds them (the current file if none). Where each channel sits on the
@@ -129,6 +131,19 @@ pace and nothing drifts. Saved settings and haptics presets apply at once, witho
 The System tab's *simdash haptics engine* card shows what it measures each second: telemetry updates
 read, synthesis time per block, latency to the card and dropouts (blocks that came too late).
 
+The engine also drives the Moza pedal haptics (same settings as the [Pedal haptics](pedal-haptics.md)
+section), fed from the same 100 Hz samples instead of the recorder's 20 Hz; the recorder leaves the
+pedals alone while the engine runs. Replay and the Test buttons still play from simdash itself.
+
+### What was felt
+
+The engine tells simdash what it plays, once per 10 ms block, over a local socket
+(`~/.local/state/simdash-felt.sock`; `simdash/felt.py`): every effect playing on each shaker channel and
+each pedal effect, with its strength (the Live car shows each shaker's strongest). simdash shows it on the Live car (shakers and pedals) and records it
+with the session (`felt` table: the strongest of each since the previous 20 Hz sample, so a 10 ms knock
+is kept). The session's race replay then shows what was really played, with that day's settings and the
+fades, rather than a recomputation; sessions played by monocoque are still recomputed as below.
+
 ## Suspension (bumps)
 
 Played by simdash (monocoque never got AMS2's suspension through simapi): how fast the chosen wheels'
@@ -144,7 +159,9 @@ recorded Interlagos session (McLaren GT3) it played 2-6 % of the time on track a
 Played by simdash: walls, barriers and other cars, from a sudden jump of the car's horizontal acceleration
 (AMS2 `mLocalAcceleration`, sideways and forward/backward) away from its level over the last quarter second.
 Steady cornering and braking never count, even the 5-6 g of a formula car; on recorded laps (2026-11-20)
-driving moves it about 1 g from one sample to the next, while hits gave 6 to 20 g (a single absurd sample,
-401 g, is ignored). *Starts at* 3 g, *Full at* 12 g; each knock fades over 150 ms. The car is pushed away
+driving moves it about 1 g from one sample to the next, while hits gave 6 to 20 g, and a crash at 190 km/h
+over 50 g. A reading over 60 g counts only when the car's velocity changed with it: AMS2 sometimes reports
+absurd values (401 g for one sample, 329 g for a second) with the speed unchanged, and those are ignored. *Starts at* 3 g, *Full at* 12 g; each knock fades over 150 ms. The car is pushed away
 from what it hits, so the wheels pick the side the obstacle is on: an effect on FL plays for a front-left
-hit, all four wheels play for any hit (the seat shaker). Vertical jolts (landings) are left to Suspension.
+hit, all four wheels play for any hit (the seat shaker). The signs were checked on recorded laps: the
+acceleration reads left and backward positive (cornering left, braking), as the code assumes. Vertical jolts (landings) are left to Suspension.

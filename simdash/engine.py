@@ -1,4 +1,4 @@
-"""simdash's haptics engine: plays every shaker effect itself, in place of monocoque.
+"""simdash's haptics engine: plays every shaker effect and the Moza pedal haptics itself, in place of monocoque.
 
     python -m simdash.engine          (~/.local/bin/simdash-haptics; start-race and the System tab start it)
 
@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import replay, shakers
+from . import felt, haptics, replay, shakers
 from .pcars2 import FIELDS, GAME_PLAYING, OFF, Pcars2Reader, _unpack
 
 log = logging.getLogger("simdash.engine")
@@ -58,7 +58,10 @@ _KINDS = {name: (kind, count) for name, kind, count, pc in FIELDS if not pc}
 _WANT = {"game_state": "mGameState", "car": "mCarName", "speed": "mSpeed", "rpm": "mRpm", "max_rpm": "mMaxRPM",
          "gear": "mGear", "abs": "mAntiLockActive", "local_vel": "mLocalVelocity", "ang_vel": "mAngularVelocity",
          "terrain": "mTerrain", "tyre_rps": "mTyreRPS", "susp_vel": "mSuspensionVelocity",
-         "local_acc": "mLocalAcceleration", "seq": "mSequenceNumber"}
+         "local_acc": "mLocalAcceleration", "seq": "mSequenceNumber",
+         # the pedal haptics' inputs
+         "throttle": "mThrottle", "brake": "mBrake", "clutch": "mClutch", "car_flags": "mCarFlags",
+         "susp": "mSuspensionTravel"}
 
 
 class Telemetry(Pcars2Reader):
@@ -147,8 +150,10 @@ def _mtime(p):
 
 
 class Engine:
-    def __init__(self, reader=None, out_factory=PulseOut):
+    def __init__(self, reader=None, out_factory=PulseOut, pedals=None, sender=None):
         self.reader = reader or Telemetry()
+        self.pedals = pedals    # haptics.Driver: the Moza pedals, fed from the same samples (main() passes it)
+        self.sender = sender    # felt.Sender: what plays, back to simdash
         self.out_factory = out_factory
         self.out = None
         self.devices, self.streams, self.devid = [], [], ""
@@ -164,6 +169,7 @@ class Engine:
         self.retry = 0.0
         self.stats = self._new_stats()
         self.levels = {}
+        self.played = {}        # channel -> {effect: strength %}: everything that plays, for the feedback
         self.state = "starting"
         self.wrote = None       # when the last write returned
         self.run_t0 = time.time()
@@ -223,9 +229,11 @@ class Engine:
 
     def reload(self, now):
         self.checked = now
-        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS))
+        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS), _mtime(haptics.SETTINGS))
         if m == self.mtimes:
             return
+        if self.pedals is not None and (self.mtimes is None or m[2] != self.mtimes[2]):
+            self.pedals.reload()
         self.mtimes = m
         devices = shakers.devices_at(time.time())[0] + shakers.simdash_devices()
         try:
@@ -268,6 +276,8 @@ class Engine:
         self.gear = snap["gear"]
         data = replay.tick_data(snap, self.acc_base)
         slips = replay.wheel_slip(data, 0, self._diameters(snap["car"], now))
+        if self.pedals is not None:
+            self.pedals.feed_values(self.pedal_values(snap, slips), "game")
         out = {}
         for k, dev in enumerate(self.devices):
             if dev["effect"] in RELEASE:
@@ -275,6 +285,25 @@ class Engine:
             elif dev["effect"] != "Gear":
                 out[k] = replay.effect_value(dev, data, 0, slips)
         return out, shifted
+
+    @staticmethod
+    def pedal_values(snap, slips):
+        """haptics.Effects.compute's input. Its slips are the recorder's: > 0 spin, < 0 lock (monocoque's,
+        here, are the other way round), and none until the tyre size is known."""
+        g = {k: snap[k] for k in ("rpm", "max_rpm", "gear", "car_flags", "abs", "brake", "throttle", "clutch", "speed")}
+        g["slips"] = [max(-1.0, min(1.0, -x)) for x in slips] if any(slips) else None
+        g["susp"] = list(snap["susp"])
+        return g
+
+    def feedback(self):
+        """What plays now, to simdash (Live page, session recording), while there is something to tell."""
+        if self.sender is None:
+            return
+        pd = {}
+        if self.pedals is not None:
+            pd = {k: v.get("strength", 0) for k, v in (self.pedals.snapshot().get("detail") or {}).items()}
+        if self.state == "playing" or pd:
+            self.sender.send(self.played, pd)
 
     def _bump(self, k, fa, now, release):
         """A hit holds and fades over release s unless a stronger one comes."""
@@ -288,7 +317,7 @@ class Engine:
 
     def synth(self, cur, kick, n):
         mix = [0.0] * (8 * n)
-        levels = {}
+        levels, played = {}, {}
         for k, st in enumerate(self.streams):
             if st.dev["effect"] == "Gear":
                 st.kick(mix, n, kick)
@@ -297,10 +326,13 @@ class Engine:
                 f, a = cur.get(k, (0.0, 0.0))
                 f0, a0 = self.prev.get(k, (f, 0.0))
                 st.glide(mix, n, f0 if a0 > 0 else f, a0, f, a)
+            if a > 0:
+                p = played.setdefault(st.pan, {})
+                p[st.dev["effect"]] = max(p.get(st.dev["effect"], 0), int(round(min(a, 100))))
             if a > levels.get(st.pan, [0])[0]:
                 levels[st.pan] = [int(round(min(a, 100))), st.dev["effect"]]
         self.prev = cur
-        self.levels = levels
+        self.levels, self.played = levels, played
         return replay._pcm(mix)
 
     def step(self):
@@ -321,8 +353,8 @@ class Engine:
             self.out = None
         if self.out is None:
             self.wrote = None
+            self.levels, self.played = {}, {}
             if not (loud and self.devid and now > self.retry):
-                self.levels = {}
                 return False
             if self.devid not in {s["name"] for s in shakers.sinks()}:
                 self.state, self.retry = "no card", now + 10.0  # never let PulseAudio pick the speakers
@@ -366,6 +398,9 @@ class Engine:
                "synth_ms": round(1000 * st["synth"] / st["blocks"], 2) if st["blocks"] else None,
                "synth_max_ms": round(1000 * st["synth_max"], 2), "late_blocks": st["late"],
                "block_ms": BLOCK * 1000, "latency_ms": None, "levels": self.levels, "priority": PRIORITY}
+        if self.pedals is not None:
+            p = self.pedals.snapshot()
+            out["pedals"] = {"port": p.get("port"), "playing": p.get("playing", []), "error": p.get("error")}
         if self.out is not None:
             try:
                 out["latency_ms"] = round(1000 * (self.out.latency() + BLOCK), 1)
@@ -408,8 +443,12 @@ class Engine:
             except Exception:  # noqa: BLE001 - keep the shakers alive
                 log.exception("engine step")
                 played = False
+            try:
+                self.feedback()
+            except Exception:  # noqa: BLE001
+                log.exception("feedback")
             if not played:
-                time.sleep(0.05)
+                time.sleep(0.05 if self.state != "playing" else 0.01)  # no card: still feed the pedals often
             now = time.monotonic()
             if now - last_status >= 1.0:
                 last_status = now
@@ -492,7 +531,7 @@ def main():
     PRIORITY = realtime()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # close the stream cleanly
     log.info("haptics engine: %d Hz, %.0f ms blocks, %.0f ms buffer, %s", RATE, BLOCK * 1000, LATENCY * 1000, PRIORITY)
-    eng = Engine()
+    eng = Engine(pedals=haptics.driver_thread, sender=felt.Sender())
     try:
         eng.run()
     except (KeyboardInterrupt, SystemExit):

@@ -64,7 +64,7 @@ def read_session(ref):
     con.close()
     d = {k: [] for k in ("ts", "x", "z", "lap", "speed", "rpm", "maxrpm", "gear", "throttle", "brake",
                          "vel_fwd", "vel_up", "abs", "rps", "terrain", "vel_x", "yaw",
-                         "clutch", "car_flags", "slip", "susp", "susp_vel", "acc", "acc_base")}
+                         "clutch", "car_flags", "slip", "susp", "susp_vel", "acc", "acc_base", "acc_glitch")}
     base = AccBase()
     k, cur_max, kf, cur_flags = 0, 0, 0, 0
     for r in rows:
@@ -83,7 +83,8 @@ def read_session(ref):
         d["vel_up"].append(r[10] or 0.0); d["vel_fwd"].append(r[11] or 0.0); d["abs"].append(r[12] or 0)
         d["vel_x"].append(r[13] or 0.0); d["yaw"].append(r[14] or 0.0)
         acc = (r[16] or 0.0, r[17] or 0.0)
-        d["acc"].append(acc); d["acc_base"].append(base.update(acc, r[1]))
+        d["acc"].append(acc); d["acc_base"].append(base.update(acc, r[1], (r[13] or 0.0, r[11] or 0.0)))
+        d["acc_glitch"].append(base.glitch)
         d["rps"].append(rps.get(r[0], [0.0] * 4))
         d["terrain"].append(terrain.get(r[0], [None] * 4))
     return {"car": s["car"], "track": s["track"], "variation": s["variation"], **d}
@@ -188,22 +189,53 @@ class AccBase:
 
     def __init__(self):
         self.v, self.t = None, None
+        self.vel = None      # (local x, z velocity) of the previous sample, and its time
+        self.glitch = False  # whether the last sample was a glitch
+        self.key, self.last = None, None
 
-    def update(self, acc, t):
-        """The baseline the sample acc (at time t) is compared with; then acc joins it."""
+    def update(self, acc, t, vel=None, key=None):
+        """The baseline the sample acc (at time t) is compared with; then acc joins it.
+        vel: the sample's local (x, z) velocity, to tell a glitch from a real crash (see is_glitch).
+        key: the game's sample number; the same sample read again (the engine reads faster than AMS2 writes)
+        gets the same answer, and does not count twice."""
+        if key is not None and key == self.key:
+            return self.last
+        self.key = key
+        self.last = self._update(acc, t, vel)
+        return self.last
+
+    def _update(self, acc, t, vel):
         if self.v is None or t - self.t > 1.0:  # first sample, or after a pause
             self.v = acc
         prev = self.v
-        if math.hypot(acc[0] - prev[0], acc[1] - prev[1]) / G > IMPACT_GLITCH:
-            return prev  # a glitch: compared (and ignored by impact_play), never averaged in
+        jump = math.hypot(acc[0] - prev[0], acc[1] - prev[1])
+        self.glitch = jump / G > IMPACT_GLITCH and self.is_glitch(jump, t, vel)
+        if vel is not None:
+            self.vel = (tuple(vel), t)
+        if self.glitch:
+            return prev  # compared (and ignored by impact_play), never averaged in
         k = min(1.0, max(0.0, t - self.t) / self.TAU) if self.t is not None else 1.0
         self.v = (prev[0] + (acc[0] - prev[0]) * k, prev[1] + (acc[1] - prev[1]) * k)
         self.t = t
         return prev
 
+    def is_glitch(self, jump, t, vel):
+        """A huge reading is real when the velocity changed with it: a crash at 190 km/h read 52 g at 20 Hz and over
+        60 g at 100 Hz, losing 30 m/s in 50 ms. The 401 g glitch left the speed as it was. Without the velocity
+        (or the previous sample), any huge reading is a glitch."""
+        if vel is None or self.vel is None:
+            return True
+        (pvx, pvz), pt = self.vel
+        dt = t - pt
+        if not 0 < dt < 0.2:
+            return True
+        dv = math.hypot(vel[0] - pvx, vel[1] - pvz) / dt   # m/s² the velocity really changed by
+        return dv < 0.25 * jump
+
 
 G = 9.80665
-IMPACT_GLITCH = 60.0  # g: AMS2 sometimes reports one absurd sample (401 g at 59 km/h): not a hit
+IMPACT_GLITCH = 60.0  # g: past this a reading must come with a matching velocity change (AccBase.is_glitch): AMS2
+                      # sometimes reports one absurd sample (401 g at 59 km/h, speed unchanged)
 # where each wheel is, as (forward, left)
 WHEEL_DIR = {"FL": (1, 1), "FR": (1, -1), "RL": (-1, 1), "RR": (-1, -1)}
 
@@ -217,7 +249,7 @@ def impact_play(dev, data, i):
     m = math.hypot(dx, dz)
     th = float(dev.get("threshold", shakers.IMPACT_DEFAULTS["threshold"]))
     full = float(dev.get("full", shakers.IMPACT_DEFAULTS["full"]))
-    if m <= th or m > IMPACT_GLITCH:
+    if m <= th or (m > IMPACT_GLITCH and data.get("acc_glitch", [True] * (i + 1))[i]):
         return 0.0
     x = max(0.01, min(1.0, (m - th) / max(0.5, full - th)))
     wheels = dev.get("wheels") or list(WHEEL_DIR)
@@ -385,11 +417,12 @@ def tick_data(snap, acc_base=None):
     lv = snap["local_vel"]
     la = snap.get("local_acc") or (0.0, 0.0, 0.0)
     acc = (la[0], la[2])
-    base = acc_base.update(acc, time.monotonic()) if acc_base is not None else acc
+    base = acc_base.update(acc, time.monotonic(), (lv[0], lv[2]), snap.get("seq")) if acc_base is not None else acc
+    glitch = acc_base.glitch if acc_base is not None else True
     return {"speed": [snap["speed"]], "rpm": [snap["rpm"]], "maxrpm": [snap["max_rpm"]],
             "rps": [list(snap["tyre_rps"])], "vel_fwd": [lv[2]], "vel_up": [lv[1]], "abs": [snap["abs"]],
             "terrain": [list(snap["terrain"])], "vel_x": [lv[0]], "yaw": [snap["ang_vel"][1]],
-            "susp_vel": [list(snap.get("susp_vel") or (0.0,) * 4)], "acc": [acc], "acc_base": [base]}
+            "susp_vel": [list(snap.get("susp_vel") or (0.0,) * 4)], "acc": [acc], "acc_base": [base], "acc_glitch": [glitch]}
 
 
 class Live:

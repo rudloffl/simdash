@@ -45,6 +45,7 @@ CLOSE_AFTER = 10.0    # s of quiet before the port is let go
 TEST_SECONDS = 3.0
 MAX_FRAMES = 12       # per tick
 PERIOD = 1 / 30
+ROAD_STEP = 0.05      # s: the sample spacing the road texture scale was tuned on
 
 
 def _fx(on, hz, pct, **extra):
@@ -249,6 +250,7 @@ class Effects:
         self.gear_until = 0.0
         self.gear_to = None
         self.susp = None
+        self.susp_t = 0.0
         self.road = 0.0
         self.why = {}         # (pedal, effect) -> why it plays, for the page
 
@@ -273,11 +275,15 @@ class Effects:
         slips = [x for x in (g["slips"] or []) if x is not None]
         moving = g["speed"] > 2
         # road texture: how much the suspension moves from one sample to the next
+        # per 20 Hz sample (the recorder's rate, which the scale below was tuned on), whatever the feed's rate:
+        # the haptics engine feeds 100 Hz, and the loop here runs at 30 Hz over either
         susp = g["susp"]
-        if susp and self.susp:
-            move = max(abs(a - b) for a, b in zip(susp, self.susp))
-            self.road = max(move, self.road * 0.7)
-        self.susp = susp
+        if susp and self.susp and susp != self.susp:
+            k = min(4.0, max(0.05, (now - self.susp_t) / ROAD_STEP))
+            move = max(abs(a - b) for a, b in zip(susp, self.susp)) / k
+            self.road = max(move, self.road * 0.7 ** k)
+        if susp != self.susp:
+            self.susp, self.susp_t = susp, now
         for pedal, fxs in s["pedals"].items():
             if not s["fitted"].get(pedal, True):
                 continue  # no motor on this pedal

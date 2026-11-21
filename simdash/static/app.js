@@ -1579,7 +1579,15 @@ async function initReplay(d) {
   replay.outline = out;
   hist.shakers = null;
   fetch(`/api/sessions/${hist.ref}/shakers`).then((r) => r.json()).then((sd) => {
-    if (sd.ts?.length && d.t0 === replay.t0) { hist.shakers = sd; paintSessionCar(); }
+    if (sd.ts?.length && d.t0 === replay.t0) {
+      // recorded pedal effects, sparse [[sample, strength %]], as {sample: {"brake:abs": strength}}
+      sd.pedalAt = {};
+      for (const [k, pts] of Object.entries(sd.pedals || {})) for (const [i, a] of pts) (sd.pedalAt[i] ??= {})[k] = a;
+      const t = $("#sess-car title");
+      if (t) t.textContent = sd.source === "felt" ? "What the shakers and pedals played at the replay time, as recorded by the haptics engine"
+        : "What each shaker played at the replay time, recomputed with the monocoque settings of that day";
+      hist.shakers = sd; paintSessionCar();
+    }
   });
   replay.t0 = d.t0;
   replay.t1 = d.t1;
@@ -1610,13 +1618,14 @@ async function seekReplay(offset) {
 }
 function paintSessionCar() {
   const sd = hist.shakers;
-  if (!sd) { paintShakerCar("#sess-car .spot", {}, false); return; }
+  if (!sd) { paintShakerCar("#sess-car .spot", {}, false); paintPedals("#sess-car .pedal-g", {}); return; }
   const t = replay.at ?? replay.t0;
   let lo = 0, hi = sd.ts.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (sd.ts[m] <= t) lo = m; else hi = m - 1; }
   const chan = {};
   for (const [ch, v] of Object.entries(sd.channels)) chan[ch] = { a: v.a[lo], fx: v.fx[lo] };
   paintShakerCar("#sess-car .spot", chan, !!replay.timer);
+  paintPedals("#sess-car .pedal-g", sd.pedalAt?.[lo] || {});
 }
 function drawReplay() {
   drawMap($("#replay-map"), replay.outline, replay.cars || [], false,
@@ -2283,10 +2292,11 @@ function buildShakerCar(svg, layout, channels) {
         <circle r="25"/><text>${channels[ch]}</text></g>`;
     });
   }
-  const pedals = svg === "#rp-car" || svg === "#live-car";
+  const pedals = svg === "#rp-car" || svg === "#live-car" || svg === "#sess-car";
   $(svg).innerHTML = body + spots + (pedals ? pedalGlyphs() : "");
   if (svg === "#rp-car") paintPedals();
   if (svg === "#live-car") paintPedals("#live-car .pedal-g", live.data?.pedals || {});
+  if (svg === "#sess-car") paintPedals("#sess-car .pedal-g", {});
 }
 
 // the three pedals in the footwell of the car top views (Haptics tab), lit while their haptics play
@@ -4625,7 +4635,7 @@ function paintPedalFx() {
   document.querySelectorAll("#rp-pfx .rp-fx").forEach((row) => {
     const x = det[row.dataset.k];
     row.classList.toggle("on", !!x);
-    row.querySelector(".v").textContent = x ? `${x.hz} Hz ${x.strength}%` : "–";
+    row.querySelector(".v").textContent = x ? `${x.hz != null ? x.hz + " Hz " : ""}${x.strength}%` : "–";
     row.querySelector(".bar i").style.width = x ? `${x.strength}%` : "0";
     row.querySelector(".why").textContent = x ? x.why : "";
   });

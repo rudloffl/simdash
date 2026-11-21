@@ -6,6 +6,9 @@ Drives the Moza **Pedal Haptic Feedback module** (Pit House's "Vibration module"
 telemetry, like Pit House does on Windows. The module stores nothing: simdash streams every effect while you drive,
 on the **Pedal haptics** tab (`/#haptics`).
 
+With **played by simdash** ticked (System tab), [simdash's haptics engine](shakers.md#simdashs-haptics-engine-instead-of-monocoque)
+sends the pedal effects, from the game's 100 Hz samples; otherwise the recorder does, at 20 Hz. Same settings either way.
+
 - Plug the module into its **own USB port** (a serial port `ttyACM*`, opened by boxflat's udev rule
   `99-boxflat.rules`), or **behind the wheelbase**. The USB port wins when both are there. Behind the base, simdash
   sends a query through the base's port and uses the extended address once the module answers (asked again every

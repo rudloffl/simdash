@@ -145,7 +145,14 @@ CAR_STATUS = [
 CHANGE_LOGS = {"player_state": PLAYER_STATE, "player_timing": PLAYER_TIMING,
                "event_state": EVENT_STATE, "weather": WEATHER}
 # tables whose rows hang off a tick, deleted with their session
-TICK_TABLES = ("telemetry", "wheel", "player_state", "player_timing", "event_state", "weather",
+FELT_SQL = """CREATE TABLE IF NOT EXISTS felt (
+    tick_id INTEGER NOT NULL REFERENCES tick,
+    out INTEGER NOT NULL,
+    effect TEXT NOT NULL,
+    strength INTEGER NOT NULL,
+    PRIMARY KEY (tick_id, out, effect)
+) WITHOUT ROWID;"""  # also run on day files from before it existed
+TICK_TABLES = ("telemetry", "wheel", "felt", "player_state", "player_timing", "event_state", "weather",
                "car_motion", "car_status")
 
 
@@ -234,6 +241,9 @@ CREATE TABLE IF NOT EXISTS wheel (
     slip REAL,  -- derived: wheel surface speed vs car speed, from learned radii (wheels.json)
     PRIMARY KEY (tick_id, wheel)
 ) WITHOUT ROWID;
+-- what simdash's haptics engine played (felt.py): the strongest effect per shaker channel (out 0-7) and
+-- each pedal effect (out 10 clutch, 11 brake, 12 throttle) since the previous tick; only what played
+{FELT_SQL}
 """ + "".join(f"""CREATE TABLE IF NOT EXISTS {table} (
     tick_id INTEGER PRIMARY KEY REFERENCES tick,
     {_cols(spec)}
@@ -390,6 +400,7 @@ def read_day_summary(day):
 
 
 def delete_session(con, sid):
+    con.execute(FELT_SQL)
     for table in TICK_TABLES:
         con.execute(f"DELETE FROM {table} WHERE tick_id IN (SELECT id FROM tick WHERE session_id=?)", (sid,))
     for table in ("tick", "lap", "participant"):

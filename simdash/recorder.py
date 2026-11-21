@@ -13,7 +13,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import edges, haptics, leds, replay, shakers, store
+from . import edges, engine, felt, haptics, leds, replay, shakers, store
 from .pcars2 import (GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
                      PIT_MODES, RACE_STATES, SESSION_TYPES, Pcars2Reader, _name, derived)
 
@@ -76,7 +76,7 @@ def log_changed(prev, vals, table, sector, now):
     return moved and period is not None and now - pt >= period
 WHEEL_FIELDS = [field for _, field in store.WHEEL]
 # insert order: ticks before the rows that point to them
-FLUSH_ORDER = ("tick", "telemetry", "wheel", *store.CHANGE_LOGS, "car_motion", "car_status")
+FLUSH_ORDER = ("tick", "telemetry", "wheel", "felt", *store.CHANGE_LOGS, "car_motion", "car_status")
 
 
 def gear_str(g):
@@ -198,6 +198,8 @@ class Recorder(threading.Thread):
         self.wheels = WheelSlip()
         self.mapper = edges.Mapper()  # track edge mapping, when armed on the Track edges tab
         self.shakers = replay.Live()  # what monocoque plays, for the live car
+        self.felt_now = None          # (shakers, pedals) the haptics engine played since the last tick
+        self.engine_seen = (0.0, False)
         self.sess = None
         self.con = None
         self.con_day = None
@@ -232,6 +234,7 @@ class Recorder(threading.Thread):
     # ---- thread ----
 
     def run(self):
+        felt.receiver.start()
         period = 1.0 / HZ
         next_t = time.monotonic()
         while not self.stop_event.is_set():
@@ -290,6 +293,8 @@ class Recorder(threading.Thread):
         slips = self.wheels.update(snap) if gs == GAME_PLAYING else None
         speed_kmh = snap["speed"] * 3.6
 
+        took = felt.receiver.take()  # every tick, so a pause does not carry old peaks over
+        self.felt_now = took if gs == GAME_PLAYING else None
         trace_row = None
         if gs == GAME_PLAYING:
             if mapping:
@@ -309,6 +314,9 @@ class Recorder(threading.Thread):
         live = self.build_live(snap, player, der, slips, gs)
         try:
             live["shakers"] = self.shakers.update(snap, now) if gs == GAME_PLAYING else {}
+            if self.felt_now:
+                live["shakers"] = felt.strongest(self.felt_now[0])  # what the engine really played
+                live["pedals"] = self.felt_now[1]
         except Exception:  # never let the shaker view stop the recording
             log.exception("live shakers")
             live["shakers"] = {}
@@ -317,15 +325,25 @@ class Recorder(threading.Thread):
                 leds.driver_thread.feed(snap)  # shift light, when simdash drives the wheel LEDs
             except Exception:
                 log.exception("wheel LEDs")
-            try:
-                haptics.driver_thread.feed(snap, slips)  # Moza pedal haptics
-            except Exception:
-                log.exception("pedal haptics")
-            # what the pedals play now (one tick behind the feed), for the live car
-            det = haptics.driver_thread.snapshot().get("detail") or {}
-            live["pedals"] = {k: v.get("strength", 0) for k, v in det.items()}
+            if not self.engine_running():  # the haptics engine drives the pedals itself, at 100 Hz
+                try:
+                    haptics.driver_thread.feed(snap, slips)  # Moza pedal haptics
+                except Exception:
+                    log.exception("pedal haptics")
+                # what the pedals play now (one tick behind the feed), for the live car
+                det = haptics.driver_thread.snapshot().get("detail") or {}
+                live["pedals"] = {k: v.get("strength", 0) for k, v in det.items()}
         self.set_live(live, trace_row)
         return True
+
+    def engine_running(self):
+        """Whether simdash's haptics engine runs (looked at every 2 s)."""
+        t, running = self.engine_seen
+        now = time.monotonic()
+        if now - t > 2.0:
+            running = engine.read_status() is not None
+            self.engine_seen = (now, running)
+        return running
 
     # ---- sessions ----
 
@@ -457,6 +475,8 @@ class Recorder(threading.Thread):
             sl = slips or [None] * 4
             for w in range(4):
                 s.rows["wheel"].append((tid, w, *[raw[f][w] for f in WHEEL_FIELDS], sl[w]))
+            if self.felt_now:
+                s.rows["felt"].extend(felt.rows(tid, *self.felt_now))
 
         # change logs: a row only when something differs from the last one written (see VOLATILE)
         for table, make in CHANGE_LOG_ROWS.items():

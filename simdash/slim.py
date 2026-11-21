@@ -195,6 +195,7 @@ def slim_day(day, pbs=None):
     con = sqlite3.connect(path)
     try:
         con.execute("PRAGMA journal_mode=DELETE")
+        con.execute(store.FELT_SQL)  # day files from before the felt table
         if con.execute("SELECT 1 FROM sqlite_master WHERE name='slimmed'").fetchone():
             return before, before
         ts = dict(con.execute("SELECT id, ts FROM tick"))
@@ -210,6 +211,9 @@ def slim_day(day, pbs=None):
                 args = (lo, hi, *keep)
                 con.execute(f"DELETE FROM wheel WHERE tick_id IN ({light})", args)
                 con.execute(f"DELETE FROM telemetry WHERE tick_id % {TICK_STEP} != 0 AND tick_id IN ({light})", args)
+                # what was felt follows the samples kept
+                con.execute("DELETE FROM felt WHERE tick_id BETWEEN ? AND ? AND tick_id NOT IN "
+                            "(SELECT tick_id FROM telemetry WHERE tick_id BETWEEN ? AND ?)", (lo, hi, lo, hi))
             # other cars: positions at 1 Hz, every other 2 Hz sample, chosen by moment (not per car) so
             # every moment kept still has all the cars
             con.execute("""DELETE FROM car_motion WHERE tick_id IN (
@@ -245,9 +249,10 @@ def _write_summary(day):
         src.close()
     con = sqlite3.connect(tmp)
     try:
+        con.execute(store.FELT_SQL)
         with con:
             con.execute("CREATE TEMP TABLE first_tick AS SELECT MIN(id) AS id FROM tick GROUP BY session_id")
-            for t in ("telemetry", "wheel", "car_motion", "car_status", "player_timing", "player_state"):
+            for t in ("telemetry", "wheel", "felt", "car_motion", "car_status", "player_timing", "player_state"):
                 con.execute(f"DELETE FROM {t}")
             for t in ("event_state", "weather"):
                 con.execute(f"DELETE FROM {t} WHERE tick_id NOT IN (SELECT id FROM first_tick)")
