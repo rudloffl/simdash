@@ -33,9 +33,12 @@ class Sender:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         self.sock.setblocking(False)
 
-    def send(self, shakers, pedals):
+    def send(self, shakers, pedals, limiter=None):
         try:
-            self.sock.sendto(json.dumps({"sh": shakers, "pd": pedals}, separators=(",", ":")).encode(), self.path)
+            d = {"sh": shakers, "pd": pedals}
+            if limiter:
+                d["lim"] = limiter
+            self.sock.sendto(json.dumps(d, separators=(",", ":")).encode(), self.path)
         except OSError:
             pass  # simdash not running, or its queue full: nothing to wait for
 
@@ -49,6 +52,7 @@ class Receiver:
         self.at = 0.0       # monotonic time of the last datagram
         self.sh, self.pd = {}, {}   # peaks since the last take()
         self.last = ({}, {})        # the last datagram as it came
+        self.lim = {}               # the limiter's reduction per channel (%), last datagram
         self.thread = None
 
     def start(self):
@@ -76,6 +80,7 @@ class Receiver:
             with self.lock:
                 self.at = time.monotonic()
                 self.last = (sh, pd)
+                self.lim = d.get("lim") or {}
                 for ch, fxs in sh.items():
                     peak = self.sh.setdefault(ch, {})
                     for fx, a in fxs.items():
@@ -87,6 +92,11 @@ class Receiver:
         """The last datagram's ({channel: {effect: strength}}, {"pedal:effect": strength}), or None."""
         with self.lock:
             return self.last if self.active() else None
+
+    def limiter(self):
+        """{channel: % the engine's limiter takes off} now, {} when it does nothing or the engine is quiet."""
+        with self.lock:
+            return dict(self.lim) if self.active() else {}
 
     def active(self):
         return time.monotonic() - self.at < STALE

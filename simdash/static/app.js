@@ -60,7 +60,7 @@ function showTab(name) {
   if (name !== "genie" && pf.replay) stopPilotReplay();
   if (name !== "genie" && typeof gp !== "undefined" && gp.playing) gcPlayStop();
   if (name === "shakers" && !sh.dirty) loadShakers();
-  if (name === "shakers") loadHaptics(); else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
+  if (name === "shakers") { loadHaptics(); loadShaping(); } else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
   // drop a link's hash once its tab is left (#session=… belongs to history)
@@ -1876,6 +1876,7 @@ function renderShakers() {
   renderChannels();
   renderEffects();
   renderShakerState();
+  renderShaping();  // the Output card lists the placed shakers
 }
 
 function renderShakerState() {
@@ -2219,6 +2220,58 @@ $("#sh-save").onclick = async () => {
   $("#sh-note").textContent = d.running ? "Saved. monocoque is running: Restart monocoque in System to apply it now." : "Saved.";
 };
 addEventListener("beforeunload", (ev) => { if (sh.dirty) ev.preventDefault(); });
+
+// ---------- output shaping (haptics engine): master, per-shaker volume, limiter, ducking ----------
+const so = { s: null, timer: null };
+const SO_FIELDS = [["master", "Master", 0, 150, 1, "%"], ["ceiling", "Ceiling", 50, 100, 1, "%"],
+  ["release_ms", "Release", 20, 1000, 10, "ms"], ["duck", "Ducking", 0, 100, 5, "%"]];
+async function loadShaping() {
+  try { so.s = await (await fetch("/api/shakers/shaping")).json(); } catch { return; }
+  renderShaping();
+}
+function renderShaping() {
+  const s = so.s;
+  if (!s) return;
+  const field = ([k, label, min, max, step, unit]) => `<label>${label} (${unit})<span class="row">
+    <input type="range" min="${min}" max="${max}" step="${step}" value="${s[k]}" data-so="${k}">
+    <input type="number" min="${min}" max="${max}" step="${step}" value="${s[k]}" data-so="${k}"></span></label>`;
+  $("#so-fields").innerHTML = `<label>Limiter<span class="row"><input type="checkbox" data-so="limiter" ${s.limiter ? "checked" : ""}> on</span></label>`
+    + SO_FIELDS.map(field).join("");
+  const layout = shCar.layout || sh.layout || {};
+  const chs = Object.keys(layout).map(Number).sort((a, b) => a - b);
+  $("#so-channels tbody").innerHTML = chs.map((ch) => {
+    const l = layout[ch], g = s.gains[ch] ?? 100;
+    return `<tr data-ch="${ch}"><td>${ch} · ${esc(l.label || SPOT_NAME[l.spot] || "")}</td>
+      <td><span class="row"><input type="range" min="0" max="150" step="1" value="${g}" data-gain="${ch}">
+        <input type="number" min="0" max="150" step="1" value="${g}" data-gain="${ch}" style="width:64px"> %</span></td>
+      <td class="so-red num muted">–</td></tr>`;
+  }).join("") || `<tr><td colspan="3" class="muted">Place the shakers above first</td></tr>`;
+}
+function shapingPatch() {
+  const p = { gains: { ...so.s.gains } };
+  document.querySelectorAll("#so-fields [data-so]").forEach((el) => { p[el.dataset.so] = el.type === "checkbox" ? el.checked : +el.value; });
+  document.querySelectorAll("#so-channels input[type=number][data-gain]").forEach((el) => { p.gains[el.dataset.gain] = +el.value; });
+  return p;
+}
+$("#so-card").addEventListener("input", (e) => {
+  const k = e.target.dataset.so, ch = e.target.dataset.gain;
+  const sel = k ? `[data-so="${k}"]` : ch != null ? `[data-gain="${ch}"]` : null;
+  if (sel) document.querySelectorAll(`#so-card ${sel}`).forEach((el) => { if (el !== e.target && el.type !== "checkbox") el.value = e.target.value; });
+  clearTimeout(so.timer);
+  so.timer = setTimeout(async () => {
+    const r = await fetch("/api/shakers/shaping", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(shapingPatch()) });
+    if (r.ok) so.s = await r.json();
+  }, 300);
+});
+function paintLimiter(lim) {
+  document.querySelectorAll("#so-channels tr[data-ch]").forEach((tr) => {
+    const r = (lim || {})[tr.dataset.ch];
+    const td = tr.querySelector(".so-red");
+    td.textContent = r ? `−${r} %` : "–";
+    td.classList.toggle("muted", !r);
+    td.style.color = r ? (r > 30 ? "var(--critical)" : "var(--warning, var(--text))") : "";
+  });
+}
 
 // ---------- shaker replay: a recorded session felt on the shakers ----------
 // The server runs the clock and the sound; the page polls it and extrapolates between polls.
@@ -4697,6 +4750,7 @@ async function pollHaptics() {
   const playing = new Set(st.playing);
   hp.playing = st.playing;
   hp.detail = st.detail;
+  paintLimiter(st.limiter);
   paintPedals();
   paintPedalFx();
   document.querySelectorAll(".hp-fx").forEach((box) => box.querySelectorAll(".hp-row").forEach((row) =>

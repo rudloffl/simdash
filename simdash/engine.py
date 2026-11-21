@@ -18,6 +18,7 @@ synthesis time per block, the card's latency, and what each channel plays.
 """
 
 import ctypes
+import math
 import ctypes.util
 import fcntl
 import json
@@ -138,6 +139,57 @@ class PulseOut:
             self.s = None
 
 
+# ---------- output shaping: per-shaker volume, ducking, limiter ----------
+
+class Shaper:
+    """Applied to each block after the effects are summed (shakers.load_shaping() settings).
+
+    Limiter: each shaker's sum is kept under the ceiling by a smooth gain instead of being clipped (a clipped
+    sine turns into a harsh buzz and buries a knock under the rest). The block is computed before it is played,
+    so the gain drops at the start of the block that needs it, and recovers over release_ms.
+    Ducking (see Engine.synth): continuous effects give way while a knock or gear kick plays on the same shaker."""
+
+    def __init__(self):
+        self.g = [1.0] * 8          # limiter gain per channel
+        self.reduction = {}         # channel -> % the limiter takes off (feedback, status)
+        self.peak = [0.0] * 8       # highest block peak since the last status, before the limiter (x full scale)
+        self.set(shakers.load_shaping())
+
+    def set(self, s):
+        self.s = s
+        m = s["master"] / 100
+        self.gains = [m * s["gains"].get(str(c), 100) / 100 for c in range(8)]
+
+    def process(self, mix, n):
+        s = self.s
+        ceil = s["ceiling"] / 100
+        rel = 1 - math.exp(-BLOCK / (s["release_ms"] / 1000))
+        red = {}
+        for c in range(8):
+            gc = self.gains[c]
+            peak = max(abs(mix[8 * j + c]) for j in range(n)) * gc
+            if peak > self.peak[c]:
+                self.peak[c] = peak
+            g0 = self.g[c]
+            if s["limiter"]:
+                target = min(1.0, ceil / peak) if peak > 0 else 1.0
+                g1 = target if target < g0 else min(target, g0 + (1.0 - g0) * rel)
+            else:
+                g1 = 1.0
+            self.g[c] = g1
+            if g1 < 0.995:
+                red[str(c)] = round(100 * (1 - g1))
+            if g1 >= g0:  # recovering: glide up across the block
+                step = (g1 - g0) / n
+                for j in range(n):
+                    mix[8 * j + c] *= gc * (g0 + step * j)
+            else:         # turning down: at once, from the block's first sample
+                k = gc * g1
+                for j in range(n):
+                    mix[8 * j + c] *= k
+        self.reduction = red
+
+
 # ---------- the engine ----------
 
 def _mtime(p):
@@ -151,6 +203,8 @@ class Engine:
     def __init__(self, reader=None, out_factory=PulseOut, pedals=None, sender=None, inbox=None):
         self.reader = reader or Telemetry()
         self.inbox = inbox      # link.Inbox: replay and test sound and pedal commands from simdash
+        self.shaper = Shaper()
+        self.duck = [0.0] * 8   # how far each channel's continuous effects are ducked now (0..1)
         self.pedals = pedals    # haptics.Driver: the Moza pedals, fed from the same samples (main() passes it)
         self.sender = sender    # felt.Sender: what plays, back to simdash
         self.out_factory = out_factory
@@ -228,9 +282,14 @@ class Engine:
 
     def reload(self, now):
         self.checked = now
-        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS), _mtime(haptics.SETTINGS))
+        m = (_mtime(shakers.CONFIG), _mtime(shakers.OWN_EFFECTS), _mtime(haptics.SETTINGS), _mtime(shakers.SHAPING))
         if m == self.mtimes:
             return
+        if self.mtimes is None or m[3] != self.mtimes[3]:
+            self.shaper.set(shakers.load_shaping())
+            if self.mtimes is not None and m[:3] == self.mtimes[:3]:
+                self.mtimes = m
+                return  # only the shaping changed: the effects keep playing as they are
         if self.pedals is not None and (self.mtimes is None or m[2] != self.mtimes[2]):
             self.pedals.reload()
         self.mtimes = m
@@ -320,11 +379,28 @@ class Engine:
         if self.pedals is not None:
             pd = {k: v.get("strength", 0) for k, v in (self.pedals.snapshot().get("detail") or {}).items()}
         if self.state == "playing" or pd:
-            self.sender.send(self.played, pd)
+            self.sender.send(self.played, pd, self.shaper.reduction)
+
+    DUCK_RELEASE = 0.1  # s for ducked effects to come back after a knock
+
+    def _ducking(self, cur, kick):
+        """(before, now) duck level per channel: the continuous effects give way while a knock or gear kick
+        plays on their shaker (at once), and come back over DUCK_RELEASE."""
+        target = self.shaper.s["duck"] / 100
+        hit = set()
+        for k, st in enumerate(self.streams):
+            e = st.dev["effect"]
+            if (e == "Gear" and (kick or st.pulse is not None)) or (e in shakers.DUCKERS and cur.get(k, (0, 0))[1] > 0):
+                hit.add(st.pan)
+        before = list(self.duck)
+        rel = 1 - math.exp(-BLOCK / self.DUCK_RELEASE)
+        self.duck = [target if c in hit else d - d * rel for c, d in enumerate(self.duck)]
+        return before, self.duck
 
     def synth(self, cur, kick, n):
         mix = [0.0] * (8 * n)
         levels, played = {}, {}
+        d0, d1 = self._ducking(cur, kick)
         for k, st in enumerate(self.streams):
             if st.dev["effect"] == "Gear":
                 st.kick(mix, n, kick)
@@ -332,7 +408,11 @@ class Engine:
             else:
                 f, a = cur.get(k, (0.0, 0.0))
                 f0, a0 = self.prev.get(k, (f, 0.0))
-                st.glide(mix, n, f0 if a0 > 0 else f, a0, f, a)
+                if st.dev["effect"] in shakers.DUCKERS:
+                    st.glide(mix, n, f0 if a0 > 0 else f, a0, f, a)
+                else:
+                    c = st.pan
+                    st.glide(mix, n, f0 if a0 > 0 else f, a0 * (1 - d0[c]), f, a * (1 - d1[c]))
             if a > 0:
                 p = played.setdefault(st.pan, {})
                 p[st.dev["effect"]] = max(p.get(st.dev["effect"], 0), int(round(min(a, 100))))
@@ -342,6 +422,7 @@ class Engine:
         self.levels, self.played = levels, played
         if self.inbox is not None:
             self.inbox.mix_into(mix, n)  # a replay or test from simdash, over the live effects
+        self.shaper.process(mix, n)
         return replay._pcm(mix)
 
     def step(self):
@@ -410,6 +491,9 @@ class Engine:
                "synth_ms": round(1000 * st["synth"] / st["blocks"], 2) if st["blocks"] else None,
                "synth_max_ms": round(1000 * st["synth_max"], 2), "late_blocks": st["late"],
                "block_ms": BLOCK * 1000, "latency_ms": None, "levels": self.levels, "priority": PRIORITY}
+        out["limiter"] = self.shaper.reduction
+        out["peak"] = {str(c): round(p, 2) for c, p in enumerate(self.shaper.peak) if p > 0}
+        self.shaper.peak = [0.0] * 8
         if self.inbox is not None:
             out["queued_s"] = round(len(self.inbox.buf) / link.FRAME / RATE, 2)
         if self.pedals is not None:

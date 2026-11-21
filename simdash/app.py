@@ -478,6 +478,17 @@ def create_app(recorder=None):
         except OSError as e:
             raise HTTPException(500, str(e))
 
+    @app.get("/api/shakers/shaping")
+    def get_shaping():
+        return shakers.load_shaping()
+
+    @app.put("/api/shakers/shaping")
+    def put_shaping(d: dict):
+        try:
+            return shakers.save_shaping(d)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+
     @app.put("/api/shakers/layout")
     def save_shaker_layout(layout: dict[str, dict]):
         return shakers.save_layout(layout)
@@ -655,7 +666,7 @@ def create_app(recorder=None):
         if st.get("source") == "idle" and eng and eng[1]:  # the haptics engine drives the pedals
             st = {**st, "source": "engine", "playing": sorted(eng[1]),
                   "detail": {k: {"strength": a, "why": "simdash haptics engine"} for k, a in eng[1].items()}}
-        return {**st, "found": haptics.known_port()}
+        return {**st, "found": haptics.known_port(), "limiter": felt.receiver.limiter()}
 
     # ---- system: telemetry chain status and restarts ----
 

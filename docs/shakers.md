@@ -152,6 +152,24 @@ with the session (`felt` table: the strongest of each since the previous 20 Hz s
 is kept). The session's race replay then shows what was really played, with that day's settings and the
 fades, rather than a recomputation; sessions played by monocoque are still recomputed as below.
 
+### Output: limiter, ducking, volumes
+
+The engine adds up every effect on a shaker, and the sum can go past what the card can play: on a race of
+2026-11-20 the seat (Engine + Gear + Impact...) peaked at 2.5 times full scale and was clipped 1.4 % of the
+time, the corners 0.15 %. A clipped sine turns into a harsh buzz and hides a knock under the rest. The
+**Output** card on the Haptics tab (`shaping.json`, applied at once):
+
+- **Limiter** (on by default): a shaker whose sum would pass the **Ceiling** (95 %) is turned down smoothly
+  for that 10 ms block instead, and comes back over **Release** (150 ms). The table shows, live, how far each
+  shaker is turned down: often lit means its effects add up to too much (lower the loudest one).
+- **Ducking** (50 %): the continuous effects (Engine, slip, surfaces...) drop by this much on a shaker while a
+  knock (Impact) or gear kick plays on it, then come back over 100 ms, so the knock stands out.
+- **Volume** per shaker and **Master**, after the effects' own volumes.
+
+On that race this left no clipped sample; the limiter worked 16 % of the time on the seat (up to -54 %) and
+2-6 % on the corners. It costs nothing measurable (0.45 ms per 10 ms block, as before). Replays and tests
+played without the engine (own `pacat` stream) do not get it.
+
 ## Suspension (bumps)
 
 Played by simdash (monocoque never got AMS2's suspension through simapi): how fast the chosen wheels'

@@ -510,6 +510,44 @@ def save_layout(layout):
     return clean
 
 
+# ---------- output shaping (simdash's haptics engine only) ----------
+
+SHAPING = store.DATA_DIR / "shaping.json"
+# master: % on every shaker; gains: % per channel; limiter: turn a shaker down smoothly instead of clipping its sum
+# at ceiling % of full scale (recovering over release_ms); duck: % the continuous effects (Engine, slip, surfaces...)
+# give way on a shaker while a knock or gear kick (DUCKERS) plays on it
+SHAPING_DEFAULTS = {"master": 100, "gains": {}, "limiter": True, "ceiling": 95, "release_ms": 150, "duck": 50}
+DUCKERS = {"Impact", "Gear"}
+
+
+def _clean_shaping(d):
+    s = {**SHAPING_DEFAULTS, **{k: v for k, v in (d or {}).items() if k in SHAPING_DEFAULTS}}
+    s["master"] = max(0, min(150, int(round(float(s["master"])))))
+    s["gains"] = {str(c): max(0, min(150, int(round(float(g))))) for c, g in (s["gains"] or {}).items()
+                  if str(c) in {str(i) for i in range(8)}}
+    s["limiter"] = bool(s["limiter"])
+    s["ceiling"] = max(50, min(100, int(round(float(s["ceiling"])))))
+    s["release_ms"] = max(20, min(1000, int(round(float(s["release_ms"])))))
+    s["duck"] = max(0, min(100, int(round(float(s["duck"])))))
+    return s
+
+
+def load_shaping():
+    try:
+        return _clean_shaping(json.loads(SHAPING.read_text()))
+    except (OSError, ValueError, TypeError):
+        return _clean_shaping({})
+
+
+def save_shaping(d):
+    s = _clean_shaping({**load_shaping(), **(d or {})})
+    SHAPING.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SHAPING.with_suffix(".tmp")
+    tmp.write_text(json.dumps(s, indent=1))
+    tmp.replace(SHAPING)
+    return s
+
+
 # ---------- sound cards ----------
 
 def sinks():

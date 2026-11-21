@@ -536,6 +536,21 @@
       </div>
     </div>
   </div>
+  <div class="card" id="so-card">
+    <h3>Output <span class="right muted" id="so-note">simdash's haptics engine only · applies at once</span></h3>
+    <div class="fx-fields" id="so-fields"></div>
+    <div class="table-wrap"><table id="so-channels"><thead><tr>
+      <th>Shaker</th><th>Volume</th><th>Limiter now</th></tr></thead><tbody></tbody></table></div>
+    <div class="muted sh-help">
+      The engine adds up every effect on a shaker. <b>Limiter</b>: when the sum goes past <b>Ceiling</b>, that shaker
+      is turned down smoothly (back up over <b>Release</b>) instead of having its peaks cut flat, which feels like a
+      harsh buzz and hides a knock under the rest. <b>Ducking</b>: Engine, slip, surfaces and the other continuous
+      effects drop by this much on a shaker while a knock (Impact) or gear kick plays on it. <b>Volume</b> scales a
+      shaker (all its effects) after the effects' own volumes; <b>Master</b> scales them all. The limiter column
+      shows how far each shaker is being turned down right now: often lit means its effects add up to too much.
+      Not applied to replays and tests played without the engine.
+    </div>
+  </div>
   </details>
 
   <details class="card acc" id="hx-acc-pedals" open>
