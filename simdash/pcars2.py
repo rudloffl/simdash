@@ -333,6 +333,7 @@ def decode(buf):
         "s2": r["mCurrentSector2Time"],
         "s3": r["mCurrentSector3Time"],
         "flag": r["mHighestFlagColour"],
+        "flag_reason": r["mHighestFlagReason"],
         "pit_mode": r["mPitMode"],
         "car_flags": r["mCarFlags"],
         "fuel_level": r["mFuelLevel"],

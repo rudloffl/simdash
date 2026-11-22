@@ -390,7 +390,10 @@ function renderLive() {
     return;
   }
   const s = d.session, c = d.car, l = d.lap;
-  $("#session-line").innerHTML = `<b>${esc(s.type)}</b> · ${esc(s.track)} ${esc(s.variation)} · ${esc(s.car)}`
+  const fl = d.flag || {};
+  const flag = fl.colour && fl.colour !== "none" && !/^unknown|^\d/.test(fl.colour)
+    ? ` <span class="race-flag flag-${fl.colour.split(" ")[0]}${fl.colour.startsWith("double") ? " flag-yellow" : ""}" title="Race flag${fl.reason && fl.reason !== "none" ? ": " + esc(fl.reason) : ""}">⚑ ${esc(fl.colour)}${fl.reason && fl.reason !== "none" ? ` · ${esc(fl.reason)}` : ""}</span>` : "";
+  $("#session-line").innerHTML = flag + ` <b>${esc(s.type)}</b> · ${esc(s.track)} ${esc(s.variation)} · ${esc(s.car)}`
     + ` <span class="muted">(${esc(s.car_class)}) · air ${s.air_temp}° · track ${s.track_temp}°${s.rain > 0 ? " · rain " + Math.round(s.rain * 100) + "%" : ""}</span>`;
 
   $("#t-speed").textContent = Math.round(c.speed);

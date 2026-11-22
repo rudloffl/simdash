@@ -14,7 +14,7 @@ import time
 from collections import defaultdict, deque
 
 from . import edges, engine, felt, haptics, leds, replay, shakers, store
-from .pcars2 import (GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
+from .pcars2 import (FLAG_COLOURS, FLAG_REASONS, GAME_MENU_TICKING, GAME_PAUSED, GAME_PLAYING, GAME_STATES, PIT_IN_GARAGE,
                      PIT_MODES, RACE_STATES, SESSION_TYPES, Pcars2Reader, _name, derived)
 
 log = logging.getLogger("simdash.recorder")
@@ -312,6 +312,8 @@ class Recorder(threading.Thread):
                          round(player["x"], 1), round(player["z"], 1)]
 
         live = self.build_live(snap, player, der, slips, gs)
+        # the race flag shown to the player (AMS2's highest), for the Live page
+        live["flag"] = {"colour": _name(FLAG_COLOURS, snap["flag"]), "reason": _name(FLAG_REASONS, snap.get("flag_reason", 0))}
         try:
             live["shakers"] = self.shakers.update(snap, now) if gs == GAME_PLAYING else {}
             if self.felt_now:
