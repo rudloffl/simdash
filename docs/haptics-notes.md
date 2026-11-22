@@ -47,3 +47,24 @@ The engine now announces 2.5 ms with a 20 ms buffer: 28.5 ms measured in the eng
 
 The ~31 ms late writes of the first races were the status file: replacing a file on ext4 can wait for a disk
 flush. It is now written from a thread of its own into `/run/user/<uid>`.
+
+## 2026-11-21: a race with silent shakers (pedals fine, replay afterwards fine)
+
+The engine ran the whole race normally (950 s playing, 0 xruns, effects up to 100 % on every shaker in the
+`felt` table), so the sound was made and written; it didn't reach the shakers. Afterwards, with AMS2 closed,
+the engine path itself was fine: a test tone and a fake race came out of the card's monitor at the right level
+on all eight channels. What can make a healthy stream silent: PipeWire moves a stream to another output when
+its sink disappears, without the client noticing, and the 7.1 sink disappears when the card changes profile.
+This card ranks its digital (S/PDIF + input) profiles far above 7.1 (5565 against 1200), and WirePlumber's
+preferred default output was the card's S/PDIF output (`default.configured.audio.sink`), saved that day.
+
+Fixes:
+- `engine.CardGuard`: every 2 s (own thread, normal priority) checks with pactl that the engine's stream is on
+  the sink it was opened for; if that sink is gone the card is set back to its profile, then the stream is
+  moved back. Logged as `card guard: …` in `~/.local/state/simdash-haptics.log`, counted in the status
+  (`card_guard`). Tested by hand: stream moved to the speakers → back in < 2 s; card switched to
+  `output:iec958-stereo+input:analog-stereo` → 7.1 restored and stream moved back in < 2 s.
+- WirePlumber's preferred default output set to the motherboard's analog output (backup of the old
+  `default-nodes` next to it), so nothing asks for the card's S/PDIF any more.
+
+Not proven which one happened in that race: the next one will say, in the log.

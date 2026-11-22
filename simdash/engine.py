@@ -219,6 +219,7 @@ class Engine:
         self.inbox = inbox      # link.Inbox: replay and test sound and pedal commands from simdash
         self.shaper = Shaper()
         self.pw = PwMonitor()
+        self.guard = CardGuard()
         self.sink_err = None    # the card's PipeWire error count when last looked at (xruns are its increases)
         self.duck = [0.0] * 8   # how far each channel's continuous effects are ducked now (0..1)
         self.pedals = pedals    # haptics.Driver: the Moza pedals, fed from the same samples (main() passes it)
@@ -324,6 +325,7 @@ class Engine:
         self.devid = devid
         if devid and self.out_factory is PulseOut:
             self.pw.start(devid)
+            self.guard.start(devid)
         log.info("%d effects on %s", len(devices), devid or "no card")
 
     def _diameters(self, car, now):
@@ -537,6 +539,9 @@ class Engine:
                 pass
             self._spent("card latency query", c0)
         out["buffer_ms"] = round(LATENCY * 1000)
+        last, fixes = self.guard.snapshot()
+        if fixes:
+            out["card_guard"] = {"fixes": fixes, "last": last[1], "at": last[0]}
         sink, stream = self.pw.snapshot()
         if sink:
             out["quantum"] = sink["quantum"]
@@ -725,6 +730,135 @@ class PwMonitor:
     def snapshot(self):
         with self.lock:
             return self.sink, self.stream
+
+
+def _pactl(args):
+    """pactl's plain text (its JSON drops accented descriptions), in English whatever the desktop's language."""
+    return subprocess.run(["pactl", *args], capture_output=True, text=True, timeout=3,
+                          env={**os.environ, "LC_ALL": "C.UTF-8"}).stdout
+
+
+class CardGuard:
+    """Keeps the haptics stream on the shaker card (a thread of its own, normal priority, every EVERY s).
+
+    PipeWire moves a stream without telling it when its sink disappears: when the card's profile changes
+    (the card's digital profiles rank far above 7.1, and the desktop's preferred default output was the card's
+    S/PDIF), the 7.1 sink is gone and the stream plays on to another output; writes keep succeeding, so the
+    engine looks healthy while the shakers are silent (2026-11-21: a race with no shakers, a replay afterwards
+    fine). Each look: is the stream on the sink it was opened for? If that sink is gone, put the card back on
+    its profile; then move the stream back. Each correction is logged and kept for the status."""
+
+    EVERY = 2.0
+
+    def __init__(self, run=_pactl):
+        self.run = run
+        self.devid = ""
+        self.thread = None
+        self.lock = threading.Lock()
+        self.last = None        # (time, what was corrected)
+        self.fixes = 0
+
+    def start(self, devid):
+        self.devid = devid
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, daemon=True, name="card-guard")
+            self.thread.start()
+
+    @staticmethod
+    def card_of(devid):
+        """alsa_output.<card>.<profile> -> (alsa_card.<card>, output:<profile>), else (None, None)."""
+        if not devid.startswith("alsa_output.") or "." not in devid[len("alsa_output."):]:
+            return None, None
+        name, _, prof = devid[len("alsa_output."):].rpartition(".")
+        return "alsa_card." + name, "output:" + prof
+
+    @staticmethod
+    def sinks(short):
+        """`pactl list short sinks` -> {name: index}."""
+        out = {}
+        for line in short.splitlines():
+            f = line.split("\t")
+            if len(f) >= 2 and f[0].isdigit():
+                out[f[1]] = f[0]
+        return out
+
+    @staticmethod
+    def my_inputs(text, pid):
+        """`pactl list sink-inputs` -> [(input index, sink index)] for this process's streams."""
+        out, cur = [], None
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("Sink Input #"):
+                cur = {"idx": s.split("#", 1)[1]}
+                out.append(cur)
+            elif cur is not None and s.startswith("Sink: "):
+                cur["sink"] = s.split(": ", 1)[1]
+            elif cur is not None and s.startswith("application.process.id = "):
+                cur["pid"] = s.split("=", 1)[1].strip().strip('"')
+        return [(c["idx"], c.get("sink")) for c in out if c.get("pid") == str(pid)]
+
+    @staticmethod
+    def active_profile(text, card):
+        """`pactl list cards` -> the active profile of that card."""
+        inside = False
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("Name: "):
+                inside = s[6:] == card
+            elif inside and s.startswith("Active Profile: "):
+                return s[len("Active Profile: "):]
+        return None
+
+    def check(self, pid=None):
+        """One look; returns what was corrected, or None."""
+        pid = pid or os.getpid()
+        devid = self.devid
+        mine = self.my_inputs(self.run(["list", "sink-inputs"]), pid)
+        if not mine:
+            return None             # the card isn't open (idle): nothing to guard
+        sinks = self.sinks(self.run(["list", "short", "sinks"]))
+        did = []
+        if devid not in sinks:
+            card, profile = self.card_of(devid)
+            if card is None:
+                return None
+            active = self.active_profile(self.run(["list", "cards"]), card)
+            did.append(f"the shaker card's output was gone (card on profile {active}): set back to {profile}")
+            self.run(["set-card-profile", card, profile])
+            for _ in range(10):
+                time.sleep(0.1)
+                sinks = self.sinks(self.run(["list", "short", "sinks"]))
+                if devid in sinks:
+                    break
+        want = sinks.get(devid)
+        if want is None:
+            if did:
+                did.append("the output did not come back")
+        else:
+            for idx, sink in mine:
+                if sink != want:
+                    did.append(f"the haptics stream was on sink #{sink} instead of the shaker card (#{want}): moved back")
+                    self.run(["move-sink-input", idx, devid])
+        if not did:
+            return None
+        what = "; ".join(did)
+        log.warning("card guard: %s", what)
+        with self.lock:
+            self.last, self.fixes = (time.time(), what), self.fixes + 1
+        return what
+
+    def snapshot(self):
+        with self.lock:
+            return self.last, self.fixes
+
+    def _run(self):
+        while True:
+            try:
+                if self.devid:
+                    self.check()
+            except (OSError, subprocess.SubprocessError):
+                pass
+            time.sleep(self.EVERY)
 
 
 class _Writer:
