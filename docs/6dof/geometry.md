@@ -10,22 +10,26 @@ Angles in the tab: roll + leans right, pitch + nose up, yaw + nose left.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `layout` | flat | **flat**: the two servos of a pair back to back on one flat face, shafts parallel, horns swinging outwards (like most kits: one flat bracket per pair). **radial**: each shaft points away from the centre (pairs splay apart; bodies end up facing the next pair). |
-| `base_r` | 58 mm | Base centre → the horns' plane (flat: the pair's face; radial: each shaft). |
-| `shaft_spacing` | 46 mm | Flat: between the two shafts of a pair. MG90 bodies plus their screw tabs back to back need ≈ 44.5 mm. |
-| `base_half` | 20° | Radial: half the angle between the two shafts of a pair. |
+| `base_r` | 62.4 mm | Base centre → each servo shaft (where it crosses the horns' plane), as in the CAD sketch. |
+| `base_angle` | 43.3° | Angle, seen from the centre, between the two shafts of a pair. Flat: the shafts are 2·`base_r`·sin(`base_angle`/2) apart (MG90 bodies plus their screw tabs back to back need ≈ 44.5 mm) and the pair's face is `base_r`·cos(`base_angle`/2) from the centre. |
 | `plat_r` | 46 mm | Platform centre → rod ball joint. |
-| `plat_half` | 24° | Half the angle between the two joints of a platform pair. Platform pairs sit 60° from base pairs. |
-| `horn` | 18 mm | Shaft → rod hole on the horn. Longer = faster, bigger moves, less resolution and torque. |
+| `plat_angle` | 48° | Angle between the two joints of a platform pair. Platform pairs sit 60° from base pairs. |
 | `rod` | 90 mm | Ball centre to ball centre. |
+| `horn` | 18 mm | Shaft → rod hole on the horn. Longer = faster, bigger moves, less resolution and torque. |
+| `horns` | out | **out**: the horns of a pair point away from each other. **in**: they point at each other, so the horn-end ball joints sit close together (2·`base_r`·sin(`base_angle`/2) − 2·`horn` apart at home). |
+| `mount` | lying | The servo bodies; the shafts are horizontal either way, so the motion is identical. **lying**: length along the horn's swing (flat pairs need ≈ 44.5 mm between shafts; shaft axis ≈ 7 mm above the plate, or more if the horn swung down needs it). **upright**: standing on end, shaft near the top: only the 12.2 mm body width along the swing (flat pairs need ≈ 13.2 mm), tabs pointing up and down, shaft axis ≈ 22.8 mm above the plate. The design panel and the base SVG give the shaft height. |
 | `first_pair` | 0° | Where servos 0–1 sit (0 = under the nose, so pitch and roll are symmetric left/right). |
-| `servo_limit` | 60° | Horn travel allowed each way from horizontal (horn and rod must not hit the body or the base). |
+| `home_angle` | 0° | Horn angle at home, from horizontal (+ = horn tip up). Every horn sits there when the platform is at home; the home height and the ball studs' directions follow. |
+| `stroke` | 60° | How far each servo may turn each way from `home_angle` (e.g. 30 ± 35 = −5° … +65°; horn and rod must not hit the body or the base). |
 | `transmission_min_deg` | 35° | Horn–rod angle kept within 35–145°. Near 0 or 180 the leg toggles: the horn turns, the platform barely moves, loads spike. 99° at home with the defaults (90 is ideal). |
 | `joint_max_deg` | 30° | Each ball joint's swivel from its home direction, at the horn end and at the platform end (typical RC rod ends). |
 
-The three servo pairs are 120° apart and the horns of a pair point away from each other. In the flat layout
+The three servo pairs are 120° apart; the horns of a pair point away from each other or, with `horns` = in, at each other. In the flat layout
 both horns swing along the pair's face; in the radial one each swings in a plane tangent to the base circle and
 each body runs from its shaft towards the next pair. Settings saved before the flat layout existed (2026-11-21)
-stay radial.
+stay radial. Settings saved before 2026-11-22 (`base_r` to the pair's face + `shaft_spacing`, half-angles `base_half` / `plat_half`, `servo_limit` = travel from horizontal) are read as the same platform in today's terms.
+
+The 1:1 SVGs (Base / Platform buttons) carry the same dimensions in green (radius, angle within a pair, 120°/60° between pairs, distance between the shafts and between the horn balls, horn length) and list every point's x, y, z under the drawing, ready to type into the CAD sketch.
 
 With the defaults (flat): home height 86.4 mm (shafts to platform joints), rods lean 16° from vertical, and each
 axis alone reaches about ±23 mm surge/sway, ±9 mm heave, ±11° roll, ±12.5° pitch, ±30° yaw with the joint
@@ -34,7 +38,7 @@ limits (±35 mm, ±15 mm, ±19.5°, ±22°, ±49° without them). The tab recomp
 ## Limits
 
 A pose is allowed (`motion.why_not` / `within`, used by the reach table, the cueing and the tab) when every
-servo reaches it within `servo_limit`, every horn–rod angle stays within `transmission_min_deg`…180−that, and
+servo reaches it within `home_angle` ± `stroke`, every horn–rod angle stays within `transmission_min_deg`…180−that, and
 every ball joint swivels less than `joint_max_deg` from its home direction:
 
 - at the platform end the stud turns with the platform: the rod is seen in the platform's frame;
@@ -78,3 +82,21 @@ Rotation: R = Rz(yaw) · Ry(−pitch) · Rx(roll), about the platform centre at 
 
 Things that matter more than they look: all six rods exactly the same length; horns fitted as close to
 horizontal as the splines allow (the rest is trimmed in calibration); no slop in the ball joints.
+
+## Servo angles and pulses
+
+Angles are the horn's, from horizontal, + = tip up. At home every horn sits at `home_angle`; a pose is refused
+when a servo would leave `home_angle` ± `stroke`. Calibration stays three points per servo measured from
+horizontal (level, +45°, −45°): the home pulse and all others are interpolated from them (beyond ±45° the
+nearest slope carries on). While calibrating, the servos not under test hold their home pulse. The standalone
+demo file stores its steps from the home pulses, so ±127 steps of 4 µs cover the stroke wherever home is.
+
+## Driving the servos directly
+
+"Move it" has two modes. **Platform pose** sets x, y, z, roll, pitch, yaw and each servo follows (inverse
+kinematics). **Servos directly** sets each horn's angle from home within the stroke and the platform follows:
+`motion.fk` finds the pose by Newton steps on the inverse kinematics, starting from the last pose (a big jump
+is walked in small steps), and `motion.solve_servos` applies the same limits as a pose before anything is sent
+(`POST /api/motion/servos`). Moving one servo alone shows how stiff each axis is: on a geometry whose servos
+barely change with yaw, one servo turning a degree swings the platform round by tens of degrees and soon
+leaves its reach. Switching mode carries the platform over (the pose's servo angles, or the servos' pose).

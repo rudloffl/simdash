@@ -621,6 +621,23 @@ def create_app(recorder=None):
         r["link"] = motion.link.status()
         return r
 
+    @app.post("/api/motion/servos")
+    def motion_servos(body: dict):
+        """The servos driven directly: {"offsets": 6 angles in deg from home, "guess": the last pose (to follow
+        it), optional unsaved "settings"} -> like /api/motion/pose, with the pose the platform takes. Sent to
+        the pyboard when armed and the platform can sit there within every limit."""
+        try:
+            s = motion.load()
+            for k in ("geometry", "servos"):
+                s[k].update({kk: v for kk, v in ((body.get("settings") or {}).get(k) or {}).items() if kk in s[k]})
+            r = motion.solve_servos(body.get("offsets") or [0] * 6, s, body.get("guess"))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        if r["ok"] and not motion.player.playing:
+            motion.link.send(r["pulse"])
+        r["link"] = motion.link.status()
+        return r
+
     @app.post("/api/motion/replay")
     async def motion_replay(body: dict):
         """{action: load (ref) | play (speed) | pause | seek (ts) | stop}"""
@@ -689,17 +706,21 @@ def create_app(recorder=None):
 
     @app.post("/api/motion/raw")
     def motion_raw(body: dict):
-        """Calibration: servo i at a given pulse, the others at their level pulse (clamped, armed only)."""
+        """Calibration: servo i at a given pulse, the others at their home pulse (clamped, armed only)."""
         try:
             i, us = int(body["servo"]), int(body["us"])
         except (KeyError, TypeError, ValueError):
             raise HTTPException(400, "servo and us")
-        sv = motion.settings()["servos"]
+        st = motion.settings()
+        sv = st["servos"]
         if not 0 <= i < 6:
             raise HTTPException(400, "servo 0-5")
         if motion.player.playing:
             raise HTTPException(409, "a course is playing")
-        p = list(sv["center_us"])
+        try:
+            p = motion.solve({}, st)["pulse"]   # the others at home
+        except ValueError:
+            p = list(sv["center_us"])
         p[i] = max(sv["min_us"], min(sv["max_us"], us))
         motion.link.send(p)
         return {"pulse": p, "link": motion.link.status()}

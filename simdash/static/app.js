@@ -4968,11 +4968,11 @@ const MO_AXES = [
   { k: "yaw", name: "Yaw (nose left +)", unit: "°", max: 45, step: 0.5 },
 ];
 const MO_GEO = [
-  ["base_r", "Base: centre to horns' plane", 30, 150, 0.5], ["shaft_spacing", "Shafts in a pair (flat)", 20, 120, 0.5],
-  ["base_half", "Base pair half-angle (radial)", 3, 50, 0.5],
-  ["plat_r", "Platform radius (joints)", 20, 150, 0.5], ["plat_half", "Platform pair half-angle", 0, 55, 0.5],
-  ["horn", "Horn length", 8, 40, 0.5], ["rod", "Rod length", 30, 250, 0.5],
-  ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["servo_limit", "Horn travel ±", 10, 90, 1],
+  ["base_r", "Base radius (centre to servo shafts)", 20, 200, 0.1], ["base_angle", "Base: angle between the shafts of a pair", 1, 119, 0.1],
+  ["plat_r", "Platform radius (centre to ball joints)", 20, 200, 0.1], ["plat_angle", "Platform: angle between the joints of a pair", 0, 119, 0.1],
+  ["rod", "Rod length (ball to ball)", 30, 250, 0.1], ["horn", "Horn length (shaft to ball)", 5, 50, 0.1],
+  ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["home_angle", "Horn angle at home (° from horizontal, + = up)", -60, 60, 0.5],
+  ["stroke", "Servo stroke ± from home (°)", 5, 90, 0.5],
   ["transmission_min_deg", "Horn–rod angle kept ≥ (and ≤ 180 −)", 0, 60, 1], ["joint_max_deg", "Ball joint swivel max", 10, 90, 1],
 ];
 // the 6DOF tab's folds: open or closed remembered (Move it open by default)
@@ -4984,6 +4984,7 @@ for (const [id, key, dflt] of [["#mo-acc-cue", "moAccCue", false], ["#mo-acc-mov
 }
 // var: showTab() runs on page load, before this part of the script, and must see it as not set up yet
 var mo = { s: null, d: null, pose: { x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0 }, last: null, link: null,
+  mode: pref.get("moMode", "pose"), off: [0, 0, 0, 0, 0, 0],
   busy: false, again: false, az: pref.get("moAz", -35), el: pref.get("moEl", 28), demo: null, saveT: null, wiring: false };
 
 async function loadMotion() {
@@ -5007,14 +5008,45 @@ function moField(id, label, min, max, step, val) {
   return `<label>${esc(label)}<div class="row"><input type="range" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${val}">`
     + `<input type="number" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${val}"></div></label>`;
 }
+// "Move it": the six pose axes, or (servos directly) one horn angle per servo, from home within the stroke
+function buildMoveFields() {
+  document.querySelectorAll("#mo-mode button").forEach((b) => b.classList.toggle("on", b.dataset.m === mo.mode));
+  if (mo.mode === "servos") {
+    const st = mo.s.geometry.stroke, h = mo.s.geometry.home_angle ?? 0;
+    $("#mo-axes").innerHTML = mo.off.map((v, i) => moField(`s${i}`, `Servo ${i}, ° from home (${h}°)`, -st, st, 0.5, v)).join("")
+      + `<div class="fx-hint">Each horn goes where you put it; the platform follows (drawn in the view). Nothing is sent `
+      + `while the platform can't sit there or a joint is past its limit: the line above the view says why.</div>`;
+  } else {
+    $("#mo-axes").innerHTML = MO_AXES.map((a) => moField(a.k, `${a.name}, ${a.unit}`, -a.max, a.max, a.step, mo.pose[a.k])).join("");
+  }
+}
+$("#mo-mode").onclick = (e) => {
+  const m = e.target.dataset.m;
+  if (!m || m === mo.mode) return;
+  stopMotionDemo();
+  // carry the platform over: pose -> the servos' angles now; servos -> the pose they make (when there is one)
+  const h = mo.s.geometry.home_angle ?? 0;
+  if (m === "servos" && mo.last?.alpha.every((a) => a != null)) mo.off = mo.last.alpha.map((a) => +(a - h).toFixed(1));
+  if (m === "pose" && mo.last?.ok) for (const a of MO_AXES) mo.pose[a.k] = +(+mo.last.pose[a.k]).toFixed(1);
+  mo.mode = m;
+  pref.set("moMode", m);
+  buildMoveFields();
+  sendPose();
+};
 function buildMotionForms() {
-  $("#mo-axes").innerHTML = MO_AXES.map((a) => moField(a.k, `${a.name}, ${a.unit}`, -a.max, a.max, a.step, mo.pose[a.k])).join("");
+  buildMoveFields();
   const g = mo.s.geometry, sv = mo.s.servos, car = mo.s.car;
   const flat = g.layout === "flat";
   $("#mo-geo").innerHTML = `<label>Servo pairs<select data-k="layout">`
     + `<option value="flat"${flat ? " selected" : ""}>Back to back on a flat face (like kits)</option>`
     + `<option value="radial"${flat ? "" : " selected"}>Splayed, each shaft pointing out</option></select></label>`
-    + MO_GEO.filter(([k]) => k !== (flat ? "base_half" : "shaft_spacing")).map(([k, n, lo, hi, st]) => moField(k, n, lo, hi, st, g[k])).join("");
+    + `<label>Horns point<select data-k="horns">`
+    + `<option value="out"${g.horns === "in" ? "" : " selected"}>Away from each other (ball joints far apart)</option>`
+    + `<option value="in"${g.horns === "in" ? " selected" : ""}>At each other (ball joints close together)</option></select></label>`
+    + `<label>Servo bodies<select data-k="mount">`
+    + `<option value="lying"${g.mount === "upright" ? "" : " selected"}>Lying (length along the horn's swing)</option>`
+    + `<option value="upright"${g.mount === "upright" ? " selected" : ""}>Standing upright, shaft near the top (compact, taller)</option></select></label>`
+    + MO_GEO.map(([k, n, lo, hi, st]) => moField(k, n, lo, hi, st, g[k])).join("");
   lockGeometry();
   $("#mo-cal").innerHTML = moField("min_us", "Shortest pulse µs", 500, 1500, 10, sv.min_us) + moField("max_us", "Longest pulse µs", 1500, 2500, 10, sv.max_us);
   // three points per servo; each with a button that puts the servo there (armed), the others level
@@ -5042,12 +5074,15 @@ function moSync(box, e) {
 }
 $("#mo-axes").addEventListener("input", (e) => {
   const k = moSync($("#mo-axes"), e);
-  if (k) { mo.pose[k] = +e.target.value; if (!mo.cs?.playing) sendPose(); }
+  if (!k || e.target.value === "") return;
+  if (k[0] === "s") mo.off[+k.slice(1)] = +e.target.value;
+  else mo.pose[k] = +e.target.value;
+  if (!mo.cs?.playing) sendPose();
 });
 for (const [box, part] of [["#mo-geo", "geometry"], ["#mo-cal", "servos"], ["#mo-car", "car"]]) {
   $(box).addEventListener("input", (e) => {
-    if (e.target.dataset.k === "layout") {  // a different set of fields
-      mo.s.geometry.layout = e.target.value;
+    if (["layout", "horns", "mount"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
+      mo.s.geometry[e.target.dataset.k] = e.target.value;
       buildMotionForms();
       scheduleMotionSave();
       return;
@@ -5064,11 +5099,11 @@ function moSlope(sv, i) {
 }
 // the pulses ± horn travel needs, against the shortest / longest allowed (the board clamps there too)
 function renderMotionWarnings() {
-  const sv = mo.s.servos, lim = mo.s.geometry.servo_limit, out = [];
+  const sv = mo.s.servos, g = mo.s.geometry, h = g.home_angle ?? 0, st = g.stroke, out = [];
+  const pulse = (i, a) => { const c = sv.center_us[i]; return a >= 0 ? c + a * (sv.plus45_us[i] - c) / 45 : c - a * (c - sv.minus45_us[i]) / 45; };
   for (let i = 0; i < 6; i++) {
-    const c = sv.center_us[i], up = (sv.plus45_us[i] - c) / 45, down = (c - sv.minus45_us[i]) / 45;
-    const [lo, hi] = [c + lim * up, c - lim * down].sort((a, b) => a - b);
-    if (lo < sv.min_us || hi > sv.max_us) out.push(`servo ${i}: ±${lim}° needs ${Math.round(lo)}–${Math.round(hi)} µs, outside ${sv.min_us}–${sv.max_us}: the horn stops short`);
+    const [lo, hi] = [pulse(i, h - st), pulse(i, h + st)].sort((a, b) => a - b);
+    if (lo < sv.min_us || hi > sv.max_us) out.push(`servo ${i}: ${h - st}° to ${h + st}° needs ${Math.round(lo)}–${Math.round(hi)} µs, outside ${sv.min_us}–${sv.max_us}: the horn stops short`);
   }
   $("#mo-cal-warn").innerHTML = out.map((w) => `<div class="warn">${esc(w)}</div>`).join("");
 }
@@ -5115,8 +5150,12 @@ async function sendPose() {
   if (mo.busy) { mo.again = true; return; }
   mo.busy = true;
   try {
-    const r = await fetch("/api/motion/pose", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pose: mo.pose, settings: { geometry: mo.s.geometry, servos: mo.s.servos } }) });
+    const settings = { geometry: mo.s.geometry, servos: mo.s.servos };
+    const r = mo.mode === "servos"
+      ? await fetch("/api/motion/servos", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offsets: mo.off, guess: mo.last?.fk !== false ? mo.last?.pose : null, settings }) })
+      : await fetch("/api/motion/pose", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pose: mo.pose, settings }) });
     const d = await r.json();
     if (r.ok) { mo.last = d; mo.link = d.link; drawMotion(); renderMotionServos(); renderMotionLink(); }
     else { $("#mo-state").className = "bad"; $("#mo-state").textContent = d.detail; }
@@ -5134,18 +5173,29 @@ function renderMotionDesign() {
     + ` print the ball studs along it (blue on the 1:1 drawings)</dd>`
     + `<dt>Horn–rod angle at home</dt><dd>${d.transmission_home}° (90° is ideal)</dd>`
     + `<dt>Shafts in a pair</dt><dd${tight ? ' class="warn"' : ""}>${d.shaft_spacing} mm apart (centre to centre)`
-    + `${d.min_spacing ? (tight ? ` — MG90 bodies and tabs back to back need ${d.min_spacing} mm` : ` (bodies and tabs need ${d.min_spacing})`) : ""}</dd>`
+    + `${d.min_spacing ? (tight ? ` — MG90 bodies and tabs back to back need ${d.min_spacing} mm` : ` (bodies and tabs need ${d.min_spacing})`) : ""}`
+    + `${d.face_dist ? `; the pair's flat face is ${d.face_dist} mm from the centre` : ""}</dd>`
+    + `<dt>Shaft height</dt><dd>${d.shaft_height} mm from the base plate to the shaft axis (servos ${d.mount === "upright" ? "upright" : "lying"}, horn swung fully down included)</dd>`
+    + `<dt>Servos</dt><dd>horns at ${d.home_angle}° from horizontal at home, turning ±${d.stroke}°: `
+    + `from ${d.horn_range[0]}° to ${d.horn_range[1]}° (+ = up). The pulses come from the calibration (level, ±45°)</dd>`
+    + `<dt>Balls on the horns</dt><dd${d.ball_gap_min < 10 ? ' class="warn"' : ""}>`
+    + (d.ball_gap > 0 ? `${d.ball_gap} mm apart in a pair at home, ${d.ball_gap_min} mm at the closest over the stroke (centre to centre)`
+      : "the two horns of a pair meet somewhere in the stroke: shorter horns or a wider base angle")
+    + (d.ball_gap > 0 && d.ball_gap_min < 10 ? " — check your ball links fit side by side" : "")
+    + (d.horns === "in" ? "; horns point at each other: re-check +45° (up) per servo in Calibration" : "") + `</dd>`
     + `<dt>Joints in a pair</dt><dd>${d.joint_spacing} mm apart on the platform</dd>`;
   $("#mo-reach").innerHTML = MO_AXES.map((a) => `<tr><td>${esc(a.name.replace(/ \(.*/, ""))}</td>`
     + `<td class="r">−${d.reach[a.k][0]} ${a.unit}</td><td class="r">+${d.reach[a.k][1]} ${a.unit}</td></tr>`).join("");
 }
 
 function renderMotionServos() {
-  const d = mo.last, lim = mo.s.geometry.servo_limit;
+  // the bar: the stroke, home in the middle; the angle is from horizontal, then from home
+  const d = mo.last, h = mo.s.geometry.home_angle ?? 0, st = mo.s.geometry.stroke;
   $("#mo-servos").innerHTML = d.alpha.map((a, i) => {
-    const bad = a == null || Math.abs(a) > lim, f = a == null ? 0 : clamp(a / lim, -1, 1);
+    const bad = a == null || Math.abs(a - h) > st, f = a == null ? 0 : clamp((a - h) / st, -1, 1);
     const l = 50 + Math.min(0, f) * 50, w = Math.abs(f) * 50;
-    return `<tr><td>${i}</td><td class="r">${a == null ? "out of reach" : a.toFixed(1) + "°"}</td>`
+    const txt = a == null ? "out of reach" : `${a.toFixed(1)}°` + (h ? ` <span class="muted">(${a - h >= 0 ? "+" : "−"}${Math.abs(a - h).toFixed(1)})</span>` : "");
+    return `<tr><td>${i}</td><td class="r">${txt}</td>`
       + `<td style="width:40%"><div class="mo-bar${bad ? " bad" : ""}"><i style="left:${l}%;width:${w}%"></i></div></td>`
       + `<td class="r">${d.pulse[i]} µs</td></tr>`;
   }).join("");
@@ -5173,6 +5223,7 @@ $("#mo-arm").onclick = async (e) => {
 $("#mo-center").onclick = () => {
   stopMotionDemo();
   for (const a of MO_AXES) mo.pose[a.k] = 0;
+  mo.off = [0, 0, 0, 0, 0, 0];
   document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = 0));
   sendPose();
 };
@@ -5182,6 +5233,13 @@ $("#mo-demo").onclick = () => {
   const t0 = performance.now(), per = 3000;
   $("#mo-demo").textContent = "Stop";
   mo.demo = setInterval(() => {
+    if (mo.mode === "servos") {   // each servo in turn, a swing to half its stroke and back
+      const t = performance.now() - t0, i = Math.floor(t / per) % 6, s = Math.sin(2 * Math.PI * (t % per) / per);
+      mo.off = mo.off.map((_, k) => (k === i ? +(0.5 * s * mo.s.geometry.stroke).toFixed(2) : 0));
+      document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = mo.off[+el.dataset.k.slice(1)]));
+      sendPose();
+      return;
+    }
     const t = performance.now() - t0, i = Math.floor(t / per) % MO_AXES.length, a = MO_AXES[i];
     const reach = mo.d?.reach?.[a.k] || [a.max / 2, a.max / 2];
     const s = Math.sin(2 * Math.PI * (t % per) / per);
@@ -5207,6 +5265,10 @@ function drawMotion() {
   const d = mo.last, svg = $("#mo-view");
   if (!d || !svg.clientWidth) return;
   const W = svg.clientWidth, H = svg.clientHeight, az = mo.az * Math.PI / 180, el = mo.el * Math.PI / 180;
+  // the turn slider follows the camera however it moved (drag, preset, slider), in -180..180
+  const azn = Math.round(((mo.az % 360) + 540) % 360 - 180);
+  if (document.activeElement !== $("#mo-az")) $("#mo-az").value = azn;
+  $("#mo-az-v").textContent = `${azn}°`;
   const g = mo.s.geometry, car = mo.s.car, H0 = d.home_height;
   const raw = ([x, y, z]) => {
     const xr = x * Math.cos(az) - y * Math.sin(az), yr = x * Math.sin(az) + y * Math.cos(az);
@@ -5231,9 +5293,9 @@ function drawMotion() {
   out.push(line([0, 0, 0], [25, 0, 0], "ax") .replace('class="ax"', 'class="ax" stroke="var(--s-brake)"'));
   out.push(line([0, 0, 0], [0, 25, 0], "ax").replace('class="ax"', 'class="ax" stroke="var(--s-throttle)"'));
   out.push(line([0, 0, 0], [0, 0, 25], "ax").replace('class="ax"', 'class="ax" stroke="var(--s-speed)"'));
-  const lim = g.servo_limit;
+  const hm = g.home_angle ?? 0, st = g.stroke;
   d.legs.forEach((L, i) => {
-    const bad = d.alpha[i] == null || Math.abs(d.alpha[i]) > lim ? " bad" : "";
+    const bad = d.alpha[i] == null || Math.abs(d.alpha[i] - hm) > st ? " bad" : "";
     out.push(line(L.B, L.A, "horn" + bad), line(L.A, L.P, "rod" + bad));
     const [bx, by] = P(L.B);
     out.push(`<circle class="shaft" cx="${bx}" cy="${by}" r="3"/><text class="lbl" x="${bx + 5}" y="${by + 13}">${i}</text>`);
@@ -5254,17 +5316,79 @@ function drawMotion() {
   const depth = (f) => f.reduce((s, [x, y, z]) => s + (x * Math.sin(az) + y * Math.cos(az)) * Math.cos(el) - z * Math.sin(el), 0) / f.length;
   faces.sort((a, b) => depth(b) - depth(a)).forEach((f) => out.push(`<polygon class="car" points="${pts(f)}"/>`));
   out.push(`<polygon class="nose" points="${pts([W2([cl / 2, 0, z0 + ch + 0.5]), W2([cl / 2 - 18, 8, z0 + ch + 0.5]), W2([cl / 2 - 18, -8, z0 + ch + 0.5])])}"/>`);
+  // reference point: the platform's centre against where it sits at home. The path home -> centre is drawn
+  // leg by leg (x red, then y green, then z blue) plus straight; the platform's own axes turn with it, the
+  // home axes stay put (dotted), so roll / pitch / yaw show as the angle between the two
+  const AXC = ["var(--s-brake)", "var(--s-throttle)", "var(--s-speed)"];
+  const home = [0, 0, d.home_height], p = d.pose, tri = 22;
+  const leg1 = [p.x, 0, d.home_height], leg2 = [p.x, p.y, d.home_height];
+  [[home, leg1], [leg1, leg2], [leg2, t]].forEach(([a, b], i) => out.push(line(a, b, "ref-path").replace('class="ref-path"', `class="ref-path" stroke="${AXC[i]}"`)));
+  out.push(line(home, t, "ref-line"));
+  for (let i = 0; i < 3; i++) {
+    const e = [0, 0, 0]; e[i] = tri;
+    out.push(line(home, home.map((v, j) => v + e[j]), "ref-ghost").replace('class="ref-ghost"', `class="ref-ghost" stroke="${AXC[i]}"`));
+    out.push(line(t, W2(e), "ref-tri").replace('class="ref-tri"', `class="ref-tri" stroke="${AXC[i]}"`));
+  }
+  const [hx, hy] = P(home), [tx, ty] = P(t);
+  out.push(`<circle class="ref-home" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="5"/>`,
+    `<circle class="ref-dot" cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="3.5"/>`);
+  const f = (v, u) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}${u}`;
+  const dist = Math.hypot(p.x, p.y, p.z);
+  const rows = [
+    [["Δx", p.x, " mm", 0], ["Δy", p.y, " mm", 1], ["Δz", p.z, " mm", 2]],
+    [["roll", p.roll, "°", 0], ["pitch", p.pitch, "°", 1], ["yaw", p.yaw, "°", 2]],
+  ];
+  rows.forEach((r, j) => out.push(`<text class="ref-txt" x="8" y="${16 + 15 * j}">`
+    + r.map(([n, v, u, i]) => `<tspan fill="${AXC[i]}">${n}</tspan>\u2009${f(v, u)}`).join("\u2003\u2003") + `</text>`));
+  out.push(`<text class="ref-txt" x="8" y="46">${dist.toFixed(1)} mm from home</text>`);
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.innerHTML = out.join("");
 }
+// view presets (az, el): az 0 looks at the car's right side (nose to the right), -90 at the nose, el 90 from above
+const MO_VIEWS = { iso: [-35, 28], "iso-rear": [145, 28], front: [-90, 0], back: [90, 0], left: [180, 0], right: [0, 0], top: [0, 90] };
+function moViewName() {
+  const n = Object.keys(MO_VIEWS).find((k) => {
+    const [az, el] = MO_VIEWS[k];
+    return Math.abs(((mo.az - az) % 360 + 540) % 360 - 180) < 0.5 && Math.abs(mo.el - el) < 0.5;
+  });
+  return n || "custom";
+}
+$("#mo-view-pick").value = moViewName();
+$("#mo-az").addEventListener("input", (e) => {
+  cancelAnimationFrame(mo.viewAnim);
+  mo.az = +e.target.value;
+  $("#mo-view-pick").value = moViewName();
+  drawMotion();
+});
+$("#mo-az").addEventListener("change", () => pref.set("moAz", mo.az));
+$("#mo-view-pick").onchange = (e) => {
+  const to = MO_VIEWS[e.target.value];
+  if (!to) return;
+  // turn the short way round, eased over 400 ms
+  const az0 = mo.az, el0 = mo.el, daz = ((to[0] - az0) % 360 + 540) % 360 - 180, t0 = performance.now();
+  cancelAnimationFrame(mo.viewAnim);
+  const step = (now) => {
+    const f = Math.min(1, (now - t0) / 400), w = (1 - Math.cos(Math.PI * f)) / 2;
+    mo.az = az0 + daz * w; mo.el = el0 + (to[1] - el0) * w;
+    drawMotion();
+    if (f < 1) mo.viewAnim = requestAnimationFrame(step);
+    else { mo.az = to[0]; mo.el = to[1]; pref.set("moAz", mo.az); pref.set("moEl", mo.el); }
+  };
+  mo.viewAnim = requestAnimationFrame(step);
+};
 {
   let drag = null;
   const v = $("#mo-view");
-  v.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, az: mo.az, el: mo.el }; v.setPointerCapture(e.pointerId); });
+  v.addEventListener("pointerdown", (e) => {
+    cancelAnimationFrame(mo.viewAnim);   // grabbing the view stops a preset turning it
+    drag = { x: e.clientX, y: e.clientY, az: mo.az, el: mo.el };
+    v.setPointerCapture(e.pointerId);
+  });
   v.addEventListener("pointermove", (e) => {
     if (!drag) return;
     mo.az = drag.az + (e.clientX - drag.x) * 0.4;
-    mo.el = clamp(drag.el + (e.clientY - drag.y) * 0.3, -10, 89);
+    mo.el = clamp(drag.el + (e.clientY - drag.y) * 0.3, -10, 90);
+    $("#mo-view-pick").value = moViewName();
     drawMotion();
   });
   v.addEventListener("pointerup", () => { drag = null; pref.set("moAz", mo.az); pref.set("moEl", mo.el); });
@@ -5427,7 +5551,10 @@ function paintCourse(st, force = false) {
     // the platform shows the course's pose; the sliders follow
     mo.last = st.solve; mo.link = st.link;
     for (const a of MO_AXES) mo.pose[a.k] = st.solve.pose[a.k];
-    document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = (+mo.pose[el.dataset.k]).toFixed(1)));
+    const h = mo.s.geometry.home_angle ?? 0;
+    if (st.solve.alpha.every((x) => x != null)) mo.off = st.solve.alpha.map((x) => +(x - h).toFixed(1));
+    document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = el.dataset.k[0] === "s"
+      ? mo.off[+el.dataset.k.slice(1)] : (+mo.pose[el.dataset.k]).toFixed(1)));
     drawMotion(); renderMotionServos(); renderMotionLink();
   }
   paintCourseWhere();

@@ -728,6 +728,13 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .mo-view .nose { fill: var(--s-brake); }
 .mo-view .lbl { fill: var(--muted); font-size: 11px; }
 .mo-view .ax { stroke-width: 1.5; }
+.mo-view .ref-path { stroke-width: 1.5; stroke-dasharray: 4 3; }
+.mo-view .ref-line { stroke: var(--text); stroke-width: 1; stroke-dasharray: 2 3; }
+.mo-view .ref-tri { stroke-width: 2.5; stroke-linecap: round; }
+.mo-view .ref-ghost { stroke-width: 1.2; stroke-dasharray: 1.5 2.5; }
+.mo-view .ref-home { fill: none; stroke: var(--text); stroke-width: 1.5; }
+.mo-view .ref-dot { fill: var(--text); stroke: var(--surface); stroke-width: 1.5; }
+.mo-view .ref-txt { fill: var(--text-2); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 a.btn { display: inline-block; text-decoration: none; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
 a.btn:hover { border-color: var(--muted); }
 .mo-servos, .mo-reach { width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; border-collapse: collapse; }
@@ -792,6 +799,10 @@ a.btn:hover { border-color: var(--muted); }
 .mo-where-card .mo-map-car canvas { height: 380px; }
 .mo-where-card .mo-map-car .shaker-car { width: 140px; }
 @media (max-width: 600px) { .mo-where-card .mo-map-car { grid-template-columns: minmax(0, 1fr) 90px; } .mo-where-card .mo-map-car .shaker-car { width: 90px; } .mo-where-card .mo-map-car canvas { height: 260px; } }
+.mo-turn { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); margin: 6px 0 2px; }
+.mo-turn input { flex: 1; }
+.mo-turn span { min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
+.mo-view-pick { margin-left: 8px; font-size: 12px; font-weight: 400; padding: 2px 6px; }
 .mo-move-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .mo-move-bar .grow { flex: 1; }
 .mo-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }

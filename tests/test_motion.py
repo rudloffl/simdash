@@ -7,6 +7,7 @@ import pytest
 from simdash import motion
 
 G = dict(motion.DEFAULTS["geometry"])
+SPACING = 2 * G["base_r"] * math.sin(math.radians(G["base_angle"] / 2))   # between the shafts of a pair
 
 
 def test_home_is_all_horns_level():
@@ -48,7 +49,7 @@ def test_pulse_defaults_stay_off_the_end_stops():
     sv = motion.DEFAULTS["servos"]
     assert (sv["min_us"], sv["max_us"]) == (800, 2200)
     assert motion.pulse_warnings(motion.DEFAULTS) == []        # ±60° at 10 µs/° fits in 800-2200
-    wide = {"geometry": {**G, "servo_limit": 80.0}, "servos": sv}
+    wide = {"geometry": {**G, "stroke": 80.0}, "servos": sv}
     assert len(motion.pulse_warnings(wide)) == 6                # ±80° needs 700-2300: warned
 
 
@@ -83,7 +84,7 @@ def test_settings_cache_is_invalidated_by_save(tmp_path, monkeypatch):
 
 def test_near_toggle_and_joint_limits_are_rejected():
     # horn and rod nearly in line at z +17 mm (the review's case), other limits opened up to see it alone
-    only = {**G, "joint_max_deg": 180.0, "servo_limit": 90.0}
+    only = {**G, "joint_max_deg": 180.0, "stroke": 90.0}
     p = {"z": 17}
     assert "in line" in motion.why_not(motion.ik(p, only), only, p)
     assert motion.solve(p, motion.DEFAULTS)["ok"] is False
@@ -293,7 +294,8 @@ def test_flat_layout_has_parallel_shafts_in_a_pair():
     L = motion.legs({**G, "layout": "flat"})
     (b0, u0, _), (b1, u1, _) = L[0], L[1]
     assert u0[0] == pytest.approx(-u1[0]) and u0[1] == pytest.approx(-u1[1])   # horns swing apart along one line
-    assert math.dist(b0, b1) == pytest.approx(G["shaft_spacing"])
+    assert math.dist(b0, b1) == pytest.approx(SPACING)
+    assert math.hypot(*b0) == pytest.approx(G["base_r"]) and math.hypot(*b1) == pytest.approx(G["base_r"])
 
 
 def test_settings_saved_before_layouts_stay_radial(tmp_path, monkeypatch):
@@ -301,7 +303,29 @@ def test_settings_saved_before_layouts_stay_radial(tmp_path, monkeypatch):
     f = tmp_path / "motion.json"
     f.write_text(json.dumps({"geometry": {"base_r": 100.5, "base_half": 31.0}}))
     monkeypatch.setattr(motion, "SETTINGS", f)
-    assert motion.load()["geometry"]["layout"] == "radial"
+    g = motion.load()["geometry"]
+    assert g["layout"] == "radial" and g["base_r"] == 100.5 and g["base_angle"] == 62.0
+
+
+def test_old_flat_settings_keep_the_same_platform(tmp_path, monkeypatch):
+    import json
+    old = {"layout": "flat", "base_r": 58.0, "shaft_spacing": 46.0, "plat_r": 46.0, "plat_half": 24.0}
+    f = tmp_path / "motion.json"
+    f.write_text(json.dumps({"geometry": old}))
+    monkeypatch.setattr(motion, "SETTINGS", f)
+    g = motion.load()["geometry"]
+    assert "shaft_spacing" not in g and "plat_half" not in g and g["plat_angle"] == 48.0
+    (b0, _, _), (b1, _, _) = motion.legs(g)[:2]
+    assert b0 == pytest.approx((58.0, -23.0), abs=0.01) and b1 == pytest.approx((58.0, 23.0), abs=0.01)
+
+
+def test_svgs_carry_the_dimensions_and_coordinates():
+    for layout in ("flat", "radial"):
+        g = {**G, "layout": layout}
+        base, plat = motion.template_svg("base", g), motion.template_svg("platform", g)
+        assert f"R{g['base_r']:g}" in base and f"{g['base_angle']:g}°" in base and "shafts " in base and "balls " in base
+        assert f"horn {g['horn']:g}" in base and base.count("horn ball (") == 6
+        assert f"R{g['plat_r']:g}" in plat and f"{g['plat_angle']:g}°" in plat and plat.count("ball joint (") == 6
 
 
 def _body(**over):
@@ -347,3 +371,90 @@ def test_cueing_mode_is_saved_and_checked(tmp_path, monkeypatch):
     assert c["mode"] == "body" and c["slip_yaw"] == 1.5
     with pytest.raises(ValueError):
         motion.save({"cueing": {"mode": "rollercoaster"}})
+
+
+@pytest.mark.parametrize("layout", ["flat", "radial"])
+def test_horns_in_bring_the_horn_balls_together(layout):
+    out = {**G, "layout": layout, "horns": "out"}
+    inw = {**out, "horns": "in"}
+    for (b0, u0, p0), (b1, u1, p1) in zip(motion.legs(out), motion.legs(inw)):
+        assert b0 == b1 and p0 == p1 and u1 == pytest.approx((-u0[0], -u0[1]))
+    d_out, d_in = motion.design(out), motion.design(inw)
+    assert 0 < d_in["ball_gap"] < d_out["ball_gap"]
+    if layout == "flat":
+        assert d_in["ball_gap"] == pytest.approx(SPACING - 2 * G["horn"], abs=0.1)
+    assert all(abs(r["alpha"]) < 1e-9 for r in motion.ik({}, inw))
+    for r in motion.ik({"roll": 6, "pitch": -5, "y": 3}, inw):
+        assert math.dist(r["A"], r["P"]) == pytest.approx(G["rod"], abs=1e-6)
+    rc = motion.reach(inw)
+    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 5
+    assert "<svg" in motion.template_svg("base", inw)
+
+
+def test_crossing_horns_show_no_gap():
+    assert motion.design({**G, "horns": "in", "horn": SPACING / 2 + 2})["ball_gap"] == 0
+
+
+def test_horns_setting_is_checked(tmp_path, monkeypatch):
+    monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
+    assert motion.save({"geometry": {"horns": "in"}})["geometry"]["horns"] == "in"
+    with pytest.raises(ValueError):
+        motion.save({"geometry": {"horns": "sideways"}})
+
+
+def test_upright_servos_move_the_same_but_pack_tighter():
+    up = {**G, "mount": "upright"}
+    assert [r["alpha"] for r in motion.ik({"roll": 7, "z": 3}, up)] == [r["alpha"] for r in motion.ik({"roll": 7, "z": 3}, G)]
+    d_lying, d_up = motion.design(G), motion.design(up)
+    assert d_up["min_spacing"] < d_lying["min_spacing"] and d_up["shaft_height"] > d_lying["shaft_height"]
+    assert "upright" in motion.template_svg("base", up)
+
+
+def test_home_angle_puts_every_horn_there_and_limits_the_stroke_around_it():
+    g = {**G, "home_angle": 30.0, "stroke": 35.0}
+    assert all(r["alpha"] == pytest.approx(30.0, abs=1e-6) for r in motion.ik({}, g))
+    for r in motion.ik({"pitch": 6, "y": 4}, g):
+        assert math.dist(r["A"], r["P"]) == pytest.approx(g["rod"], abs=1e-6)
+    assert motion.h0(g) > motion.h0(G)                       # horns up lift the platform
+    narrow = {**g, "stroke": 5.0, "transmission_min_deg": 0, "joint_max_deg": 180}
+    assert "stroke" in motion.why_not(motion.ik({"z": 3}, narrow), narrow, {"z": 3})
+    rc = motion.reach(g)
+    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 3
+    d = motion.design(g)
+    assert d["horn_range"] == [-5.0, 65.0]
+
+
+def test_home_pulse_comes_from_the_calibration():
+    s = {**motion.DEFAULTS, "geometry": {**G, "home_angle": 30.0, "stroke": 35.0}}
+    sv = s["servos"]
+    assert motion.solve({}, s)["pulse"] == [round(motion.raw_pulse(i, 30.0, sv)) for i in range(6)]
+    assert motion.pulses([None] * 6, sv, 30.0) == motion.solve({}, s)["pulse"]
+
+
+def test_old_servo_limit_becomes_the_stroke(tmp_path, monkeypatch):
+    import json
+    f = tmp_path / "motion.json"
+    f.write_text(json.dumps({"geometry": {"layout": "flat", "servo_limit": 40.0}}))
+    monkeypatch.setattr(motion, "SETTINGS", f)
+    g = motion.load()["geometry"]
+    assert g["stroke"] == 40.0 and g["home_angle"] == 0.0 and "servo_limit" not in g
+
+
+@pytest.mark.parametrize("home", [0.0, 30.0])
+def test_fk_finds_the_pose_back_from_the_servo_angles(home):
+    g = {**G, "home_angle": home, "stroke": 35.0}
+    pose = {"x": 4, "y": -3, "z": 2, "roll": 3, "pitch": -2, "yaw": 2}
+    got = motion.fk([r["alpha"] for r in motion.ik(pose, g)], g)
+    assert all(got[ax] == pytest.approx(pose[ax], abs=1e-3) for ax in motion.AXES)
+
+
+def test_servos_driven_directly():
+    s = {**motion.DEFAULTS, "geometry": {**G, "home_angle": 30.0, "stroke": 35.0}}
+    r = motion.solve_servos([8] * 6, s)                   # all up together: straight up
+    assert r["ok"] and r["pose"]["z"] > 1 and abs(r["pose"]["x"]) < 1e-3
+    assert r["pulse"] == motion.pulses([38.0] * 6, s["servos"])
+    assert r["alpha"] == [38.0] * 6
+    r = motion.solve_servos([40, 0, 0, 0, 0, 0], s)
+    assert not r["ok"] and "stroke" in r["why"]
+    with pytest.raises(ValueError):
+        motion.solve_servos([0] * 5, s)
