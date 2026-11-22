@@ -68,3 +68,21 @@ Fixes:
   `default-nodes` next to it), so nothing asks for the card's S/PDIF any more.
 
 Not proven which one happened in that race: the next one will say, in the log.
+
+## 2026-11-21: corner shakers rebalanced (kerb, suspension)
+
+The Output card's "Continuous" column said the corners could reach 192-250 % (wheelspin + kerb + oversteer at
+their strongest together). Replaying two Brands Hatch races (2026-11-21:3 MINI, 2026-11-20:5 McLaren GT3)
+through the effects showed what really happens: slip / lock-up and kerbs almost never overlap (< 0.1 % of
+driving); the overload came from **Kerb itself, set to 100 % at volume 100**, above the 95 % ceiling, so the
+limiter cut in on every kerb, and from **Kerb + Suspension** (a kerb is a bump), up to 220 %.
+
+| Corners 0-3 | Before | After | Time over the ceiling (% of driving, per corner) |
+|---|---|---|---|
+| Kerb strength | 100 % | 70 % | before 1.1-3.1 %, after 0.0-0.3 % |
+| Suspension max | 100 % | 80 % (min 30 % unchanged) | |
+
+Kerb 65 % or Suspension 70 % gained almost nothing more. Wheelspin, lock-up, oversteer, impacts and the L/R
+differences unchanged. Backups: `effects.json.bak-2026-11-21-rebalance`, `monocoque.config.bak-2026-11-21-rebalance`.
+The "Continuous" column still adds wheelspin and kerb together (162 % on the fronts now): a worst case that the
+recordings say doesn't happen in practice.
