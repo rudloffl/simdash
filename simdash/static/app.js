@@ -63,8 +63,9 @@ function showTab(name) {
   if (name === "shakers") { loadHaptics(); loadShaping(); } else if (hp.timer) { clearInterval(hp.timer); hp.timer = null; }
   if (name === "system") { loadSystem(); loadSystemLog(); }
   if (name === "leds") loadLeds(); else if (led.timer) stopLeds();
+  if (name === "motion") loadMotion(); else if (mo) { stopMotionDemo(); clearTimeout(mo.pollT); $("#mo-geo-unlock").checked = false; lockGeometry(); }
   // drop a link's hash once its tab is left (#session=… belongs to history)
-  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#(shakers|haptics)$/, system: /^#system$/, leds: /^#leds$/ }[name];
+  const own = { history: /^#session=/, progress: /^#progress(=|$)/, genie: /^#genie$/, edges: /^#edges$/, shakers: /^#(shakers|haptics)$/, system: /^#system$/, leds: /^#leds$/, motion: /^#motion$/ }[name];
   if (location.hash && !own?.test(location.hash)) history.replaceState(null, "", location.pathname);
   live.dirty = true;
 }
@@ -1852,6 +1853,29 @@ const SPOT_NAME = { none: "Not connected", seat: "Seat", "seat-back": "Seat back
 const WHEEL_NAME = { FL: "front left", FR: "front right", RL: "rear left", RR: "rear right" };
 // sh.active: index of the wheel effect whose wheels the car's tyres toggle
 const sh = { loaded: null, effects: [], devid: "", layout: {}, sinks: [], opts: null, running: false, dirty: false, sel: null, playing: null, active: null };
+// which effects are unfolded: "effect|shaker|n" (n-th such effect), kept per browser
+sh.open = new Set(pref.get("shFxOpen", []));
+function fxKey(i) {
+  const e = sh.effects[i];
+  const n = sh.effects.slice(0, i).filter((x) => x.effect === e.effect && x.pan === e.pan).length;
+  return `${e.effect}|${e.pan}|${n}`;
+}
+function setFxOpen(i, on) {
+  const k = fxKey(i);
+  if (on) sh.open.add(k); else sh.open.delete(k);
+  pref.set("shFxOpen", [...sh.open]);
+}
+function setGrpOpen(effect, on) {
+  if (on) sh.open.add("grp|" + effect); else sh.open.delete("grp|" + effect);
+  pref.set("shFxOpen", [...sh.open]);
+}
+function fxSummary(e) {
+  const mod = e.modulation || "none";
+  const hz = mod === "frequency" ? `${e.frequency}–${e.frequencyMax} Hz` : `${e.frequency} Hz`;
+  const st = mod === "amplify" ? `${e.amplitude}–${e.amplitudeMax} %` : `${e.amplitude} %`;
+  const w = sh.opts?.wheel_effects.includes(e.effect) && e.wheels?.length ? ` · ${e.wheels.join(" ")}` : "";
+  return `vol ${e.volume ?? 100} % · ${hz} · strength ${st}${w}`;
+}
 
 async function loadShakers() {
   const r = await fetch("/api/shakers");
@@ -2012,11 +2036,13 @@ function beatNote(i) {
 
 function renderEffects() {
   const o = sh.opts;
+  // the "Add effect" picker: every effect type
+  $("#sh-add").innerHTML = `<option value="">Add effect…</option>` + o.effects.map((x) => `<option value="${x}">${FX_NAME[x]}</option>`).join("");
   if (!sh.effects.length) {
     $("#sh-effects").innerHTML = `<div class="empty">No effect yet. Add one, then save.</div>`;
     return;
   }
-  $("#sh-effects").innerHTML = sh.effects.map((e, i) => {
+  const cards = sh.effects.map((e, i) => {
     const wheel = o.wheel_effects.includes(e.effect);
     const mod = e.modulation || "none";
     let f = "";
@@ -2055,17 +2081,38 @@ function renderEffects() {
     }
     f += fxField(e, i, "noise", "Roughness", 0, 20, 1, "Hz");
     const chOpts = o.channels.map((_, ch) => `<option value="${ch}"${ch === e.pan ? " selected" : ""}>${esc(chName(ch))}</option>`).join("");
-    return `<div class="fx${sh.active === i ? " active" : ""}" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
+    const open = sh.open.has(fxKey(i));
+    return `<div class="fx${sh.active === i ? " active" : ""}${open ? " open" : ""}" data-i="${i}" style="--c:var(${FX_COLOUR[e.effect] || "--muted"})">
       <div class="fx-head">
-        <select data-k="effect" data-i="${i}">${o.effects.map((x) => `<option value="${x}"${x === e.effect ? " selected" : ""}>${FX_NAME[x]}</option>`).join("")}</select>
-        <span class="muted">on</span>
-        <select data-k="pan" data-i="${i}" title="Shaker (sound card channel)">${chOpts}</select>
-        <span class="grow"></span>
+        <button class="fold" data-act="fold" data-i="${i}" aria-expanded="${open}" title="${open ? "Fold" : "Show"} the settings">▸</button>
+        <select data-k="pan" data-i="${i}" class="fx-ch" title="Shaker (sound card channel)">${chOpts}</select>
+        <span class="grow fx-sum muted" data-act="fold" data-i="${i}" title="${esc(fxSummary(e))}">${esc(fxSummary(e))}</span>
         <button class="test" data-act="test" data-i="${i}">Test</button>
-        <button class="del" data-act="del" data-i="${i}" title="Remove this effect">Remove</button>
+        <button class="del" data-act="del" data-i="${i}" title="Remove this channel from the effect">Remove</button>
       </div>
-      <div class="fx-fields">${f}</div>
-      <div class="fx-hint">${beatNote(i)}${wheel && !OWN_FX.has(e.effect) ? wheelNote(e) : !e.wheels?.length && wheel ? '<b class="warn">Pick at least one wheel. </b>' : ""}${FX_HINT[e.effect] || ""}</div></div>`;
+      <div class="fx-body"><div class="fx-fields">${f}</div>
+      <div class="fx-hint">${beatNote(i)}${wheel && !OWN_FX.has(e.effect) ? wheelNote(e) : !e.wheels?.length && wheel ? '<b class="warn">Pick at least one wheel. </b>' : ""}${FX_HINT[e.effect] || ""}</div></div></div>`;
+  });
+  // parents: one per effect type, in the order they first appear; children: the channels playing it
+  const groups = [];
+  sh.effects.forEach((e, i) => {
+    let g = groups.find((x) => x.effect === e.effect);
+    if (!g) groups.push((g = { effect: e.effect, idx: [] }));
+    g.idx.push(i);
+  });
+  $("#sh-effects").innerHTML = groups.map((g) => {
+    const open = sh.open.has("grp|" + g.effect), n = g.idx.length;
+    const free = o.channels.some((_, ch) => !g.idx.some((i) => sh.effects[i].pan === ch));
+    const chips = g.idx.map((i) => `<span class="pill">${esc(chName(sh.effects[i].pan))}</span>`).join("");
+    return `<div class="fx-grp${open ? " open" : ""}" data-grp="${g.effect}" style="--c:var(${FX_COLOUR[g.effect] || "--muted"})">
+      <div class="fx-grp-head">
+        <button class="fold" data-act="gfold" aria-expanded="${open}" title="${open ? "Fold" : "Show"} its channels">▸</button>
+        <b class="fx-grp-name" data-act="gfold">${esc(FX_NAME[g.effect] || g.effect)}</b>
+        <span class="muted" data-act="gfold">${n} channel${n === 1 ? "" : "s"}</span>
+        <span class="grow fx-grp-ch" data-act="gfold">${chips}</span>
+        <button data-act="addch" ${free ? "" : "disabled"} title="${free ? "Play this effect on one more shaker too (same settings to start with)" : "Already on every channel"}">Add channel</button>
+      </div>
+      <div class="fx-grp-body">${g.idx.map((i) => cards[i]).join("")}</div></div>`;
   }).join("");
 
   const box = $("#sh-effects");
@@ -2073,6 +2120,30 @@ function renderEffects() {
     el.oninput = el.onchange = (ev) => onEffectInput(ev);
   });
   box.querySelectorAll("[data-act=test]").forEach((b) => (b.onclick = () => shakerTest(sh.effects[+b.dataset.i])));
+  box.querySelectorAll("[data-act=fold]").forEach((b) => (b.onclick = () => {
+    const card = b.closest(".fx"), on = !card.classList.contains("open");
+    card.classList.toggle("open", on);
+    card.querySelector(".fold").setAttribute("aria-expanded", on);
+    setFxOpen(+b.dataset.i, on);
+  }));
+  box.querySelectorAll("[data-act=gfold]").forEach((b) => (b.onclick = () => {
+    const grp = b.closest(".fx-grp"), on = !grp.classList.contains("open");
+    grp.classList.toggle("open", on);
+    grp.querySelector(".fx-grp-head .fold").setAttribute("aria-expanded", on);
+    setGrpOpen(grp.dataset.grp, on);
+  }));
+  box.querySelectorAll("[data-act=addch]").forEach((b) => (b.onclick = () => {
+    const fx = b.closest(".fx-grp").dataset.grp;
+    const mine = sh.effects.filter((e) => e.effect === fx);
+    const used = new Set(mine.map((e) => e.pan));
+    const pan = sh.sel != null && !used.has(sh.sel) ? sh.sel : sh.opts.channels.findIndex((_, ch) => !used.has(ch));
+    if (pan < 0) return;
+    const copy = structuredClone(mine[mine.length - 1]);
+    copy.pan = pan;
+    sh.effects.splice(sh.effects.lastIndexOf(mine[mine.length - 1]) + 1, 0, copy);
+    setFxOpen(sh.effects.indexOf(copy), true);
+    markShakersDirty(true);
+  }));
   box.querySelectorAll("[data-act=del]").forEach((b) => (b.onclick = () => {
     const i = +b.dataset.i;
     sh.effects.splice(i, 1);
@@ -2140,8 +2211,11 @@ function toggleWheel(i, w) {
 function onEffectInput(ev) {
   const el = ev.target, i = +el.dataset.i, k = el.dataset.k, e = sh.effects[i];
   if (k === "effect") {
-    // keep the shaker and volume, take the new effect's starting values
+    // keep the shaker, volume and fold state, take the new effect's starting values
+    const wasOpen = sh.open.has(fxKey(i));
+    setFxOpen(i, false);
     sh.effects[i] = { device: "Sound", effect: el.value, pan: e.pan, volume: e.volume ?? 100, fps: e.fps ?? 60, ...structuredClone(FX_DEFAULTS[el.value]) };
+    if (wasOpen) setFxOpen(i, true);
     sh.active = sh.opts.wheel_effects.includes(el.value) ? i : null;
     markShakersDirty(true);
     return;
@@ -2154,8 +2228,12 @@ function onEffectInput(ev) {
     return;
   }
   if (k === "pan") {
+    const wasOpen = sh.open.has(fxKey(i));
+    setFxOpen(i, false);
     e.pan = +el.value;
+    if (wasOpen) setFxOpen(i, true);
     markShakersDirty(false);
+    renderEffects();  // the parent lists its channels
     renderCar();
     renderChannels();
     return;
@@ -2165,6 +2243,8 @@ function onEffectInput(ev) {
   // keep the slider and the number box of this field in step
   el.closest(".row").querySelectorAll("input").forEach((x) => { if (x !== el) x.value = el.value; });
   if (k === "frequency" && e.modulation === "frequency" && e.frequencyMax < e.frequency) e.frequencyMax = e.frequency;
+  const sum = el.closest(".fx")?.querySelector(".fx-sum");
+  if (sum) sum.textContent = sum.title = fxSummary(e);
   markShakersDirty(false);
 }
 
@@ -2239,11 +2319,27 @@ $("#sh-stop").onclick = async () => {
   renderCar();
 };
 $("#sh-revert").onclick = () => loadShakers();
-$("#sh-add").onclick = () => {
-  const pan = sh.sel ?? +(Object.keys(sh.layout)[0] ?? 0);
-  sh.effects.push({ device: "Sound", effect: "Engine", pan, volume: 100, fps: 60, ...structuredClone(FX_DEFAULTS.Engine) });
+$("#sh-add").onchange = (ev) => {
+  const fx = ev.target.value;
+  ev.target.value = "";
+  if (!fx) return;
+  // on the selected shaker, else the first one this effect isn't on yet
+  const used = new Set(sh.effects.filter((e) => e.effect === fx).map((e) => e.pan));
+  let pan = sh.sel ?? +(Object.keys(sh.layout)[0] ?? 0);
+  if (used.has(pan)) pan = Math.max(0, sh.opts.channels.findIndex((_, ch) => !used.has(ch)));
+  const last = sh.effects.map((e) => e.effect).lastIndexOf(fx);
+  const e = { device: "Sound", effect: fx, pan, volume: 100, fps: 60, ...structuredClone(FX_DEFAULTS[fx]) };
+  sh.effects.splice(last < 0 ? sh.effects.length : last + 1, 0, e);
+  setGrpOpen(fx, true);  // a new effect opens to be set up
+  setFxOpen(sh.effects.indexOf(e), true);
   markShakersDirty(true);
 };
+function foldAllEffects(on) {
+  sh.effects.forEach((e, i) => { setFxOpen(i, on); setGrpOpen(e.effect, on); });
+  renderEffects();
+}
+$("#sh-open-all").onclick = () => foldAllEffects(true);
+$("#sh-close-all").onclick = () => foldAllEffects(false);
 $("#sh-save").onclick = async () => {
   const r = await fetch("/api/shakers", {
     method: "PUT", headers: { "Content-Type": "application/json" },
@@ -2403,11 +2499,12 @@ function buildShakerCar(svg, layout, channels) {
         <circle r="25"/><text>${channels[ch]}</text></g>`;
     });
   }
-  const pedals = svg === "#rp-car" || svg === "#live-car" || svg === "#sess-car";
+  const pedals = svg === "#rp-car" || svg === "#live-car" || svg === "#sess-car" || svg === "#mo-car";
   $(svg).innerHTML = body + spots + (pedals ? pedalGlyphs() : "");
   if (svg === "#rp-car") paintPedals();
   if (svg === "#live-car") paintPedals("#live-car .pedal-g", live.data?.pedals || {});
   if (svg === "#sess-car") paintPedals("#sess-car .pedal-g", {});
+  if (svg === "#mo-car") paintPedals("#mo-car .pedal-g", {});
 }
 
 // the three pedals in the footwell of the car top views (Haptics tab), lit while their haptics play
@@ -4829,6 +4926,424 @@ async function pollHaptics() {
 if (location.hash.startsWith("#session=")) showTab("history");
 else if (location.hash.startsWith("#progress")) showTab("progress");
 else if (location.hash === "#haptics") showTab("shakers");  // the old Pedal haptics tab, now part of Haptics
-else if (["#genie", "#edges", "#shakers", "#system", "#leds"].includes(location.hash)) showTab(location.hash.slice(1));
+else if (["#genie", "#edges", "#shakers", "#system", "#leds", "#motion"].includes(location.hash)) showTab(location.hash.slice(1));
 // in-page links such as "Progress on this track"
 window.addEventListener("hashchange", () => { if (location.hash.startsWith("#progress")) showTab("progress"); });
+
+// ---------- desk 6DOF (/#motion) ----------
+const MO_AXES = [
+  { k: "x", name: "Surge (forward +)", unit: "mm", max: 40, step: 0.5 },
+  { k: "y", name: "Sway (left +)", unit: "mm", max: 40, step: 0.5 },
+  { k: "z", name: "Heave (up +)", unit: "mm", max: 20, step: 0.5 },
+  { k: "roll", name: "Roll (leans right +)", unit: "°", max: 25, step: 0.5 },
+  { k: "pitch", name: "Pitch (nose up +)", unit: "°", max: 25, step: 0.5 },
+  { k: "yaw", name: "Yaw (nose left +)", unit: "°", max: 45, step: 0.5 },
+];
+const MO_GEO = [
+  ["base_r", "Base: centre to horns' plane", 30, 150, 0.5], ["shaft_spacing", "Shafts in a pair (flat)", 20, 120, 0.5],
+  ["base_half", "Base pair half-angle (radial)", 3, 50, 0.5],
+  ["plat_r", "Platform radius (joints)", 20, 150, 0.5], ["plat_half", "Platform pair half-angle", 0, 55, 0.5],
+  ["horn", "Horn length", 8, 40, 0.5], ["rod", "Rod length", 30, 250, 0.5],
+  ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["servo_limit", "Horn travel ±", 10, 90, 1],
+];
+// the 6DOF tab's folds: open or closed remembered (Move it open by default)
+for (const [id, key, dflt] of [["#mo-acc-cue", "moAccCue", false], ["#mo-acc-move", "moAccMove", true], ["#mo-acc-geo", "moAccGeo", false],
+  ["#mo-acc-cal", "moAccCal", false], ["#mo-acc-wiring", "moAccWiring", false]]) {
+  const el = $(id);
+  el.open = pref.get(key, dflt);
+  el.ontoggle = () => pref.set(key, el.open);
+}
+// var: showTab() runs on page load, before this part of the script, and must see it as not set up yet
+var mo = { s: null, d: null, pose: { x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0 }, last: null, link: null,
+  busy: false, again: false, az: pref.get("moAz", -35), el: pref.get("moEl", 28), demo: null, saveT: null, wiring: false };
+
+async function loadMotion() {
+  const r = await fetch("/api/motion");
+  if (!r.ok) { $("#mo-state").textContent = "simdash needs a restart for this tab"; return; }
+  const d = await r.json();
+  mo.s = d.settings; mo.d = d.design; mo.link = d.link; mo.cue = d.cueing; mo.cueDef = d.cueing_defaults;
+  buildMotionForms();
+  buildCueForm();
+  loadCourseSessions(d.replay);
+  pollCourse();
+  renderMotionDesign();
+  if (!mo.wiring) {
+    const w = await fetch("/static/6dof-wiring.svg");
+    if (w.ok) { $("#mo-wiring").innerHTML = await w.text(); mo.wiring = true; }
+  }
+  sendPose();
+}
+
+function moField(id, label, min, max, step, val) {
+  return `<label>${esc(label)}<div class="row"><input type="range" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${val}">`
+    + `<input type="number" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${val}"></div></label>`;
+}
+function buildMotionForms() {
+  $("#mo-axes").innerHTML = MO_AXES.map((a) => moField(a.k, `${a.name}, ${a.unit}`, -a.max, a.max, a.step, mo.pose[a.k])).join("");
+  const g = mo.s.geometry, sv = mo.s.servos, car = mo.s.car;
+  const flat = g.layout === "flat";
+  $("#mo-geo").innerHTML = `<label>Servo pairs<select data-k="layout">`
+    + `<option value="flat"${flat ? " selected" : ""}>Back to back on a flat face (like kits)</option>`
+    + `<option value="radial"${flat ? "" : " selected"}>Splayed, each shaft pointing out</option></select></label>`
+    + MO_GEO.filter(([k]) => k !== (flat ? "base_half" : "shaft_spacing")).map(([k, n, lo, hi, st]) => moField(k, n, lo, hi, st, g[k])).join("");
+  lockGeometry();
+  $("#mo-cal").innerHTML = moField("us_per_deg", "µs per degree", 5, 20, 0.1, sv.us_per_deg)
+    + moField("min_us", "Shortest pulse µs", 400, 1500, 10, sv.min_us) + moField("max_us", "Longest pulse µs", 1500, 2600, 10, sv.max_us);
+  $("#mo-trim").innerHTML = sv.center_us.map((c, i) => `<tr><td>${i}</td><td class="r"><input type="number" data-i="${i}" min="900" max="2100" step="5" value="${c}"></td>`
+    + `<td><div class="seg" data-dir="${i}"><button data-v="1" class="${sv.dir[i] > 0 ? "on" : ""}">Normal</button><button data-v="-1" class="${sv.dir[i] < 0 ? "on" : ""}">Reversed</button></div></td></tr>`).join("");
+  $("#mo-car").innerHTML = moField("length", "Length mm", 40, 300, 1, car.length) + moField("width", "Width mm", 20, 150, 1, car.width)
+    + moField("height", "Height mm", 10, 120, 1, car.height);
+  renderMotionLink();
+}
+// the geometry is locked (inputs disabled) unless "Unlock to edit" is ticked; it locks again on every visit
+function lockGeometry() {
+  const open = $("#mo-geo-unlock").checked;
+  $("#mo-geo").classList.toggle("locked", !open);
+  $("#mo-geo").querySelectorAll("input, select").forEach((el) => (el.disabled = !open));
+}
+$("#mo-geo-unlock").onchange = lockGeometry;
+// a range and its number box move together
+function moSync(box, e) {
+  const k = e.target.dataset.k;
+  if (k) box.querySelectorAll(`[data-k="${k}"]`).forEach((el) => { if (el !== e.target) el.value = e.target.value; });
+  return k;
+}
+$("#mo-axes").addEventListener("input", (e) => {
+  const k = moSync($("#mo-axes"), e);
+  if (k) { mo.pose[k] = +e.target.value; if (!mo.cs?.playing) sendPose(); }
+});
+for (const [box, part] of [["#mo-geo", "geometry"], ["#mo-cal", "servos"], ["#mo-car", "car"]]) {
+  $(box).addEventListener("input", (e) => {
+    if (e.target.dataset.k === "layout") {  // a different set of fields
+      mo.s.geometry.layout = e.target.value;
+      buildMotionForms();
+      scheduleMotionSave();
+      return;
+    }
+    const k = moSync($(box), e);
+    if (!k || e.target.value === "") return;
+    mo.s[part][k] = +e.target.value;
+    scheduleMotionSave();
+  });
+}
+$("#mo-trim").addEventListener("input", (e) => {
+  if (e.target.dataset.i == null || e.target.value === "") return;
+  mo.s.servos.center_us[+e.target.dataset.i] = +e.target.value;
+  scheduleMotionSave();
+});
+$("#mo-trim").addEventListener("click", (e) => {
+  const seg = e.target.closest("[data-dir]");
+  if (!seg || !e.target.dataset.v) return;
+  mo.s.servos.dir[+seg.dataset.dir] = +e.target.dataset.v;
+  seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === e.target));
+  scheduleMotionSave();
+});
+function scheduleMotionSave() {
+  sendPose();  // preview with the unsaved settings at once
+  clearTimeout(mo.saveT);
+  mo.saveT = setTimeout(async () => {
+    const r = await fetch("/api/motion", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ geometry: mo.s.geometry, servos: mo.s.servos, car: mo.s.car }) });
+    const d = await r.json();
+    $("#mo-geo-err").innerHTML = r.ok ? "" : `<span class="warn">${esc(d.detail)} (not saved)</span>`;
+    if (r.ok) { mo.d = d.design; renderMotionDesign(); }
+  }, 400);
+}
+
+async function sendPose() {
+  if (!mo.s) return;
+  if (mo.busy) { mo.again = true; return; }
+  mo.busy = true;
+  try {
+    const r = await fetch("/api/motion/pose", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pose: mo.pose, settings: { geometry: mo.s.geometry, servos: mo.s.servos } }) });
+    const d = await r.json();
+    if (r.ok) { mo.last = d; mo.link = d.link; drawMotion(); renderMotionServos(); renderMotionLink(); }
+    else { $("#mo-state").className = "bad"; $("#mo-state").textContent = d.detail; }
+  } catch { /* simdash restarting */ }
+  mo.busy = false;
+  if (mo.again) { mo.again = false; sendPose(); }
+}
+
+function renderMotionDesign() {
+  const d = mo.d;
+  if (!d || d.error) { $("#mo-design").innerHTML = `<dt>Problem</dt><dd class="warn">${esc(d?.error)}</dd>`; $("#mo-reach").innerHTML = ""; return; }
+  const tight = d.min_spacing ? d.shaft_spacing < d.min_spacing : d.shaft_spacing < 2 * 6 + 8;
+  $("#mo-design").innerHTML = `<dt>Home height</dt><dd>${d.home_height} mm from the shafts to the platform joints</dd>`
+    + `<dt>Rod lean at home</dt><dd>${d.rod_lean}° from vertical${d.rod_lean > 30 ? ' <span class="warn">(steep: ball joints may bind)</span>' : ""}</dd>`
+    + `<dt>Shafts in a pair</dt><dd${tight ? ' class="warn"' : ""}>${d.shaft_spacing} mm apart (centre to centre)`
+    + `${d.min_spacing ? (tight ? ` — MG90 bodies and tabs back to back need ${d.min_spacing} mm` : ` (bodies and tabs need ${d.min_spacing})`) : ""}</dd>`
+    + `<dt>Joints in a pair</dt><dd>${d.joint_spacing} mm apart on the platform</dd>`;
+  $("#mo-reach").innerHTML = MO_AXES.map((a) => `<tr><td>${esc(a.name.replace(/ \(.*/, ""))}</td>`
+    + `<td class="r">−${d.reach[a.k][0]} ${a.unit}</td><td class="r">+${d.reach[a.k][1]} ${a.unit}</td></tr>`).join("");
+}
+
+function renderMotionServos() {
+  const d = mo.last, lim = mo.s.geometry.servo_limit;
+  $("#mo-servos").innerHTML = d.alpha.map((a, i) => {
+    const bad = a == null || Math.abs(a) > lim, f = a == null ? 0 : clamp(a / lim, -1, 1);
+    const l = 50 + Math.min(0, f) * 50, w = Math.abs(f) * 50;
+    return `<tr><td>${i}</td><td class="r">${a == null ? "out of reach" : a.toFixed(1) + "°"}</td>`
+      + `<td style="width:40%"><div class="mo-bar${bad ? " bad" : ""}"><i style="left:${l}%;width:${w}%"></i></div></td>`
+      + `<td class="r">${d.pulse[i]} µs</td></tr>`;
+  }).join("");
+  $("#mo-state").className = d.ok ? "ok" : "bad";
+  $("#mo-state").textContent = d.ok ? "pose reachable" : "out of reach: held";
+}
+
+function renderMotionLink() {
+  const l = mo.link || {};
+  document.querySelectorAll("#mo-arm button").forEach((b) => b.classList.toggle("on", (b.dataset.on === "1") === !!l.armed));
+  $("#mo-link").innerHTML = l.error ? `<span style="color:var(--critical)">${esc(l.error)}</span>`
+    : l.connected ? `${esc(l.port)} · ${esc(l.firmware || "no answer from the firmware")}`
+    : l.port ? `pyboard on ${esc(l.port)}` : "pyboard not plugged in";
+}
+$("#mo-arm").onclick = async (e) => {
+  if (!e.target.dataset.on) return;
+  const r = await fetch("/api/motion/arm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: e.target.dataset.on === "1" }) });
+  mo.link = await r.json();
+  renderMotionLink();
+  if (mo.link.armed) sendPose();
+};
+
+$("#mo-center").onclick = () => {
+  stopMotionDemo();
+  for (const a of MO_AXES) mo.pose[a.k] = 0;
+  document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = 0));
+  sendPose();
+};
+// each axis in turn, a smooth swing to 70 % of its reach and back
+$("#mo-demo").onclick = () => {
+  if (mo.demo) { stopMotionDemo(); return; }
+  const t0 = performance.now(), per = 3000;
+  $("#mo-demo").textContent = "Stop";
+  mo.demo = setInterval(() => {
+    const t = performance.now() - t0, i = Math.floor(t / per) % MO_AXES.length, a = MO_AXES[i];
+    const reach = mo.d?.reach?.[a.k] || [a.max / 2, a.max / 2];
+    const s = Math.sin(2 * Math.PI * (t % per) / per);
+    for (const b of MO_AXES) mo.pose[b.k] = 0;
+    mo.pose[a.k] = +(0.7 * s * (s < 0 ? reach[0] : reach[1])).toFixed(2);
+    document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = mo.pose[el.dataset.k]));
+    sendPose();
+  }, 33);
+};
+function stopMotionDemo() {
+  if (!mo.demo) return;
+  clearInterval(mo.demo); mo.demo = null;
+  $("#mo-demo").textContent = "Demo";
+}
+
+// rotation like motion.rotation(): roll + leans right, pitch + nose up, yaw + nose left
+function moRot(p) {
+  const r = p.roll * Math.PI / 180, q = -p.pitch * Math.PI / 180, y = p.yaw * Math.PI / 180;
+  const [cr, sr, cp, sp, cy, sy] = [Math.cos(r), Math.sin(r), Math.cos(q), Math.sin(q), Math.cos(y), Math.sin(y)];
+  return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr], [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr], [-sp, cp * sr, cp * cr]];
+}
+function drawMotion() {
+  const d = mo.last, svg = $("#mo-view");
+  if (!d || !svg.clientWidth) return;
+  const W = svg.clientWidth, H = svg.clientHeight, az = mo.az * Math.PI / 180, el = mo.el * Math.PI / 180;
+  const g = mo.s.geometry, car = mo.s.car, H0 = d.home_height;
+  const raw = ([x, y, z]) => {
+    const xr = x * Math.cos(az) - y * Math.sin(az), yr = x * Math.sin(az) + y * Math.cos(az);
+    return [xr, -(z * Math.cos(el) + yr * Math.sin(el))];
+  };
+  // fit the scene at home (base + car with room to move), so the scale doesn't change with the pose
+  const fit = [];
+  for (let i = 0; i < 16; i++) fit.push([(g.base_r + 12) * Math.cos(i * Math.PI / 8), (g.base_r + 12) * Math.sin(i * Math.PI / 8), 0]);
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const z of [H0 - 15, H0 + car.height + 25])
+    fit.push([sx * (car.length / 2 + 15), sy * (car.width / 2 + 15), z]);
+  const pr = fit.map(raw), xs = pr.map((p) => p[0]), ys = pr.map((p) => p[1]);
+  const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+  const k = Math.min(W / (bx1 - bx0), H / (by1 - by0)) * 0.94;
+  const cx = W / 2 - k * (bx0 + bx1) / 2, cy = H / 2 - k * (by0 + by1) / 2;
+  const P = (v) => { const [a, b] = raw(v); return [cx + k * a, cy + k * b]; };
+  const pts = (arr) => arr.map((p) => P(p).map((v) => v.toFixed(1)).join(",")).join(" ");
+  const line = (a, b, cls) => { const [x1, y1] = P(a), [x2, y2] = P(b); return `<line class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`; };
+  const out = [];
+  const circ = Array.from({ length: 48 }, (_, i) => [(g.base_r + 8) * Math.cos(i * Math.PI / 24), (g.base_r + 8) * Math.sin(i * Math.PI / 24), -4]);
+  out.push(`<polygon class="base" points="${pts(circ)}"/>`);
+  // axes on the base: x red (nose), y, z
+  out.push(line([0, 0, 0], [25, 0, 0], "ax") .replace('class="ax"', 'class="ax" stroke="var(--s-brake)"'));
+  out.push(line([0, 0, 0], [0, 25, 0], "ax").replace('class="ax"', 'class="ax" stroke="var(--s-throttle)"'));
+  out.push(line([0, 0, 0], [0, 0, 25], "ax").replace('class="ax"', 'class="ax" stroke="var(--s-speed)"'));
+  const lim = g.servo_limit;
+  d.legs.forEach((L, i) => {
+    const bad = d.alpha[i] == null || Math.abs(d.alpha[i]) > lim ? " bad" : "";
+    out.push(line(L.B, L.A, "horn" + bad), line(L.A, L.P, "rod" + bad));
+    const [bx, by] = P(L.B);
+    out.push(`<circle class="shaft" cx="${bx}" cy="${by}" r="3"/><text class="lbl" x="${bx + 5}" y="${by + 13}">${i}</text>`);
+  });
+  // platform outline in angular order around its centre
+  const c = d.legs.reduce((s, L) => s.map((v, j) => v + L.P[j] / 6), [0, 0, 0]);
+  const ring = d.legs.map((L) => L.P).sort((a, b) => Math.atan2(a[1] - c[1], a[0] - c[0]) - Math.atan2(b[1] - c[1], b[0] - c[0]));
+  out.push(`<polygon class="plat" points="${pts(ring)}"/>`);
+  // the car: a box on the platform, nose marked
+  const R = moRot(d.pose), t = [d.pose.x, d.pose.y, d.home_height + d.pose.z];
+  const W2 = (v) => R.map((row, i) => t[i] + row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+  const { length: cl, width: cw, height: ch } = car, z0 = 3;
+  const corner = (sx, sy, z) => W2([sx * cl / 2, sy * cw / 2, z]);
+  const bot = [corner(1, 1, z0), corner(1, -1, z0), corner(-1, -1, z0), corner(-1, 1, z0)];
+  const top = [corner(1, 1, z0 + ch), corner(1, -1, z0 + ch), corner(-1, -1, z0 + ch), corner(-1, 1, z0 + ch)];
+  const faces = [bot, top, [bot[0], bot[1], top[1], top[0]], [bot[1], bot[2], top[2], top[1]], [bot[2], bot[3], top[3], top[2]], [bot[3], bot[0], top[0], top[3]]];
+  // far faces first (depth = distance along the view direction)
+  const depth = (f) => f.reduce((s, [x, y, z]) => s + (x * Math.sin(az) + y * Math.cos(az)) * Math.cos(el) - z * Math.sin(el), 0) / f.length;
+  faces.sort((a, b) => depth(b) - depth(a)).forEach((f) => out.push(`<polygon class="car" points="${pts(f)}"/>`));
+  out.push(`<polygon class="nose" points="${pts([W2([cl / 2, 0, z0 + ch + 0.5]), W2([cl / 2 - 18, 8, z0 + ch + 0.5]), W2([cl / 2 - 18, -8, z0 + ch + 0.5])])}"/>`);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = out.join("");
+}
+{
+  let drag = null;
+  const v = $("#mo-view");
+  v.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, az: mo.az, el: mo.el }; v.setPointerCapture(e.pointerId); });
+  v.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    mo.az = drag.az + (e.clientX - drag.x) * 0.4;
+    mo.el = clamp(drag.el + (e.clientY - drag.y) * 0.3, -10, 89);
+    drawMotion();
+  });
+  v.addEventListener("pointerup", () => { drag = null; pref.set("moAz", mo.az); pref.set("moEl", mo.el); });
+  window.addEventListener("resize", () => { if (currentTab === "motion") drawMotion(); });
+}
+
+// ---- play a course: a recorded session through the cueing ----
+const MO_CUE = [
+  ["pitch_per_g", "Pitch per g (braking/accel.)", 0, 30, 0.5, "°"], ["roll_per_g", "Roll per g (cornering)", 0, 30, 0.5, "°"],
+  ["tilt_ms", "Tilt smoothing", 0, 600, 10, "ms"], ["surge_per_g", "Surge shift per g", 0, 40, 0.5, "mm"],
+  ["sway_per_g", "Sway shift per g", 0, 40, 0.5, "mm"], ["heave_per_g", "Heave per g (bumps)", 0, 40, 0.5, "mm"],
+  ["yaw_per_rad", "Yaw per rad/s", 0, 40, 0.5, "°"], ["washout_ms", "Back to centre", 100, 3000, 50, "ms"],
+  ["smooth_ms", "Final smoothing", 0, 200, 5, "ms"], ["master", "Overall", 0, 2, 0.05, "×"],
+];
+function buildCueForm() {
+  $("#mo-cue").innerHTML = MO_CUE.map(([k, n, lo, hi, st, u]) => moField(k, `${n}, ${u}`, lo, hi, st, mo.cue[k])).join("");
+}
+$("#mo-cue").addEventListener("input", (e) => {
+  const k = moSync($("#mo-cue"), e);
+  if (!k || e.target.value === "") return;
+  mo.cue[k] = +e.target.value;
+  clearTimeout(mo.cueT);
+  mo.cueT = setTimeout(() => fetch("/api/motion", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cueing: mo.cue }) }), 300);
+});
+$("#mo-cue-reset").onclick = async () => {
+  mo.cue = { ...mo.cueDef };
+  buildCueForm();
+  await fetch("/api/motion", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cueing: mo.cue }) });
+};
+
+async function loadCourseSessions(loaded) {
+  let list;
+  try { list = await (await fetch("/api/sessions")).json(); } catch { return; }
+  const cur = $("#mo-session").value || loaded?.ref || "";
+  $("#mo-session").innerHTML = `<option value="">Choose a recorded session…</option>` + list.filter((x) => x.driving_s > 0).map((x) => {
+    const t = new Date(x.started_at * 1000);
+    return `<option value="${x.ref}">${x.day} ${t.toTimeString().slice(0, 5)} · ${esc(x.session_type)} · ${esc(x.track)} · ${esc(x.car)} · ${x.laps ?? 0} lap${x.laps === 1 ? "" : "s"}</option>`;
+  }).join("");
+  $("#mo-session").value = cur;
+  if (loaded?.ref) showCourse(loaded);
+}
+function showCourse(info) {
+  mo.course = info;
+  mo.fx = null;
+  $("#mo-where").hidden = false;
+  $("#mo-main").classList.remove("solo");
+  requestAnimationFrame(drawMotion);  // the 3D view got narrower
+  moCar();
+  // what the shakers and pedals played: recorded by the haptics engine, or recomputed (as on the Sessions page)
+  fetch(`/api/sessions/${info.ref}/shakers`).then((r) => r.json()).then((sd) => {
+    if (mo.course?.ref !== info.ref || !sd.ts?.length) return;
+    sd.pedalAt = {};
+    for (const [k, pts] of Object.entries(sd.pedals || {})) for (const [i, a] of pts) (sd.pedalAt[i] ??= {})[k] = a;
+    mo.fx = sd;
+    paintCourseWhere();
+  }).catch(() => {});
+  $("#mo-lap").innerHTML = info.laps.map((l) => `<option value="${l.ts}">Lap ${l.lap}</option>`).join("");
+  $("#mo-lap").disabled = $("#mo-play").disabled = $("#mo-slider").disabled = false;
+  $("#mo-slider").min = info.t0; $("#mo-slider").max = info.t1;
+  $("#mo-play-note").textContent = `${info.track} ${info.variation} · ${info.car}`;
+}
+$("#mo-session").onchange = async (e) => {
+  if (!e.target.value) return;
+  $("#mo-play-note").textContent = "loading…";
+  const r = await fetch("/api/motion/replay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "load", ref: e.target.value }) });
+  const d = await r.json();
+  if (!r.ok) { $("#mo-play-note").textContent = d.detail || "Cannot load this session"; return; }
+  showCourse(d);
+  pollCourse();
+};
+async function courseCmd(body) {
+  const r = await fetch("/api/motion/replay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (!r.ok) { $("#mo-play-note").textContent = d.detail; return; }
+  paintCourse(d, body.action === "seek");
+  pollCourse();
+}
+$("#mo-play").onclick = () => { stopMotionDemo(); courseCmd(mo.cs?.playing ? { action: "pause" } : { action: "play", speed: +$("#mo-speed").value }); };
+$("#mo-speed").onchange = () => { if (mo.cs?.playing) courseCmd({ action: "play", speed: +$("#mo-speed").value }); };
+$("#mo-slider").oninput = (e) => courseCmd({ action: "seek", ts: +e.target.value });
+$("#mo-lap").onchange = (e) => courseCmd({ action: "seek", ts: +e.target.value });
+
+// while a course plays the page follows the server (20 Hz); otherwise one look now and then
+async function pollCourse() {
+  clearTimeout(mo.pollT);
+  if (currentTab !== "motion") return;
+  try {
+    const r = await fetch("/api/motion/replay");
+    if (r.ok) paintCourse(await r.json());
+  } catch { /* restarting */ }
+  mo.pollT = setTimeout(pollCourse, mo.cs?.playing ? 50 : 1000);
+}
+async function moCar() {
+  if (!shCar.layout) await loadShakerCars();
+  if (shCar.layout && !$("#mo-car .car-body, #mo-car .spot")) buildShakerCar("#mo-car", shCar.layout, shCar.channels);
+}
+// the map (where the car is) and the car seen from above (which shakers and pedals fired), at the course time
+function paintCourseWhere() {
+  const c = mo.course, st = mo.cs;
+  if (!c) return;
+  const pos = st?.pos;
+  drawMap($("#mo-map"), c.path, pos ? [{ x: pos[0], z: pos[1], player: true }] : [], true);
+  const sd = mo.fx, tags = [];
+  if (sd && st) {
+    let lo = 0, hi = sd.ts.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (sd.ts[m] <= st.t) lo = m; else hi = m - 1; }
+    const chan = {};
+    for (const [ch, v] of Object.entries(sd.channels)) {
+      chan[ch] = { a: v.a[lo], fx: v.fx[lo] };
+      if (v.a[lo] > 0 && v.fx[lo]) tags.push({ fx: v.fx[lo], txt: `${FX_NAME[v.fx[lo]] || v.fx[lo]} · ${shCar.channels?.[ch] ?? ch} ${v.a[lo]} %` });
+    }
+    paintShakerCar("#mo-car .spot", chan, !!st.playing);
+    const ped = sd.pedalAt?.[lo] || {};
+    paintPedals("#mo-car .pedal-g", ped);
+    for (const [k, a] of Object.entries(ped)) {
+      const [pedal, fx] = k.split(":");
+      tags.push({ pedal, txt: `${pedal} ${(hp.setup?.names?.[fx] || fx).toLowerCase()} ${a} %` });
+    }
+  }
+  $("#mo-fired").innerHTML = !sd ? `<span class="muted">No haptics data for this session</span>`
+    : tags.length ? `<span class="muted">Fired:</span>` + tags.map((g) => `<span class="fx-tag" style="--c:var(${g.pedal ? `--s-${g.pedal}` : FX_COLOUR[g.fx] || "--muted"})">${esc(g.txt)}</span>`).join("")
+    : `<span class="muted">Nothing fired at this moment${sd.source === "felt" ? "" : " (recomputed with that day's settings)"}</span>`;
+}
+function paintCourse(st, force = false) {
+  const was = mo.cs?.playing;
+  mo.cs = st;
+  $("#mo-play").textContent = st.playing ? "Pause" : "Play";
+  if (!st.loaded || !mo.course) { $("#mo-readout").textContent = ""; return; }
+  const c = mo.course;
+  if (document.activeElement !== $("#mo-slider")) $("#mo-slider").value = st.t;
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  $("#mo-time").textContent = `${fmt(st.t - c.t0)} / ${fmt(c.t1 - c.t0)}`;
+  const g = st.g || {};
+  $("#mo-readout").innerHTML = `<span>Lap <b>${st.lap ?? "–"}</b></span><span><b>${st.kmh ?? "–"}</b> km/h</span>`
+    + `<span>Long. <b>${g.fwd?.toFixed(2) ?? "–"}</b> g</span><span>Lat. <b>${g.left?.toFixed(2) ?? "–"}</b> g (left +)</span>`
+    + `<span>Vert. <b>${g.up?.toFixed(2) ?? "–"}</b> g</span>`
+    + (st.scale < 1 ? `<span style="color:var(--warning)">scaled to ${Math.round(st.scale * 100)} % to fit</span>` : "");
+  if (st.solve && (st.playing || was || force)) {
+    // the platform shows the course's pose; the sliders follow
+    mo.last = st.solve; mo.link = st.link;
+    for (const a of MO_AXES) mo.pose[a.k] = st.solve.pose[a.k];
+    document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = (+mo.pose[el.dataset.k]).toFixed(1)));
+    drawMotion(); renderMotionServos(); renderMotionLink();
+  }
+  paintCourseWhere();
+}

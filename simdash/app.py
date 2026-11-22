@@ -10,11 +10,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import edges, felt, genie, haptics, leds, link, presets, replay, shakers, slim, store, system
+from . import edges, felt, genie, haptics, leds, link, motion, presets, replay, shakers, slim, store, system
 from .pcars2 import SURFACE, TERRAINS
 from .recorder import Recorder
 
@@ -570,6 +570,77 @@ def create_app(recorder=None):
             return genie.save(patch)
         except (TypeError, ValueError) as e:
             raise HTTPException(400, f"bad setting: {e}")
+
+    # ---- desk 6DOF (servo Stewart platform, tab /#motion) ----
+
+    @app.get("/api/motion")
+    def motion_setup():
+        return motion.setup()
+
+    @app.put("/api/motion")
+    def motion_save(patch: dict):
+        try:
+            motion.save(patch)
+        except (TypeError, ValueError, KeyError) as e:
+            raise HTTPException(400, f"bad setting: {e}")
+        motion.player.reload_cueing()
+        return motion.setup()
+
+    @app.post("/api/motion/pose")
+    def motion_pose(body: dict):
+        """Solve a pose ({x, y, z, roll, pitch, yaw}, optional unsaved "settings"); sent to the
+        pyboard when armed and reachable."""
+        try:
+            s = motion.load()
+            for k in ("geometry", "servos"):
+                s[k].update({kk: v for kk, v in ((body.get("settings") or {}).get(k) or {}).items() if kk in s[k]})
+            r = motion.solve(body.get("pose") or {}, s)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        if r["ok"] and not motion.player.playing:
+            motion.link.send(r["pulse"])
+        r["link"] = motion.link.status()
+        return r
+
+    @app.post("/api/motion/replay")
+    async def motion_replay(body: dict):
+        """{action: load (ref) | play (speed) | pause | seek (ts) | stop}"""
+        p, act = motion.player, body.get("action")
+        try:
+            if act == "load":
+                return await asyncio.to_thread(p.load, str(body.get("ref")))
+            if act == "play":
+                p.play(body.get("speed") or 1.0)
+            elif act == "pause":
+                p.pause()
+            elif act == "seek":
+                p.seek(body.get("ts"))
+            elif act == "stop":
+                p.stop()
+            else:
+                raise ValueError("unknown action")
+        except (LookupError, FileNotFoundError) as e:
+            raise HTTPException(404, str(e))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        return p.state()
+
+    @app.get("/api/motion/replay")
+    def motion_replay_state():
+        return motion.player.state()
+
+    @app.post("/api/motion/arm")
+    def motion_arm(body: dict):
+        motion.link.arm(bool(body.get("on")))
+        return motion.link.status()
+
+    @app.get("/api/motion/template/{part}.svg")
+    def motion_template(part: str):
+        if part not in ("base", "platform"):
+            raise HTTPException(404, "base or platform")
+        svg = motion.template_svg(part, motion.load()["geometry"])
+        return Response(svg, media_type="image/svg+xml",
+                        headers={"Content-Disposition": f'attachment; filename="6dof-{part}-1to1.svg"'})
 
     # ---- wheel RPM LEDs (Moza) ----
 

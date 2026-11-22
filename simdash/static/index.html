@@ -17,6 +17,7 @@
     <button data-tab="edges">Track edges</button>
     <button data-tab="shakers">Haptics</button>
     <button data-tab="leds">Wheel LEDs</button>
+    <button data-tab="motion">6DOF</button>
     <button data-tab="system">System <span class="nav-dot" id="sys-dot"></span></button>
   </nav>
   <div id="hdr-start-grp" class="split-btn" hidden>
@@ -526,7 +527,7 @@
       </div>
     </div>
     <div class="card">
-      <h3>Effects <span class="right"><button id="sh-add">Add effect</button></span></h3>
+      <h3>Effects <span class="right"><button id="sh-open-all" title="Show every effect's settings">Open all</button> <button id="sh-close-all" title="Fold every effect">Fold all</button> <select id="sh-add" title="Add an effect (it opens on the selected shaker)"></select></span></h3>
       <div id="sh-effects"></div>
       <div class="muted sh-help">
         monocoque reads these settings when it starts: after saving, use Restart monocoque on the System tab (or start a new session).
@@ -708,6 +709,96 @@
       <table class="led-cars"><thead><tr><th>Car</th><th class="r">Shift RPM</th><th></th></tr></thead><tbody id="led-cars"></tbody></table>
     </div>
   </div>
+</section>
+<section id="tab-motion" class="tab">
+  <div class="card mo-play-card" id="mo-play-card">
+    <h3>Play a course <span class="right muted" id="mo-play-note">a recorded session, played on the platform</span></h3>
+    <div class="rp-bar mo-play">
+      <select id="mo-session"><option value="">Choose a recorded session…</option></select>
+      <select id="mo-lap" title="Jump to a lap" disabled></select>
+      <button id="mo-play" class="primary" disabled>Play</button>
+      <select id="mo-speed" title="Replay speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      <input type="range" id="mo-slider" min="0" max="1" step="0.05" value="0" disabled>
+      <span class="num" id="mo-time"></span>
+    </div>
+    <div class="mo-readout" id="mo-readout"></div>
+  </div>
+
+  <!-- the platform, and beside it (while a course is loaded) where the car is and what the haptics played -->
+  <div class="mo-main solo" id="mo-main">
+    <div class="card mo-view-card">
+      <h3>Desk 6DOF <span class="right muted" id="mo-state"></span></h3>
+      <svg id="mo-view" class="mo-view" role="img" aria-label="The platform in its current pose: servos, horns, rods and the car on top"></svg>
+      <div class="fx-hint">Drag to turn the view. Horns and rods turn red when a servo can't reach the pose; nothing is sent to the servos then.</div>
+    </div>
+    <div class="card mo-where-card" id="mo-where" hidden>
+      <h3>On track <span class="right muted">shakers and pedal haptics at this moment</span></h3>
+      <div class="map-car mo-map-car"><canvas id="mo-map"></canvas>
+        <svg id="mo-car" class="shaker-car" viewBox="0 0 240 440" role="img" aria-label="What the shakers and pedals played at this moment"></svg></div>
+      <div class="mo-fired" id="mo-fired"></div>
+    </div>
+  </div>
+
+  <details class="card acc" id="mo-acc-cue">
+    <summary><h3>Cueing <span class="right muted">how the car's movements become the platform's</span></h3></summary>
+    <div class="fx-fields" id="mo-cue"></div>
+    <div class="fx-hint">Sustained braking and cornering tilt the car (pitch and roll per g); changes in acceleration and the
+      yaw rate give short moves that drift back to centre (washout). Whatever doesn't fit is scaled down as a whole.
+      Saved as you type; a playing course picks the change up at once. <button id="mo-cue-reset">Defaults</button></div>
+  </details>
+
+  <details class="card acc" id="mo-acc-move">
+    <summary><h3>Move it and the servos <span class="right muted" id="mo-link"></span></h3></summary>
+    <div class="mo-move-bar">
+      <div class="seg" id="mo-arm"><button data-on="0">Off</button><button data-on="1">Drive the servos</button></div>
+      <span class="grow"></span>
+      <button id="mo-center">Centre</button> <button id="mo-demo">Demo</button>
+    </div>
+    <div class="mo-cols">
+      <div class="fx-fields mo-axes" id="mo-axes"></div>
+      <table class="mo-servos"><thead><tr><th>#</th><th class="r">Horn</th><th></th><th class="r">Pulse</th></tr></thead><tbody id="mo-servos"></tbody></table>
+    </div>
+  </details>
+
+  <details class="card acc" id="mo-acc-geo">
+    <summary><h3>Geometry <span class="right muted">the platform as built, its reach, 1:1 drawings</span></h3></summary>
+    <label class="mo-unlock" title="The geometry must match the platform you built: unlock only to change it"><input type="checkbox" id="mo-geo-unlock"> Unlock to edit (locks again when you leave the tab)</label>
+    <div class="fx-fields" id="mo-geo"></div>
+    <div class="fx-hint" id="mo-geo-err"></div>
+    <div class="mo-cols">
+      <div>
+        <dl class="mo-design" id="mo-design"></dl>
+        <h3 class="sub-h">1:1 drawings for the printed parts</h3>
+        <div class="sys-btns">
+          <a class="btn" href="/api/motion/template/base.svg" download>Base (SVG, mm)</a>
+          <a class="btn" href="/api/motion/template/platform.svg" download>Platform (SVG, mm)</a>
+        </div>
+        <div class="fx-hint">True scale: import as a sketch in the CAD program, or print at 100 % and lay the servos on it (50 mm bar to check).</div>
+      </div>
+      <table class="mo-reach"><thead><tr><th>Axis alone</th><th class="r">−</th><th class="r">+</th></tr></thead><tbody id="mo-reach"></tbody></table>
+    </div>
+  </details>
+
+  <details class="card acc" id="mo-acc-cal">
+    <summary><h3>Servo calibration and model <span class="right muted">pulse = centre + direction × angle × µs/°</span></h3></summary>
+    <div class="mo-cols">
+      <div>
+        <div class="fx-fields" id="mo-cal"></div>
+        <table class="mo-servos"><thead><tr><th>#</th><th class="r">Centre µs</th><th>Direction</th></tr></thead><tbody id="mo-trim"></tbody></table>
+        <div class="fx-hint">Centre: the pulse that puts the horn horizontal (fit the horn as close as the splines allow, then trim here).
+          Direction: flip it if the horn goes down when it should go up. Mirrored servos in a pair turn opposite ways.</div>
+      </div>
+      <div>
+        <h3 class="sub-h" style="margin-top:0 !important">Model on top</h3>
+        <div class="fx-fields" id="mo-car"></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="card acc" id="mo-acc-wiring">
+    <summary><h3>Wiring</h3></summary>
+    <div id="mo-wiring" class="mo-wiring"></div>
+  </details>
 </section>
 </main>
 

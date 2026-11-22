@@ -3,12 +3,17 @@
 [← simdash](../README.md)
 
 Bass shaker setup for [Monocoque](https://github.com/Spacefreak18/monocoque), plus kerb, off-track and oversteer
-effects simdash plays itself. Link: `/#shakers`.
+effects simdash plays itself. Link: `/#shakers`. The printed mounts holding the shakers: [hardware/shaker-mounts](../hardware/shaker-mounts/README.md).
 
 ![The Shakers tab: the car seen from above with each shaker, the channel table and the effects](img/shakers-tab.png)
 *Where each channel of the 7.1 shaker card is mounted (one per wheel, BST1 under the seat), the effects each
 one plays (coloured dots), and on the right the effects with their wheels, modulation, frequency, strength
 and threshold.*
+
+Effects are grouped by type: one fold per effect (Gear shift, Wheelspin, Lock-up…) whose header lists the
+channels playing it, and inside it one fold per channel with that channel's settings (its header keeps the
+shaker, a one-line summary, Test and Remove). *Add channel* puts the effect on one more shaker, starting from the
+same settings; *Add effect…* picks a type. *Open all* / *Fold all* at the top; what's open is remembered per browser.
 
 ## Setup
 
