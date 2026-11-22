@@ -12,7 +12,9 @@ and threshold.*
 
 Effects are grouped by type: one fold per effect (Gear shift, Wheelspin, Lock-up…) whose header lists the
 channels playing it, and inside it one fold per channel with that channel's settings (its header keeps the
-shaker, a one-line summary, Test and Remove). *Add channel* puts the effect on one more shaker, starting from the
+shaker, a one-line summary, Test and Remove). *Test* on an effect plays it on all its channels at once, as they would add up
+(a shaker whose sum passes the Output ceiling is limited like in the haptics engine, not clipped); *Test* on a channel
+plays that one alone. *Add channel* puts the effect on one more shaker, starting from the
 same settings; *Add effect…* picks a type. *Open all* / *Fold all* at the top; what's open is remembered per browser.
 
 ## Setup

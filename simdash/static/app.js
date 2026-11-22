@@ -1953,7 +1953,7 @@ function renderCar() {
         return `<path class="halo" d="M${r * Math.cos(a0)} ${r * Math.sin(a0)} A${r} ${r} 0 0 1 ${r * Math.cos(a1)} ${r * Math.sin(a1)}" style="stroke:var(${FX_COLOUR[e.effect]})"/>`;
       }).join("");
       const lbl = sh.layout[ch].label || SPOT_NAME[spot];
-      html += `<g class="spot${sh.sel === ch ? " sel" : ""}${sh.playing === ch ? " playing" : ""}" data-ch="${ch}" transform="translate(${x} ${y})">
+      html += `<g class="spot${sh.sel === ch ? " sel" : ""}${sh.playing === ch || (sh.playing?.fx && sh.effects.some((e) => e.effect === sh.playing.fx && e.pan === ch)) ? " playing" : ""}" data-ch="${ch}" transform="translate(${x} ${y})">
         <title>${esc(chName(ch))}: ${n ? fx.map(({ e }) => FX_NAME[e.effect]).join(", ") : "no effect"}. Click to identify.</title>
         ${halos}<circle class="base" r="14"/><text>${sh.opts.channels[ch]}</text>
         <text class="lbl" y="${spot.startsWith("front") || spot.startsWith("rear") ? 46 : 30}">${esc(lbl)}</text></g>`;
@@ -2113,6 +2113,7 @@ function renderEffects() {
         <b class="fx-grp-name" data-act="gfold">${esc(FX_NAME[g.effect] || g.effect)}</b>
         <span class="muted" data-act="gfold">${n} channel${n === 1 ? "" : "s"}</span>
         <span class="grow fx-grp-ch" data-act="gfold">${chips}</span>
+        <button class="test" data-act="gtest" title="Play ${esc(FX_NAME[g.effect] || g.effect)} on all its channels at once (unsaved values included)">Test</button>
         <button data-act="addch" ${free ? "" : "disabled"} title="${free ? "Play this effect on one more shaker too (same settings to start with)" : "Already on every channel"}">Add channel</button>
       </div>
       <div class="fx-grp-body">${g.idx.map((i) => cards[i]).join("")}</div></div>`;
@@ -2135,6 +2136,7 @@ function renderEffects() {
     grp.querySelector(".fx-grp-head .fold").setAttribute("aria-expanded", on);
     setGrpOpen(grp.dataset.grp, on);
   }));
+  box.querySelectorAll("[data-act=gtest]").forEach((b) => (b.onclick = () => shakerTestGroup(b.closest(".fx-grp").dataset.grp)));
   box.querySelectorAll("[data-act=addch]").forEach((b) => (b.onclick = () => {
     const fx = b.closest(".fx-grp").dataset.grp;
     const mine = sh.effects.filter((e) => e.effect === fx);
@@ -2285,6 +2287,29 @@ document.querySelectorAll("#sh-car .tyre-r").forEach((t) => (t.onclick = () => {
 }));
 
 let shPlayTimer = null;
+// one effect on all its channels at once (a group's Test): its shakers light while it plays
+async function shakerTestGroup(fx) {
+  const effects = sh.effects.filter((e) => e.effect === fx);
+  if (!effects.length) return;
+  $("#sh-note").textContent = `Preparing ${FX_NAME[fx] || fx} on ${effects.length} channel${effects.length === 1 ? "" : "s"}…`;
+  const r = await fetch("/api/shakers/test_all", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ devid: sh.devid, effects }),
+  });
+  const d = await r.json();
+  if (!r.ok) {
+    $("#sh-note").textContent = d.detail === "the shaker sound card is not connected"
+      ? "Test not played: the shaker sound card is not connected (plug it in, then pick it in Sound card)" : d.detail || "Test failed";
+    return;
+  }
+  const red = Object.entries(d.reduced || {});
+  $("#sh-note").textContent = `Testing ${FX_NAME[fx] || fx} on ${effects.map((e) => chName(e.pan)).join(", ")} (${d.seconds.toFixed(1)} s)`
+    + (red.length ? `; the limiter takes off up to ${red.map(([ch, p]) => `${p} % on ${chName(+ch)}`).join(", ")} where they add up, as in the car` : "") + ".";
+  sh.playing = { fx };
+  renderCar();
+  clearTimeout(shPlayTimer);
+  shPlayTimer = setTimeout(() => { sh.playing = null; renderCar(); }, d.seconds * 1000);
+}
 async function shakerTest(effect, mode = "effect") {
   const r = await fetch("/api/shakers/test", {
     method: "POST", headers: { "Content-Type": "application/json" },

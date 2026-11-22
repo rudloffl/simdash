@@ -763,9 +763,12 @@ a.btn:hover { border-color: var(--muted); }
 .fx-grp-head .fold { padding: 3px 8px; border-color: transparent; background: transparent; color: var(--muted); }
 .fx-grp.open > .fx-grp-head .fold { transform: rotate(90deg); }
 .fx-grp-name, .fx-grp-head [data-act=gfold] { cursor: pointer; }
-.fx-grp-ch { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.fx-grp-ch { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; flex: 1 1 0; }
+.fx-grp-head { flex-wrap: nowrap; }
+.fx-grp-head > button, .fx-grp-head > b, .fx-grp-head > .muted { flex: none; white-space: nowrap; }
 .fx-grp-ch .pill { font-size: 11px; padding: 1px 7px; }
-.fx-grp-head button[data-act=addch] { padding: 3px 10px; }
+.fx-grp-head button[data-act=addch], .fx-grp-head button.test { padding: 3px 10px; }
+.fx-grp-head button.test { border-color: var(--c); }
 .fx-grp-head button:disabled { opacity: 0.45; cursor: default; }
 .fx-grp:not(.open) > .fx-grp-body { display: none; }
 .fx-grp-body { padding: 0 8px 2px 26px; }

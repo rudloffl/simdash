@@ -39,6 +39,11 @@ class ShakerTest(BaseModel):
     mode: str = "effect"
 
 
+class ShakerTestAll(BaseModel):
+    devid: str
+    effects: list[dict]
+
+
 class ReplayLoad(BaseModel):
     ref: str
     devid: str = ""
@@ -502,6 +507,20 @@ def create_app(recorder=None):
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
         return {"seconds": secs}
+
+    @app.post("/api/shakers/test_all")
+    async def test_all_shakers(t: ShakerTestAll):
+        """Several effects at the same time (an effect on all its channels), mixed as on the shakers
+        (unsaved values included)."""
+        if not t.effects:
+            raise HTTPException(400, "no effect to test")
+        try:
+            secs, reduced = await asyncio.to_thread(shakers.play_all, t.effects, t.devid)
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+        return {"seconds": secs, "reduced": reduced}
 
     @app.post("/api/shakers/stop")
     def stop_shaker():

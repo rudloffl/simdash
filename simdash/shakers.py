@@ -707,14 +707,64 @@ def _play_on_engine(pcm, vol):
     threading.Thread(target=feed, daemon=True).start()
 
 
-def play(e, devid, mode="effect"):
-    """Start a test on sink devid in the background; replaces a test still playing."""
-    global _player
+def mix(effects):
+    """Every effect's test rendered at its own volume and summed into one 8-channel buffer, as they add up
+    on the shakers. Like the haptics engine's limiter (Output settings: ceiling, release): where a shaker's
+    sum would go past the ceiling its gain comes down over 1.5 ms and recovers over release_ms, instead of
+    clipping (a clipped sine buzzes) or turning the whole test down.
+    Returns (buffer, {channel: largest reduction in %} for the channels the limiter worked on)."""
+    tracks = [(render(e), max(0, min(100, int(e.get("volume", 100)))) / 100) for e in effects]
+    n = max((len(b) for b, _ in tracks), default=0)
+    acc = [0.0] * n
+    for buf, vol in tracks:
+        for i, v in enumerate(buf):
+            if v:
+                acc[i] += v * vol
+    sh = load_shaping()
+    ceil = 32767 * (sh["ceiling"] / 100 if sh["limiter"] else 1.0)
+    frames, block, ramp = n // 8, int(0.01 * RATE), int(0.0015 * RATE)
+    rel = 1 - math.exp(-0.01 / (sh["release_ms"] / 1000))
+    reduced = {}
+    for ch in range(8):
+        g = 1.0
+        for b0 in range(0, frames, block):
+            idx = range(8 * b0 + ch, 8 * min(frames, b0 + block) + ch, 8)
+            peak = max((abs(acc[i]) for i in idx), default=0.0)
+            target = min(1.0, ceil / peak) if peak > 0 else 1.0
+            g1 = target if target < g else min(target, g + (1.0 - g) * rel)
+            for j, i in enumerate(idx):
+                # down: over the first 1.5 ms (a step would click), up: across the block
+                k = g + (g1 - g) * min(1.0, j / ramp) if g1 < g else g + (g1 - g) * j / len(idx)
+                acc[i] *= k
+            if g1 < 0.995:
+                reduced[ch] = max(reduced.get(ch, 0), round(100 * (1 - g1)))
+            g = g1
+    return array("h", (int(max(-32767, min(32767, v))) for v in acc)), reduced
+
+
+def play_all(effects, devid):
+    """Test every effect at the same time; returns (seconds, {channel: limiter reduction %})."""
+    _check_card(devid)
+    pcm, scaled = mix(effects)
+    return _start(pcm.tobytes(), devid, 65536), scaled
+
+
+def _check_card(devid):
     if not devid or devid not in {s["name"] for s in sinks()}:
         # never let PulseAudio fall back to the speakers
         raise LookupError("the shaker sound card is not connected")
+
+
+def play(e, devid, mode="effect"):
+    """Start a test on sink devid in the background; replaces a test still playing."""
+    _check_card(devid)
     pcm = render(e, mode).tobytes()
     vol = int(max(0, min(100, int(e.get("volume", 100)))) / 100 * 65536) if mode == "effect" else 65536
+    return _start(pcm, devid, vol)
+
+
+def _start(pcm, devid, vol):
+    global _player
     stop()
     from . import link
     if link.usable(devid):
