@@ -631,8 +631,31 @@ def create_app(recorder=None):
 
     @app.post("/api/motion/arm")
     def motion_arm(body: dict):
-        motion.link.arm(bool(body.get("on")))
+        """Arming checks the firmware's hello first; refused (409) without a valid answer."""
+        on = bool(body.get("on"))
+        home = motion.solve({})
+        if not motion.link.arm(on, home["pulse"] if home["ok"] else None):
+            raise HTTPException(409, motion.link.status()["error"] or "cannot arm")
+        if on and motion.player.course is None:
+            motion.link.send(home["pulse"])
         return motion.link.status()
+
+    @app.post("/api/motion/raw")
+    def motion_raw(body: dict):
+        """Calibration: servo i at a given pulse, the others at their level pulse (clamped, armed only)."""
+        try:
+            i, us = int(body["servo"]), int(body["us"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, "servo and us")
+        sv = motion.settings()["servos"]
+        if not 0 <= i < 6:
+            raise HTTPException(400, "servo 0-5")
+        if motion.player.playing:
+            raise HTTPException(409, "a course is playing")
+        p = list(sv["center_us"])
+        p[i] = max(sv["min_us"], min(sv["max_us"], us))
+        motion.link.send(p)
+        return {"pulse": p, "link": motion.link.status()}
 
     @app.get("/api/motion/template/{part}.svg")
     def motion_template(part: str):

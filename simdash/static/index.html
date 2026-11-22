@@ -742,9 +742,13 @@
   <details class="card acc" id="mo-acc-cue">
     <summary><h3>Cueing <span class="right muted">how the car's movements become the platform's</span></h3></summary>
     <div class="fx-fields" id="mo-cue"></div>
-    <div class="fx-hint">Sustained braking and cornering tilt the car (pitch and roll per g); changes in acceleration and the
-      yaw rate give short moves that drift back to centre (washout). Whatever doesn't fit is scaled down as a whole.
-      Saved as you type; a playing course picks the change up at once. <button id="mo-cue-reset">Defaults</button></div>
+    <div class="fx-hint"><b>Washout</b>: sustained braking and cornering tilt the car (pitch and roll per g); changes in
+      acceleration and the yaw rate give short moves that drift back to centre. <b>Body</b>: what the car's body does on its
+      springs (suspension travel, or a spring–damper on the g-forces when none was recorded), kerb hits, yaw = slip angle
+      (drifts look like drifts), a share of the slope and banking. Both: each axis is squeezed softly into its share of
+      the reach; a pose that still doesn't fit is scaled down as a whole, smoothly. The platform fades in on play, seek
+      and after a pause in the recording, and glides home on pause. Saved as you type; a playing course picks the change
+      up at once. <button id="mo-cue-reset">Defaults</button></div>
   </details>
 
   <details class="card acc" id="mo-acc-move">
@@ -780,13 +784,17 @@
   </details>
 
   <details class="card acc" id="mo-acc-cal">
-    <summary><h3>Servo calibration and model <span class="right muted">pulse = centre + direction × angle × µs/°</span></h3></summary>
+    <summary><h3>Servo calibration and model <span class="right muted">three points per servo: level, +45°, −45°</span></h3></summary>
     <div class="mo-cols">
       <div>
         <div class="fx-fields" id="mo-cal"></div>
-        <table class="mo-servos"><thead><tr><th>#</th><th class="r">Centre µs</th><th>Direction</th></tr></thead><tbody id="mo-trim"></tbody></table>
-        <div class="fx-hint">Centre: the pulse that puts the horn horizontal (fit the horn as close as the splines allow, then trim here).
-          Direction: flip it if the horn goes down when it should go up. Mirrored servos in a pair turn opposite ways.</div>
+        <table class="mo-servos mo-cal-t"><thead><tr><th>#</th><th class="r">Level µs</th><th class="r">+45° (up) µs</th><th class="r">−45° µs</th><th class="r">µs/°</th><th></th></tr></thead><tbody id="mo-trim"></tbody></table>
+        <div id="mo-cal-warn" class="fx-hint"></div>
+        <div class="fx-hint" id="mo-cal-note"></div>
+        <div class="fx-hint">Per servo, with “Drive the servos” on: <b>Go</b> on Level and adjust until the horn is horizontal
+          (fit the horn as close as the splines allow first); then on +45° until the horn sits on a printed 45° gauge,
+          pointing up; −45° the same pointing down (catches a servo that isn't linear). <b>Reverse</b> mirrors ±45° if the
+          horn goes down when it should go up.</div>
       </div>
       <div>
         <h3 class="sub-h" style="margin-top:0 !important">Model on top</h3>

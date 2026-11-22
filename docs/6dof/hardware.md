@@ -6,7 +6,7 @@
 
 | Part | Have | Notes |
 |---|---|---|
-| 6 × MG90 metal-gear micro servo | on order | ~2 kg·cm at 4.8 V, ~0.1 s/60°, ~180° travel, 3-pin plug (brown GND, red V+, orange signal). Analog: 50 Hz. Check the exact pulse range on yours (calibration in the tab). |
+| 6 × MG90 metal-gear micro servo | on order | ~2 kg·cm at 4.8 V, ~0.1 s/60°, ~180° travel, 3-pin plug (brown GND, red V+, orange signal). Analog: 50 Hz. Pulses kept within 800–2200 µs (end stops near 600 / 2400). Calibrated per servo in the tab: level, +45°, −45° against a printed 45° gauge. |
 | PCA9685 16-channel PWM board | yes | I2C address 0x40 by default. Logic VCC 3.3 V from the pyboard, servo power on the V+ screw terminal. |
 | pyboard v1.1 (MicroPython) | yes | USB serial to the PC; I2C 1 on X9/X10. |
 | 5–6 V supply, ≥ 5 A | to get | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V). |

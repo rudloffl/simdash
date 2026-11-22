@@ -19,6 +19,8 @@ Angles in the tab: roll + leans right, pitch + nose up, yaw + nose left.
 | `rod` | 90 mm | Ball centre to ball centre. |
 | `first_pair` | 0° | Where servos 0–1 sit (0 = under the nose, so pitch and roll are symmetric left/right). |
 | `servo_limit` | 60° | Horn travel allowed each way from horizontal (horn and rod must not hit the body or the base). |
+| `transmission_min_deg` | 35° | Horn–rod angle kept within 35–145°. Near 0 or 180 the leg toggles: the horn turns, the platform barely moves, loads spike. 99° at home with the defaults (90 is ideal). |
+| `joint_max_deg` | 30° | Each ball joint's swivel from its home direction, at the horn end and at the platform end (typical RC rod ends). |
 
 The three servo pairs are 120° apart and the horns of a pair point away from each other. In the flat layout
 both horns swing along the pair's face; in the radial one each swings in a plane tangent to the base circle and
@@ -26,8 +28,22 @@ each body runs from its shaft towards the next pair. Settings saved before the f
 stay radial.
 
 With the defaults (flat): home height 86.4 mm (shafts to platform joints), rods lean 16° from vertical, and each
-axis alone reaches about ±35 mm surge/sway, −15/+17 mm heave, ±19.5° roll, ±22° pitch, ±49° yaw. The radial
-layout reaches about the same. The tab recomputes all of this as the numbers change.
+axis alone reaches about ±23 mm surge/sway, ±9 mm heave, ±11° roll, ±12.5° pitch, ±30° yaw with the joint
+limits (±35 mm, ±15 mm, ±19.5°, ±22°, ±49° without them). The tab recomputes all of this as the numbers change.
+
+## Limits
+
+A pose is allowed (`motion.why_not` / `within`, used by the reach table, the cueing and the tab) when every
+servo reaches it within `servo_limit`, every horn–rod angle stays within `transmission_min_deg`…180−that, and
+every ball joint swivels less than `joint_max_deg` from its home direction:
+
+- at the platform end the stud turns with the platform: the rod is seen in the platform's frame;
+- at the horn end the stud turns with the horn (about the shaft, by the horn angle): the rod is seen in the
+  horn's frame.
+
+That assumes the **studs are printed along the home rod direction**: the 1:1 drawings show it in blue
+(16° from vertical with the defaults). The tab says which limit stops a pose ("held: joint 3 on the horn
+swivels 34°").
 
 ## Inverse kinematics (rotary servos)
 
