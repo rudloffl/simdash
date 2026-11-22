@@ -648,6 +648,34 @@ def create_app(recorder=None):
     def motion_replay_state():
         return motion.player.state()
 
+    @app.post("/api/motion/demo")
+    async def motion_demo_build(body: dict):
+        """Bake a recorded course into the board demo: {ref, what: session|lap|time, lap, from_s, to_s}."""
+        try:
+            return await asyncio.to_thread(motion.export_demo, str(body.get("ref")), body.get("what") or "session",
+                                           body.get("lap"), body.get("from_s"), body.get("to_s"))
+        except (LookupError, FileNotFoundError) as e:
+            raise HTTPException(404, str(e))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/motion/demo.bin")
+    def motion_demo_file():
+        if not motion.DEMO_FILE.exists():
+            raise HTTPException(404, "build the demo first")
+        return FileResponse(motion.DEMO_FILE, media_type="application/octet-stream", filename="demo.bin")
+
+    @app.post("/api/motion/demo/write")
+    async def motion_demo_write():
+        """Copy the demo to the board (it lets go of the servos and restarts)."""
+        from . import pyboard
+        try:
+            return await asyncio.to_thread(motion.write_demo)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except (OSError, pyboard.BoardError) as e:
+            raise HTTPException(409, str(e))
+
     @app.post("/api/motion/arm")
     def motion_arm(body: dict):
         """Arming checks the firmware's hello first; refused (409) without a valid answer."""

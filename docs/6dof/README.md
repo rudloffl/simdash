@@ -50,10 +50,12 @@ pyboard only clamps the six pulses, writes them, and lets go of the servos when 
 |---|---|
 | `simdash/motion.py` | Geometry, inverse kinematics, reach, 1:1 SVG templates, serial link to the pyboard. Settings in `~/.local/share/simdash/motion.json`. |
 | `simdash/static/6dof-wiring.svg` | The wiring diagram (also shown in the tab). |
-| `firmware/6dof/` | `main.py`, `board.py` (logic: speed limit, park, glide) and `pca9685.py` for the pyboard. |
+| `firmware/6dof/` | `main.py`, `board.py` (speed limit, park, glide), `fw.py` (PC / demo / USR / LEDs), `demo.py` (standalone demo player) and `pca9685.py` for the pyboard. |
+| `simdash/pyboard.py` | Copies files to the board through its raw REPL (no mpremote needed). |
 | `tests/test_motion.py`, `tests/test_firmware.py` | IK and joint limits, calibration, cueing (both modes, fades, soft limits), telemetry signs on a recorded lap, the link against a fake pyboard; the firmware logic under CPython. |
 
 API: `GET/PUT /api/motion` (settings + design numbers), `POST /api/motion/pose` (solve a pose; sent to the
 pyboard when the servos are armed and the pose is reachable), `POST /api/motion/arm` `{on}`,
-`GET/POST /api/motion/replay` (`{action: load|play|pause|seek|stop}`), `POST /api/motion/raw` `{servo, us}` (calibration),
+`GET/POST /api/motion/replay` (`{action: load|play|pause|seek|stop}`), `POST /api/motion/raw` `{servo, us}` (calibration), `POST /api/motion/demo` `{ref, what, lap, from_s, to_s}`,
+`GET /api/motion/demo.bin`, `POST /api/motion/demo/write`,
 `GET /api/motion/template/{base|platform}.svg`.

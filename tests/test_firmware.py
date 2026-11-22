@@ -103,3 +103,15 @@ def test_bad_lines_are_ignored():
     with pytest.raises(ValueError):
         b.line("S 1500 1500", 0)
     assert b.line("", 0) is None and b.state == "limp"
+
+
+def test_firmware_runs_on_old_micropython():
+    """The pyboard here runs MicroPython 1.9.4 (2018): no numeric underscores (400_000), no f-strings."""
+    import re
+    folder = os.path.join(os.path.dirname(__file__), "..", "firmware", "6dof")
+    for name in ("main.py", "board.py", "pca9685.py", "fw.py", "demo.py"):
+        src = open(os.path.join(folder, name)).read()
+        code = "\n".join(ln.split("#")[0] for ln in src.splitlines())
+        assert not re.search(r"\d_\d", code), name
+        assert not re.search(r"\bf[\"']", code), name
+        assert ".value(" not in code.replace("oe.value(", ""), name   # pyb.LED has no value() on 1.9.4

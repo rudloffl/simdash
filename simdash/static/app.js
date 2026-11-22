@@ -5325,6 +5325,9 @@ async function loadCourseSessions(loaded) {
 }
 function showCourse(info) {
   mo.course = info;
+  $("#mo-demo-lap").innerHTML = info.laps.map((l) => `<option value="${l.lap}">Lap ${l.lap}</option>`).join("");
+  $("#mo-demo-to").value = Math.round(info.t1 - info.t0);
+  $("#mo-demo-build").disabled = false;
   mo.fx = null;
   $("#mo-where").hidden = false;
   $("#mo-main").classList.remove("solo");
@@ -5429,3 +5432,36 @@ function paintCourse(st, force = false) {
   }
   paintCourseWhere();
 }
+
+// ---- the standalone board demo
+$("#mo-demo-what").onchange = (e) => {
+  $("#mo-demo-lap").hidden = e.target.value !== "lap";
+  $("#mo-demo-range").hidden = e.target.value !== "time";
+};
+$("#mo-demo-build").onclick = async () => {
+  if (!mo.course) return;
+  const what = $("#mo-demo-what").value;
+  $("#mo-demo-info").textContent = "Building…";
+  const r = await fetch("/api/motion/demo", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: mo.course.ref, what, lap: +$("#mo-demo-lap").value, from_s: +$("#mo-demo-from").value, to_s: +$("#mo-demo-to").value }) });
+  const d = await r.json();
+  if (!r.ok) { $("#mo-demo-info").innerHTML = `<span class="warn">${esc(d.detail)}</span>`; return; }
+  const m = Math.floor(d.seconds / 60), s = Math.round(d.seconds % 60);
+  $("#mo-demo-info").innerHTML = `demo.bin: ${(d.bytes / 1024).toFixed(1)} kB, ${m ? m + " min " : ""}${s} s (${d.frames} frames at 25 Hz), `
+    + `${esc(d.track)} · ${esc(d.car)}, ${d.from_s}–${d.to_s} s of the session`
+    + (d.clipped ? ` · <span class="warn">${d.clipped} frames reach past ±508 µs from level and were clipped: lower the cueing or the travel</span>` : " · nothing clipped")
+    + (d.bytes > 75 * 1024 ? ` · <span class="warn">probably too big for the board's flash without an SD card</span>` : "");
+  $("#mo-demo-write").disabled = false;
+  $("#mo-demo-dl").hidden = false;
+};
+$("#mo-demo-write").onclick = async () => {
+  $("#mo-demo-info").textContent = "Writing to the board (it lets go of the servos and restarts)…";
+  $("#mo-demo-write").disabled = true;
+  const r = await fetch("/api/motion/demo/write", { method: "POST" });
+  const d = await r.json();
+  $("#mo-demo-write").disabled = false;
+  $("#mo-demo-info").innerHTML = r.ok
+    ? `Written to ${esc(d.dest)} (${(d.bytes / 1024).toFixed(1)} kB, with ${esc(d.with)}). Unplug the USB and power the board: it plays after 3 s.`
+    : `<span class="warn">${esc(d.detail)}</span> (Download demo.bin and copy it to the board's drive instead.)`;
+  if (r.ok && mo.link) { mo.link.armed = false; renderMotionLink(); }
+};

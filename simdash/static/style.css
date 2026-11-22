@@ -801,3 +801,8 @@ a.btn:hover { border-color: var(--muted); }
 .mo-pt input { width: 70px; }
 .mo-pt button, .mo-cal-t button { padding: 2px 7px; font-size: 12px; }
 #mo-cal-warn .warn { color: var(--critical); }
+.mo-demo { margin-top: 8px; }
+.mo-demo > summary { cursor: pointer; color: var(--text-2); font-size: 13px; padding: 4px 0; }
+.mo-demo-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.mo-demo-bar input[type=number] { width: 70px; }
+#mo-demo-info .warn { color: var(--critical); }

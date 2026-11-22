@@ -141,8 +141,17 @@ def test_link_talks_the_firmware_protocol(monkeypatch):
     stop.set()
     assert st["connected"] and st["armed"] and st["firmware"] == "6DOF 2 ch=6", st
     # park and home first, then the frames, and O when disarmed
-    assert got[:3] == ["H", "P 1500 1500 1500 1500 1500 1500", "S 1500 1500 1500 1500 1500 1500"], got
+    assert got[:4] == ["H", "A", "P 1500 1500 1500 1500 1500 1500", "S 1500 1500 1500 1500 1500 1500"], got
     assert "S 1500 1510 1520 1530 1540 1550" in got and got[-1] == "O"
+
+
+def test_link_says_when_the_pca9685_is_missing(monkeypatch):
+    got, stop = _fake_board(monkeypatch, b"6DOF 2 ch=6 pca=missing\n")
+    link = motion.Link()
+    assert link.arm(True, [1500] * 6) is False
+    stop.set()
+    assert "PCA9685" in link.status()["error"]
+    assert not any(ln.startswith(("S", "P")) for ln in got)
 
 
 @pytest.mark.parametrize("hello", [None, b"6DOF 1 ch=6\n", b">>> \n"])

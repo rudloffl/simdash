@@ -722,6 +722,28 @@
       <span class="num" id="mo-time"></span>
     </div>
     <div class="mo-readout" id="mo-readout"></div>
+    <details class="mo-demo" id="mo-demo-box">
+      <summary>Save as board demo: the platform plays it with only power connected, no PC</summary>
+      <div class="mo-demo-bar">
+        <select id="mo-demo-what">
+          <option value="session">The whole session</option>
+          <option value="lap">One lap</option>
+          <option value="time">A time range</option>
+        </select>
+        <select id="mo-demo-lap" hidden></select>
+        <span id="mo-demo-range" hidden>from <input type="number" id="mo-demo-from" min="0" step="1" value="0"> to
+          <input type="number" id="mo-demo-to" min="1" step="1" value="60"> s</span>
+        <button id="mo-demo-build" disabled>Build</button>
+        <button id="mo-demo-write" disabled>Write to board</button>
+        <a class="btn" id="mo-demo-dl" href="/api/motion/demo.bin" download hidden>Download demo.bin</a>
+      </div>
+      <div class="fx-hint" id="mo-demo-info"></div>
+      <div class="fx-hint">Built with the current cueing at 25 Hz, starting and ending at park with a 1 s glide. On the board:
+        it plays 3 s after power-up if no PC talks to it (blue LED), then loops after 5 s at park; any message from
+        simdash takes over. USR short press: stop and go limp (red steady) until the next power-up; long press: play
+        again from the start. <b>The demo bakes in the calibration: build and write it again after recalibrating.</b>
+        Without an SD card it must fit in the board's flash (about 8 minutes).</div>
+    </details>
   </div>
 
   <!-- the platform, and beside it (while a course is loaded) where the car is and what the haptics played -->

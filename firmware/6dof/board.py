@@ -5,6 +5,7 @@ Lines from the PC:
   P u0..u5   park pulses: where to glide when the PC goes silent
   O          let go now (outputs off, servos limp)
   H          hello -> "6DOF <version> ch=<n>"
+  A          (fw.py) clear the stop latch set by a short press on USR
 
 Each servo moves towards its target by at most rate_us_per_ms (an MG90's top speed is about
 6 µs/ms: a 600 µs step takes 100 ms). Outputs are updated by tick(), at a fixed period, not when a
@@ -13,7 +14,7 @@ starting point (the PC sends the home pose first). No line for timeout_ms: glide
 over about glide_ms, hold hold_ms, then go limp (no park pulses: limp at once).
 """
 
-VERSION = "2"
+VERSION = "3"
 
 
 class Board:
@@ -42,12 +43,7 @@ class Board:
             return None
         op = parts[0]
         if op in ("S", b"S"):
-            us = self._clamp(parts[1:])
-            if self.cur is None:        # limp: the horns are wherever they are; start from here
-                self.cur = list(us)
-            self.target = us
-            self.state = "drive"
-            self.last_ms = now_ms
+            self.drive(parts[1:], now_ms)
         elif op in ("P", b"P"):
             self.park = self._clamp(parts[1:])
         elif op in ("O", b"O"):
@@ -56,6 +52,24 @@ class Board:
             return "6DOF %s ch=%d\n" % (VERSION, self.n)
         return None
 
+    def drive(self, us, now_ms):
+        """New target pulses (from an S line or the demo player)."""
+        us = self._clamp(us)
+        if self.cur is None:            # limp: the horns are wherever they are; start from here
+            self.cur = list(us)
+        self.target = us
+        self.state = "drive"
+        self.last_ms = now_ms
+
+    def glide_to_park(self):
+        """Glide to the park pulses over about glide_ms, hold, then go limp (no park: limp now)."""
+        if self.park is None or self.cur is None:
+            self.let_go()
+            return
+        self.state, self.target = "glide", list(self.park)
+        dist = max(abs(p - c) for p, c in zip(self.park, self.cur))
+        self.glide_rate = min(self.rate, max(dist / self.glide_ms, 0.05))
+
     def let_go(self):
         self.state, self.cur, self.target = "limp", None, None
         self.out.off()
@@ -63,12 +77,7 @@ class Board:
     def tick(self, now_ms, dt_ms):
         """Move the outputs one step; call at a fixed period (e.g. every 5 ms)."""
         if self.state == "drive" and now_ms - self.last_ms > self.timeout:
-            if self.park is None:
-                self.let_go()
-                return
-            self.state, self.target = "glide", list(self.park)
-            dist = max(abs(p - c) for p, c in zip(self.park, self.cur))
-            self.glide_rate = min(self.rate, max(dist / self.glide_ms, 0.05))
+            self.glide_to_park()
         if self.state == "limp" or self.cur is None:
             return
         rate = self.glide_rate if self.state == "glide" else self.rate

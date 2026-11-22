@@ -5,7 +5,7 @@ MODE1, MODE2, PRESCALE, LED0 = 0x00, 0x01, 0xFE, 0x06
 
 
 class PCA9685:
-    def __init__(self, i2c, addr=0x40, freq=50, osc=25_000_000):
+    def __init__(self, i2c, addr=0x40, freq=50, osc=25000000):
         self.i2c, self.addr, self.freq = i2c, addr, freq
         self.all_off()
         self.i2c.writeto_mem(addr, MODE2, b"\x04")             # totem-pole outputs
@@ -16,7 +16,7 @@ class PCA9685:
         time.sleep_ms(1)
         self.i2c.writeto_mem(addr, MODE1, b"\xa0")             # restart PWM
         # length of one count in µs, from the frequency actually set
-        self.us_per_count = 1_000_000 * (prescale + 1) / osc
+        self.us_per_count = 1000000 * (prescale + 1) / osc
 
     def pulses_us(self, first, us):
         """Consecutive channels first, first+1, ... in ONE I2C write (auto-increment), so they all

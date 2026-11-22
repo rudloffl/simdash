@@ -561,6 +561,10 @@ class Link:
             self._close()
             raise OSError(f"no 6DOF firmware answering on {port} (version {FIRMWARE_MIN}+ needed"
                           + (f", got \"{self.firmware}\")" if self.firmware else "): is main.py running?"))
+        if "pca=missing" in self.firmware:
+            self._close()
+            raise OSError(f"the pyboard answers but its PCA9685 doesn't (I2C X9/X10, 3V3, GND): check the wiring, then reset the board")
+        self._write(b"A\n")   # you armed it here: clears a stop latched with the board's USR switch (fw v3)
         if self.home:
             self._write(_frame("P", self.home))
             self._write(_frame("S", self.home))
@@ -1135,3 +1139,128 @@ class Player:
 
 
 player = Player()
+
+
+# ---------- standalone demo: a recorded race baked into a file the board plays with no PC ----------
+
+DEMO_RATE = 25
+DEMO_STEP = 4                 # µs per int8 step: ±127 x 4 = ±508 µs around the level pulse
+DEMO_GLIDE_S = 1.0
+DEMO_FILE = store.DATA_DIR / "demo.bin"
+
+
+def demo_frames(course, t0, t1, s=None):
+    """The pulses of a course from t0 to t1 at DEMO_RATE in sim time, through the same pipeline as
+    Player._step (cueing -> whole-pose guard -> IK -> calibrated pulses), with a glide in from park and out
+    to park of DEMO_GLIDE_S each. Returns (frames, park)."""
+    s = s or settings()
+    g = s["geometry"]
+    park = solve({}, s)["pulse"]
+    cue = Cueing(cueing_settings(), {ax: tuple(v) for ax, v in reach(g).items()})
+    cue.reseed(course.sample(t0))
+    cue.fade_to = 1.0
+    guard = ScaleGuard()
+    dt = 1.0 / DEMO_RATE
+    frames, last, t = [], list(park), t0
+    while t <= t1 + 1e-6:              # both ends included (float steps would lose the last frame)
+        pose = cue.step(course.sample(t), dt)
+        fitted, _ = guard.apply(pose, g, dt)
+        r = solve(fitted, s)
+        if r["ok"]:
+            last = r["pulse"]
+        frames.append(list(last))
+        nt = course.skip_gap(t + dt)
+        if nt > t + dt + 1e-6:          # a gap in the recording: restart the filters on the new inputs
+            cue.reseed(course.sample(nt))
+        t = nt
+
+    def glide(a, b):
+        n = int(DEMO_GLIDE_S * DEMO_RATE)
+        out = []
+        for k in range(1, n + 1):
+            w = (1 - math.cos(math.pi * k / n)) / 2      # eased
+            out.append([round(x + (y - x) * w) for x, y in zip(a, b)])
+        return out
+    if not frames:
+        frames = [list(park)]
+    return [list(park)] + glide(park, frames[0]) + frames + glide(frames[-1], park), park
+
+
+def demo_encode(frames, center, park, step=DEMO_STEP, rate=DEMO_RATE):
+    """demo.bin bytes, and how many frames had a pulse clipped to ±127 steps."""
+    import struct
+    if len(frames) > 65535:
+        raise ValueError(f"{len(frames)} frames: at most 65535 ({65535 / rate / 60:.0f} min at {rate} Hz)")
+    head = b"6DOFDEMO" + struct.pack("<BBH6H6HB", 1, rate, len(frames), *center, *park, step)
+    body, clipped = bytearray(), 0
+    for f in frames:
+        cut = False
+        for i, us in enumerate(f):
+            v = round((us - center[i]) / step)
+            if v > 127 or v < -127:
+                v, cut = max(-127, min(127, v)), True
+            body.append(v & 0xFF)
+        clipped += cut
+    return head + bytes(body), clipped
+
+
+def demo_range(course, what="session", lap=None, from_s=None, to_s=None):
+    """(t0, t1) in the course's clock for the whole session, one lap, or seconds from its start."""
+    t0, t1 = course.t0, course.t1
+    if what == "lap":
+        laps = course.d["laps"]
+        k = next((i for i, x in enumerate(laps) if x["lap"] == int(lap)), None)
+        if k is None:
+            raise ValueError(f"no lap {lap}")
+        return laps[k]["ts"], laps[k + 1]["ts"] if k + 1 < len(laps) else t1
+    if what == "time":
+        a, b = course.t0 + float(from_s or 0), course.t0 + float(to_s if to_s is not None else t1 - t0)
+        if not a < b:
+            raise ValueError("the range must end after it starts")
+        return max(t0, a), min(t1, b)
+    return t0, t1
+
+
+def export_demo(ref, what="session", lap=None, from_s=None, to_s=None):
+    """Bake a recorded course into DEMO_FILE; returns what the tab shows."""
+    course = Course(ref)
+    s = settings()
+    t0, t1 = demo_range(course, what, lap, from_s, to_s)
+    frames, park = demo_frames(course, t0, t1, s)
+    data, clipped = demo_encode(frames, s["servos"]["center_us"], park)
+    DEMO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DEMO_FILE.write_bytes(data)
+    return {"bytes": len(data), "frames": len(frames), "seconds": round(len(frames) / DEMO_RATE, 1),
+            "clipped": clipped, "ref": ref, "track": course.d["track"], "car": course.d["car"],
+            "what": what, "lap": lap, "from_s": round(t0 - course.t0, 1), "to_s": round(t1 - course.t0, 1)}
+
+
+def write_demo():
+    """Put DEMO_FILE on the board: /sd/demo.bin with an SD card, else /flash/demo.bin. mpremote when
+    installed, else simdash's own raw-REPL copy. The servos are let go first; the board restarts after."""
+    import shutil
+    import subprocess
+    from . import pyboard
+    if not DEMO_FILE.exists():
+        raise ValueError("build the demo first")
+    data = DEMO_FILE.read_bytes()
+    port = find_port()
+    if not port:
+        raise OSError("pyboard not found (MicroPython USB device f055)")
+    link.arm(False)                       # sends O and lets go of the port
+    with pyboard.Board(port) as b:
+        info = b.info()
+        dest = "/sd/demo.bin" if info["sd"] else "/flash/demo.bin"
+        room = (info["sd_free"] if info["sd"] else info["flash_free"]) + info["demo"].get(dest, 0) - 2048
+        if len(data) > room:
+            raise ValueError(f"the demo is {len(data) // 1024} kB, the board has {max(0, room) // 1024} kB free on "
+                             f"{'its SD card' if info['sd'] else 'its flash (no SD card)'}: pick a lap or a shorter range")
+        tool = shutil.which("mpremote")
+        if not tool:
+            b.put(data, dest)
+    if tool:  # outside the raw REPL session (it soft-reset the board on exit)
+        r = subprocess.run([tool, "connect", port, "cp", str(DEMO_FILE), ":" + dest, "+", "reset"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode:
+            raise OSError("mpremote: " + (r.stderr or r.stdout).strip()[-300:])
+    return {"dest": dest, "bytes": len(data), "with": "mpremote" if tool else "simdash", "port": port}
