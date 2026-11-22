@@ -30,6 +30,8 @@ there leg by leg (x red, y green, z blue), the platform's own axes beside the ho
 
 ![The 6DOF tab: the platform in 3D with the car, pose sliders, servo angles and pulses, geometry with its reach, calibration](../img/6dof-tab.png)
 
+![The Demo: each axis in turn (surge, sway, heave, roll, pitch, yaw) swung to 70 % of its reach and back, with the reference point and the pose readout](../img/6dof-demo.gif)
+
 | Page | What's in it |
 |---|---|
 | [Hardware](hardware.md) | Parts list, wiring, power, the pyboard's pins. |
