@@ -4,3 +4,6 @@ __pycache__/
 gen_offsets
 *.sqlite
 *.sqlite-*
+# FreeCAD backups
+*.FCBak
+*.FCStd1

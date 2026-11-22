@@ -24,14 +24,25 @@ the pages below.
 | [Progress](docs/progress.md) | One track and car over every session: best lap, best sectors, median and spread, time per corner against your best ever. |
 | [Corner Genie](docs/corner-genie.md) | A card after each corner while you drive (time, braking point, speeds, a tip). Every pass through a corner compared, any car, with a speed heatmap of the lines, a replay and the inputs. |
 | [Track edges](docs/track-edges.md) | Map where each track really ends by driving over its edges; natural colours, altitude profile, 3D. |
-| [Shakers](docs/shakers.md) | Bass shakers on a top view of the car, played by simdash's haptics engine (or monocoque): effects, limiter, replay of a session on the shakers. Measurements in [notes](docs/haptics-notes.md). |
+| [Shakers](docs/shakers.md) | Haptics tab: bass shakers on a top view of the car, played by simdash's haptics engine (or monocoque). Effects grouped by type with one fold per channel, limiter, replay of a session on the shakers and pedals. Measurements in [notes](docs/haptics-notes.md). |
 | [System](docs/system.md) | The telemetry chain from AMS2 to the shakers (monocoque or simdash's own haptics engine), each link green / yellow / red, restart buttons, logs, database size. |
 | [Pedal haptics](docs/pedal-haptics.md) | Moza pedal haptic module driven from AMS2: engine, ABS, TC, gear shift, slip, bite point, road texture. |
-| [Wheel LEDs](docs/wheel-leds.md) | Shift light on a Moza rim's RPM LEDs (shelved, at `/#leds`). |
+| [Wheel LEDs](docs/wheel-leds.md) | Shift light on a Moza rim's RPM LEDs, driven by simdash. |
+| [Desk 6DOF](docs/6dof/README.md) | A servo Stewart platform with a model car on the desk (in progress): geometry with its reach and 1:1 templates to print, jog and calibration, play a recorded session on it next to the track map and the haptics that fired, pyboard firmware. |
 
 How corners are detected and measured, used by most pages: [corners](docs/corners.md).
 Where the data comes from and how the databases are laid out: [data and storage](docs/data.md).
 To analyse it in Jupyter (pandas, matplotlib), start from [`notebooks/simdash_template.ipynb`](notebooks/simdash_template.ipynb).
+
+## Hardware
+
+The printed parts of the rig, as FreeCAD sources and ready-to-slice 3MF files, are in [hardware](hardware/README.md):
+for now the [shaker mounts](hardware/shaker-mounts/README.md) (seat BST1, front and rear corner pucks); the desk
+6DOF's parts will follow.
+
+| ![Seat BST1 mount](hardware/shaker-mounts/img/seat-bst1-mount.png) | ![Front puck mounts](hardware/shaker-mounts/img/front-puck-mount.png) | ![Rear puck mount](hardware/shaker-mounts/img/rear-puck-mount.png) | ![Tube half clamp](hardware/shaker-mounts/img/tube-half-clamp.png) |
+|:---:|:---:|:---:|:---:|
+| seat BST1 mount | front puck mounts | rear puck mount | tube half clamp |
 
 ## Install and run
 
@@ -52,7 +63,7 @@ systemctl --user daemon-reload && systemctl --user enable --now simdash
 ```
 
 Links open a page directly: `/#session=2026-10-25:3`, `/#progress`, `/#genie`, `/#edges`, `/#shakers`,
-`/#system`. Testing without the game: see [data and storage](docs/data.md#testing-without-the-game).
+`/#leds`, `/#motion`, `/#system`. Testing without the game: see [data and storage](docs/data.md#testing-without-the-game).
 
 ## Credits
 

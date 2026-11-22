@@ -2,7 +2,7 @@
 
 [← simdash](../README.md)
 
-Shelved: its button is hidden and the LEDs are off, but the tab still works at `/#leds`. Note that
+Shelved on 2026-11-06, back since 2026-11-20 (button visible, simdash drives the LEDs). Note that
 monocoque's own Moza drivers send nothing since monocoque `18f043a` (they write only
 `if (serialdevice->port)`, a field that commit stopped setting), so only the *simdash* choice lights the LEDs.
 
