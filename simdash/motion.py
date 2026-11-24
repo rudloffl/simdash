@@ -62,7 +62,11 @@ DEFAULTS = {
         # horn-rod angle kept within [min, 180 - min]: near 0 or 180 the leg toggles (the horn turns,
         # the platform barely moves, loads spike)
         "transmission_min_deg": 35.0,
-        # each ball joint's swivel from its home direction (studs printed along the home rod direction)
+        # the rod's ends: "stud", a ball stud aimed along the rod at home (it swivels joint_max_deg any way
+        # from there: a cone); "rod_end", a rod end (heim joint) on a bolt: it turns freely about the bolt and
+        # tilts at most joint_max_deg off it (its misalignment). On the horn the bolt is parallel to the servo
+        # shaft; under the platform it is fixed square to the rod at home, as near parallel to that shaft as can be
+        "joints": "stud",
         "joint_max_deg": 30.0,
     },
     "servos": {
@@ -157,7 +161,7 @@ def save(patch):
             s["cueing"][kk] = float(v)
     g = s["geometry"]
     for k in g:
-        if k not in ("layout", "horns", "mount"):
+        if k not in ("layout", "horns", "mount", "joints"):
             g[k] = float(g[k])
     if g["layout"] not in ("flat", "radial"):
         raise ValueError("layout is flat or radial")
@@ -165,6 +169,8 @@ def save(patch):
         raise ValueError("horns point out or in")
     if g["mount"] not in ("lying", "upright"):
         raise ValueError("servo bodies lying or upright")
+    if g["joints"] not in ("stud", "rod_end"):
+        raise ValueError("joints are ball studs or rod ends")
     if not 0 < g["base_angle"] < 120 or not 0 <= g["plat_angle"] < 120:
         raise ValueError("angles within a pair: base 0-120°, platform 0-120°")
     if not (g["horn"] > 0 and g["rod"] > g["horn"] and g["base_r"] > 0 and g["plat_r"] > 0):
@@ -246,7 +252,18 @@ def _geo(key):
     L, H = legs(g), h0(g)
     home = ik({}, g, L, H)
     rods = [tuple(r["P"][i] - r["A"][i] for i in range(3)) for r in home]
-    return {"L": L, "H": H, "home_rod": rods}
+    # rod-end bolts: on the horn along the shaft (w = u x z, it doesn't move as the horn turns); under the
+    # platform (in the platform's frame) that same direction made square to the rod at home
+    shaft = [(u[1], -u[0], 0.0) for _, u, _ in L]
+    plat = []
+    for w, r in zip(shaft, rods):
+        n = math.sqrt(sum(c * c for c in r))
+        rh = tuple(c / n for c in r)
+        d = sum(w[i] * rh[i] for i in range(3))
+        b = tuple(w[i] - d * rh[i] for i in range(3))
+        nb = math.sqrt(sum(c * c for c in b))
+        plat.append(tuple(c / nb for c in b))
+    return {"L": L, "H": H, "home_rod": rods, "bolt_horn": shaft, "bolt_plat": plat}
 
 
 def geo(g):
@@ -257,6 +274,11 @@ def geo(g):
 def _angle(a, b):
     c = sum(x * y for x, y in zip(a, b)) / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
     return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def _tilt(v, axis):
+    """How far (deg) direction v is off the plane square to axis: a rod end's misalignment on its bolt."""
+    return abs(90.0 - _angle(v, axis))
 
 
 def _turn(v, w, th):
@@ -315,8 +337,18 @@ def why_not(res, g, pose):
         if tr < tmin or tr > 180 - tmin:
             return f"servo {k}: horn and rod nearly in line ({tr:.0f}°)"
         home = gm["home_rod"][k]
-        # the platform's stud turns with the platform: the rod seen from the platform
+        # the platform's stud (or bolt) turns with the platform: the rod seen from the platform
         plat = tuple(sum(R[j][i] * rod[j] for j in range(3)) for i in range(3))
+        if g.get("joints", "stud") == "rod_end":
+            # free about the bolts; only the tilt off each bolt counts. The horn's bolt (along the shaft)
+            # doesn't move as the horn turns
+            t = _tilt(rod, gm["bolt_horn"][k])
+            if t > jmax:
+                return f"joint {k} on the horn tilts {t:.0f}° off its bolt"
+            t = _tilt(plat, gm["bolt_plat"][k])
+            if t > jmax:
+                return f"joint {k} on the platform tilts {t:.0f}° off its bolt"
+            continue
         if _angle(plat, home) > jmax:
             return f"joint {k} on the platform swivels {_angle(plat, home):.0f}°"
         # the horn's stud turns with the horn, about w = u × z, by alpha - home: undo it
@@ -389,14 +421,59 @@ def design(g):
         "face_dist": round(g["base_r"] * math.cos(math.radians(g["base_angle"] / 2)), 1) if g.get("layout") == "flat" else None,
         "joint_spacing": round(p_spacing, 1),
         "horns": g.get("horns", "out"),
+        "joints": g.get("joints", "stud"),
+        # rod-end bolt axes (unit vectors): on the horn in the world (fixed, along the shaft), under the
+        # platform in the platform's frame (turn them with the pose)
+        "bolts": {"horn": [[round(c, 4) for c in v] for v in gm["bolt_horn"]],
+                  "plat": [[round(c, 4) for c in v] for v in gm["bolt_plat"]]},
+        # rod end on the horn: how far the rod already sits off square to its bolt at home (its sideways lean)
+        "bolt_tilt_home": round(_tilt(gm["home_rod"][0], gm["bolt_horn"][0]), 1),
+        # under the platform: the bolt's slope from horizontal
+        "plat_bolt_slope": round(abs(math.degrees(math.asin(max(-1.0, min(1.0, gm["bolt_plat"][0][2]))))), 1),
         # horn balls of a pair, centre to centre: at home, and the closest anywhere in the stroke (each servo
         # on its own); 0 = the horns cross
         "ball_gap": 0.0 if cross else round(gap_home, 1),
         "ball_gap_min": 0.0 if cross else round(gap_min, 1),
         "reach": reach(g),
+        "leg_side": _leg_side(g, L, H),
         "legs": [{"shaft": [round(c, 2) for c in B], "horn_dir": [round(c, 4) for c in u],
                   "joint": [round(c, 2) for c in P]} for B, u, P in L],
     }
+
+
+def _leg_side(g, L, H):
+    """Leg 0 seen along its shaft at home and at both ends of pure heave (every leg does the same in heave).
+    2D points in the horn's swing plane, mm: s along the horn's horizontal direction, h up, shaft at (0, 0).
+    The rod leans out of that plane, so it is drawn turned about the horn's line into the plane: its length
+    and its angle to the horn stay true (the joint's height on the drawing is then close, not exact)."""
+    u = L[0][1]
+    lo, hi = reach(g)["z"]
+    out = []
+    for name, z, beyond in (("low", -lo, -lo - 0.3), ("home", 0.0, None), ("high", hi, hi + 0.3)):
+        r = ik({"z": z}, g, L, H)[0]
+        if r["alpha"] is None:
+            continue
+        al = math.radians(r["alpha"])
+        hd = (math.cos(al), math.sin(al))     # horn direction in the plane
+        n = (-math.sin(al), math.cos(al))     # in-plane, square to the horn
+        horn = tuple(r["A"][i] - r["B"][i] for i in range(3))
+        rod = tuple(r["P"][i] - r["A"][i] for i in range(3))
+        hu = tuple(c / g["horn"] for c in horn)
+        along = sum(rod[i] * hu[i] for i in range(3))
+        perp = math.sqrt(max(0.0, g["rod"] ** 2 - along ** 2))
+        n3 = (n[0] * u[0], n[0] * u[1], n[1])
+        if sum(rod[i] * n3[i] for i in range(3)) < 0:
+            perp = -perp
+        A = (g["horn"] * hd[0], g["horn"] * hd[1])
+        P = (A[0] + along * hd[0] + perp * n[0], A[1] + along * hd[1] + perp * n[1])
+        why = None
+        if beyond is not None:
+            p = {"z": beyond}
+            why = why_not(ik(p, g, L, H), g, p)
+        out.append({"name": name, "z": round(z, 1), "alpha": round(r["alpha"], 1),
+                    "trans": round(_angle(horn, rod), 1), "A": [round(c, 2) for c in A],
+                    "P": [round(c, 2) for c in P], "why": why})
+    return out
 
 
 def _ball_gaps(g, L):
@@ -612,6 +689,15 @@ def template_svg(part, g):
         return (f'<line x1="{X(x):.2f}" y1="{Y(y):.2f}" x2="{X(ex):.2f}" y2="{Y(ey):.2f}" stroke="#06c" stroke-width="0.4"/>'
                 f'<circle cx="{X(ex):.2f}" cy="{Y(ey):.2f}" r="0.6" fill="#06c" stroke="none"/>')
 
+    rod_end = g.get("joints", "stud") == "rod_end"
+
+    def bolt(x, y, b):
+        """A rod end's bolt seen from above: a blue bar through the joint along the bolt's axis."""
+        n = math.hypot(b[0], b[1]) or 1
+        dx, dy = b[0] / n * 6, b[1] / n * 6
+        return (f'<line x1="{X(x - dx):.2f}" y1="{Y(y - dy):.2f}" x2="{X(x + dx):.2f}" y2="{Y(y + dy):.2f}" '
+                f'stroke="#06c" stroke-width="0.8" stroke-linecap="round"/>')
+
     def at(r, deg):
         return (r * math.cos(math.radians(deg)), r * math.sin(math.radians(deg)))
 
@@ -653,6 +739,32 @@ def template_svg(part, g):
         thin = f'stroke="{DIM}" stroke-width="0.15"'
         return (line(a, a2, thin) + line(b, b2, thin) + line(a2, b2, f'stroke="{DIM}" stroke-width="0.3"')
                 + text(lab[0], lab[1], label, color=DIM, along=math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))))
+
+    def bolt_plan(k):
+        """Platform joint k's bolt seen from above: (azimuth of its rising end, deg CCW from x; angle from the
+        radial line through the joint, signed CCW, -90..90; slope from horizontal, deg). The axis is a line:
+        the rising end (towards the platform) is the one given."""
+        b = gm["bolt_plat"][k]
+        if b[2] < 0:
+            b = tuple(-v for v in b)
+        az = math.degrees(math.atan2(b[1], b[0]))
+        P = L[k][2]
+        rel = (az - math.degrees(math.atan2(P[1], P[0])) + 180) % 360 - 180
+        if rel > 90:
+            rel -= 180
+        elif rel < -90:
+            rel += 180
+        return az % 360, rel, math.degrees(math.asin(max(-1.0, min(1.0, b[2]))))
+
+    def point_angle(Pc, d0, d1, r, label):
+        """An arc at point Pc from direction d0 to d1 (deg, world, the short way), labelled beyond its middle."""
+        sw = (d1 - d0 + 180) % 360 - 180
+        p0 = (Pc[0] + r * math.cos(math.radians(d0)), Pc[1] + r * math.sin(math.radians(d0)))
+        p1 = (Pc[0] + r * math.cos(math.radians(d0 + sw)), Pc[1] + r * math.sin(math.radians(d0 + sw)))
+        m = math.radians(d0 + sw / 2)
+        lab = (Pc[0] + (r + 4) * math.cos(m), Pc[1] + (r + 4) * math.sin(m))
+        return (f'<path d="M{X(p0[0]):.2f} {Y(p0[1]):.2f} A{r:.2f} {r:.2f} 0 0 {1 if sw > 0 else 0} {X(p1[0]):.2f} {Y(p1[1]):.2f}" '
+                f'stroke="#06c" stroke-width="0.3"/>' + text(lab[0], lab[1], label, size=2.6, color="#06c"))
 
     def centre_line(deg, r, label):
         return (line((0, 0), at(r, deg), 'stroke="#999" stroke-width="0.2" stroke-dasharray="4 1 1 1"')
@@ -717,7 +829,7 @@ def template_svg(part, g):
                 -MG90["top"] - MG90["tab_depth"] + 1.2, 'stroke="#888"')
             e.append(f'<circle cx="{bx:.2f}" cy="{by:.2f}" r="1.5"/>'
                      + line(B, tp, 'stroke="#c00"') + f'<circle cx="{X(tp[0]):.2f}" cy="{Y(tp[1]):.2f}" r="1" stroke="#c00"/>')
-            e.append(stud(tp[0], tp[1], gm["home_rod"][k], 1))
+            e.append(bolt(tp[0], tp[1], gm["bolt_horn"][k]) if rod_end else stud(tp[0], tp[1], gm["home_rod"][k], 1))
             e.append(text(B[0] * 0.78, B[1] * 0.78, str(k), size=4.5))
             table.append(f"{k}   shaft ({B[0]:7.2f}, {B[1]:7.2f})   horn ball ({tp[0]:7.2f}, {tp[1]:7.2f}, {tp[2]:6.2f})   "
                          f"horn towards ({u[0]:+.3f}, {u[1]:+.3f})")
@@ -745,7 +857,9 @@ def template_svg(part, g):
                 f"|red = horn {g['horn']:g} mm at home: {ha_home:+g}° from horizontal (stroke ±{st:g}°: {ha_home - st:+g}° to {ha_home + st:+g}°)"
                 + (f", {g['horn'] * math.cos(math.radians(ha_home)):.1f} mm seen from above" if ha_home else "") + f"|horns pointing {'at their neighbour' if horns_in else 'away from their pair'}; "
                 f"green = dimensions|dashed = MG90 body seen from above, strip = its screw tabs{' (pointing up and down)' if upright else ''} (approx., measure yours)"
-                f"|blue = ball stud on the horn: aim it along the rod at home, {lean:.0f}° from vertical, leaning this way")
+                + (f"|blue = rod-end bolt on the horn, parallel to the servo shaft (the rod sits "
+                   f"{_tilt(gm['home_rod'][0], gm['bolt_horn'][0]):.0f}° off square to it at home)" if rod_end else
+                   f"|blue = ball stud on the horn: aim it along the rod at home, {lean:.0f}° from vertical, leaning this way"))
         head = f"Coordinates (mm, x forward, y left, z up from the shafts' axis height; rod {g['rod']:g}, home height {gm['H']:.2f})"
     else:
         ha = g["plat_angle"] / 2
@@ -755,16 +869,36 @@ def template_svg(part, g):
         e.append(centre_line(fp, g["plat_r"] * 0.5, "base pair 0"))
         for k, (B, u, P) in enumerate(L):
             e.append(f'<circle cx="{X(P[0]):.2f}" cy="{Y(P[1]):.2f}" r="1.5"/>' + text(P[0] * 0.8, P[1] * 0.8, str(k), size=4.5))
-            e.append(stud(P[0], P[1], gm["home_rod"][k], -1))
-            table.append(f"{k}   ball joint ({P[0]:7.2f}, {P[1]:7.2f}, {gm['H']:.2f})   takes the rod from servo {k}")
+            e.append(bolt(P[0], P[1], gm["bolt_plat"][k]) if rod_end else stud(P[0], P[1], gm["home_rod"][k], -1))
+            row = f"{k}   ball joint ({P[0]:7.2f}, {P[1]:7.2f}, {gm['H']:.2f})"
+            if rod_end:
+                az, rel, sl = bolt_plan(k)
+                row += f"   bolt towards {az:5.1f}° ({rel:+.1f}° from radial), rising {sl:.1f}°"
+                # the rising end marked by a dot
+                q = (P[0] + 6 * math.cos(math.radians(az)), P[1] + 6 * math.sin(math.radians(az)))
+                e.append(f'<circle cx="{X(q[0]):.2f}" cy="{Y(q[1]):.2f}" r="0.7" fill="#06c" stroke="none"/>')
+            else:
+                row += f"   takes the rod from servo {k}"
+            table.append(row)
         P1, P2 = L[1][2], L[2][2]   # platform pair 0 (centred 60° from base pair 0)
         e.append(radius_dim(fp + 60 - ha, g["plat_r"], f"R{g['plat_r']:g}"))
         e.append(angle_dim(fp + 60 - ha, fp + 60 + ha, g["plat_r"] * 0.45, f"{g['plat_angle']:g}°"))
         e.append(angle_dim(fp, fp + 60, 12, "60°"))
         e.append(chord_dim(P1, P2, 8, f"{math.dist(P1, P2):.1f}"))
+        if rod_end:
+            # on platform pair 0: each bolt's angle from the radial line through its joint (dashed, outwards)
+            for k in (1, 2):
+                P = L[k][2]
+                rad = math.degrees(math.atan2(P[1], P[0]))
+                e.append(line(P, (P[0] + 10 * math.cos(math.radians(rad)), P[1] + 10 * math.sin(math.radians(rad))),
+                              'stroke="#06c" stroke-width="0.2" stroke-dasharray="1 0.8"'))
+                az, rel, _ = bolt_plan(k)
+                e.append(point_angle(P, rad, rad + rel, 8, f"{abs(rel):.1f}°"))
         note = (f"PLATFORM 1:1 (seen from above)  ball joints on R{g['plat_r']:g}, {g['plat_angle']:g}° apart in a pair; "
                 f"pairs 120° apart, 60° from the base pairs|joint k takes the rod from servo k; green = dimensions"
-                f"|blue = ball stud under the platform: aim it down along the rod at home, {lean:.0f}° from vertical, its tip leaning this way")
+                + (f"|blue = rod-end bolt under the platform, seen from above, square to the rod at home"
+                   f"|dot = the bolt's end that rises {bolt_plan(0)[2]:.1f}° towards the platform; on pair 0: its angle from the radial (dashed)" if rod_end else
+                   f"|blue = ball stud under the platform: aim it down along the rod at home, {lean:.0f}° from vertical, its tip leaning this way"))
         head = f"Coordinates (mm, x forward, y left, z up from the servo shafts' axis height; rod {g['rod']:g})"
     # the car's nose
     e.append(f'<path d="M{c+12} {c} l-4 -2 v4 z" fill="#000"/><text x="{c+6}" y="{c+7}" font-size="3.5" stroke="none" fill="#000">x (nose)</text>')

@@ -4973,7 +4973,7 @@ const MO_GEO = [
   ["rod", "Rod length (ball to ball)", 30, 250, 0.1], ["horn", "Horn length (shaft to ball)", 5, 50, 0.1],
   ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["home_angle", "Horn angle at home (° from horizontal, + = up)", -60, 60, 0.5],
   ["stroke", "Servo stroke ± from home (°)", 5, 90, 0.5],
-  ["transmission_min_deg", "Horn–rod angle kept ≥ (and ≤ 180 −)", 0, 60, 1], ["joint_max_deg", "Ball joint swivel max", 10, 90, 1],
+  ["transmission_min_deg", "Horn–rod angle kept ≥ (and ≤ 180 −)", 0, 60, 1], ["joint_max_deg", "Ball joint swivel max (stud: any way; rod end: tilt off its bolt)", 5, 90, 1],
 ];
 // the 6DOF tab's folds: open or closed remembered (Move it open by default)
 for (const [id, key, dflt] of [["#mo-acc-cue", "moAccCue", false], ["#mo-acc-move", "moAccMove", true], ["#mo-acc-geo", "moAccGeo", false],
@@ -5046,6 +5046,9 @@ function buildMotionForms() {
     + `<label>Servo bodies<select data-k="mount">`
     + `<option value="lying"${g.mount === "upright" ? "" : " selected"}>Lying (length along the horn's swing)</option>`
     + `<option value="upright"${g.mount === "upright" ? " selected" : ""}>Standing upright, shaft near the top (compact, taller)</option></select></label>`
+    + `<label>Rod ends<select data-k="joints">`
+    + `<option value="stud"${g.joints === "rod_end" ? "" : " selected"}>Ball studs (ball links): swivel limited every way</option>`
+    + `<option value="rod_end"${g.joints === "rod_end" ? " selected" : ""}>Rod ends on bolts: free about the bolt, tilt limited</option></select></label>`
     + MO_GEO.map(([k, n, lo, hi, st]) => moField(k, n, lo, hi, st, g[k])).join("");
   lockGeometry();
   $("#mo-cal").innerHTML = moField("min_us", "Shortest pulse µs", 500, 1500, 10, sv.min_us) + moField("max_us", "Longest pulse µs", 1500, 2500, 10, sv.max_us);
@@ -5081,7 +5084,7 @@ $("#mo-axes").addEventListener("input", (e) => {
 });
 for (const [box, part] of [["#mo-geo", "geometry"], ["#mo-cal", "servos"], ["#mo-car", "car"]]) {
   $(box).addEventListener("input", (e) => {
-    if (["layout", "horns", "mount"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
+    if (["layout", "horns", "mount", "joints"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
       mo.s.geometry[e.target.dataset.k] = e.target.value;
       buildMotionForms();
       scheduleMotionSave();
@@ -5141,7 +5144,7 @@ function scheduleMotionSave() {
     const d = await r.json();
     $("#mo-geo-err").innerHTML = r.ok ? "" : `<span class="warn">${esc(d.detail)} (not saved)</span>`;
     $("#mo-cal-note").textContent = r.ok ? "" : `${d.detail} (not saved)`;
-    if (r.ok) { mo.d = d.design; renderMotionDesign(); }
+    if (r.ok) { mo.d = d.design; renderMotionDesign(); drawMotion(); }
   }, 400);
 }
 
@@ -5170,7 +5173,10 @@ function renderMotionDesign() {
   const tight = d.min_spacing ? d.shaft_spacing < d.min_spacing : d.shaft_spacing < 2 * 6 + 8;
   $("#mo-design").innerHTML = `<dt>Home height</dt><dd>${d.home_height} mm from the shafts to the platform joints</dd>`
     + `<dt>Rod lean at home</dt><dd>${d.rod_lean}° from vertical${d.rod_lean > 30 ? ' <span class="warn">(steep: ball joints may bind)</span>' : ""};`
-    + ` print the ball studs along it (blue on the 1:1 drawings)</dd>`
+    + (d.joints === "rod_end"
+      ? `; rod ends: horn bolt along the servo shaft, the rod ${d.bolt_tilt_home}° off square to it at home; `
+        + `platform bolt square to the rod, ${d.plat_bolt_slope}° from horizontal (blue on the 1:1 drawings)</dd>`
+      : ` print the ball studs along it (blue on the 1:1 drawings)</dd>`)
     + `<dt>Horn–rod angle at home</dt><dd>${d.transmission_home}° (90° is ideal)</dd>`
     + `<dt>Shafts in a pair</dt><dd${tight ? ' class="warn"' : ""}>${d.shaft_spacing} mm apart (centre to centre)`
     + `${d.min_spacing ? (tight ? ` — MG90 bodies and tabs back to back need ${d.min_spacing} mm` : ` (bodies and tabs need ${d.min_spacing})`) : ""}`
@@ -5184,8 +5190,73 @@ function renderMotionDesign() {
     + (d.ball_gap > 0 && d.ball_gap_min < 10 ? " — check your ball links fit side by side" : "")
     + (d.horns === "in" ? "; horns point at each other: re-check +45° (up) per servo in Calibration" : "") + `</dd>`
     + `<dt>Joints in a pair</dt><dd>${d.joint_spacing} mm apart on the platform</dd>`;
+  drawLegSide(d);
   $("#mo-reach").innerHTML = MO_AXES.map((a) => `<tr><td>${esc(a.name.replace(/ \(.*/, ""))}</td>`
     + `<td class="r">−${d.reach[a.k][0]} ${a.unit}</td><td class="r">+${d.reach[a.k][1]} ${a.unit}</td></tr>`).join("");
+}
+
+// servo 0 seen along its shaft: home and both ends of pure heave. The red wedges are where the rod may not
+// go (within the horn–rod limit of the horn's own line, straight on or folded back); the angle marked at
+// each horn ball is the horn–rod angle (0 = rod continuing the horn, 90 = ideal, 180 = folded back)
+function drawLegSide(d) {
+  const svg = $("#mo-leg"), legs = d.leg_side || [], g = mo.s.geometry;
+  if (!svg || !legs.length) return;
+  const W = svg.clientWidth || 520, Hh = svg.clientHeight || 380, a = g.horn, hm = g.home_angle ?? 0, st = g.stroke;
+  const tmin = g.transmission_min_deg ?? 0, rad = Math.PI / 180;
+  const COL = { low: "var(--s-throttle)", home: "var(--text-2)", high: "var(--s-brake)" };
+  const all = [[0, 0], [-a, 0], [a, 0], [0, a]].concat(...legs.map((l) => [l.A, l.P]));
+  const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+  const x0 = Math.min(...xs) - 30, x1 = Math.max(...xs) + 120, y0 = Math.min(...ys) - (tmin > 0 ? 24 : 8), y1 = Math.max(...ys) + 10;
+  const k = Math.min(W / (x1 - x0), Hh / (y1 - y0));
+  const ox = (W - k * (x1 - x0)) / 2 - k * x0, oy = (Hh + k * (y1 - y0)) / 2 + k * y0;
+  const X = (p) => (ox + k * p[0]).toFixed(1), Y = (p) => (oy - k * p[1]).toFixed(1);
+  const ln = (p, q, cls, col) => `<line class="${cls}" x1="${X(p)}" y1="${Y(p)}" x2="${X(q)}" y2="${Y(q)}"${col ? ` stroke="${col}"` : ""}/>`;
+  const at = (c, r, deg) => [c[0] + r * Math.cos(deg * rad), c[1] + r * Math.sin(deg * rad)];
+  // arc from direction d1 to d2 (degrees, counter-clockwise, the short way)
+  const arc = (c, r, d1, d2) => {
+    let s = ((d2 - d1) % 360 + 540) % 360 - 180;
+    const p1 = at(c, r, d1), p2 = at(c, r, d1 + s);
+    return `M${X(p1)},${Y(p1)} A${(k * r).toFixed(1)},${(k * r).toFixed(1)} 0 0 ${s > 0 ? 0 : 1} ${X(p2)},${Y(p2)}`;
+  };
+  const sector = (c, r, d1, d2) => { const p = arc(c, r, d1, d2); return `<path class="no-go" d="M${X(c)},${Y(c)} L${p.slice(1)} Z"/>`; };
+  const out = [ln([x0, 0], [x1, 0], "grid")];
+  // the horn's travel: home ± stroke
+  const s1 = at([0, 0], a, hm - st), s2 = at([0, 0], a, hm + st);
+  out.push(`<path class="stroke-arc" d="M${X(s1)},${Y(s1)} A${(k * a).toFixed(1)},${(k * a).toFixed(1)} 0 0 0 ${X(s2)},${Y(s2)}"/>`);
+  // the horn at each end of its stroke (ghost), labelled with its angle: where it would be if only the stroke stopped it
+  [hm - st, hm + st].forEach((dg) => {
+    const e = at([0, 0], a, dg), t = at([0, 0], a + 7, dg);
+    out.push(ln([0, 0], e, "stroke-end"), `<text class="stroke-lbl" x="${X(t)}" y="${Y(t)}" text-anchor="middle" dominant-baseline="middle">${Math.round(dg)}°</text>`);
+  });
+  const order = ["home", "low", "high"], labels = [];
+  legs.slice().sort((p, q) => order.indexOf(p.name) - order.indexOf(q.name)).forEach((l) => {
+    const c = COL[l.name], A = l.A, P = l.P, hd = l.alpha, rd = Math.atan2(P[1] - A[1], P[0] - A[0]) / rad;
+    const grp = [];
+    // the wedge this end runs towards: straight on when the angle closes (< 90), folded back when it opens
+    if (tmin > 0 && l.name !== "home")
+      grp.push(l.trans < 90 ? sector(A, 22, hd - tmin, hd + tmin) : sector(A, 22, hd + 180 - tmin, hd + 180 + tmin));
+    grp.push(ln(A, at(A, 16, hd), "ext", c), `<path class="ang" stroke="${c}" d="${arc(A, 10, hd, rd)}"/>`);
+    grp.push(ln([P[0] - 10, P[1]], [P[0] + 10, P[1]], "lvl", c), ln(A, P, "rod", c), ln([0, 0], A, "horn", c));
+    grp.push(`<circle cx="${X(A)}" cy="${Y(A)}" r="3" fill="${c}"/><circle cx="${X(P)}" cy="${Y(P)}" r="3" fill="${c}"/>`);
+    const mid = at(A, 15, (hd + rd) / 2 + (Math.abs(rd - hd) > 180 ? 180 : 0));
+    grp.push(`<text x="${X(mid)}" y="${Y(mid)}" fill="${c}" text-anchor="middle" dominant-baseline="middle">${Math.round(l.trans)}°</text>`);
+    labels.push({ y: +Y(P), x: +X([P[0] + 10, 0]) + 5, c, html: `${l.name === "home" ? `home, horn ${Math.round(l.alpha)}°` : `${l.z > 0 ? "+" : "−"}${Math.abs(l.z)} mm, horn ${Math.round(l.alpha)}° — `
+      + (!l.why ? "" : /stroke/.test(l.why) ? "stroke end" : /in line/.test(l.why) ? "horn–rod limit" : /swivels|tilts/.test(l.why) ? "ball joint" : "out of reach")}` });
+    out.push(`<g${l.name === "home" ? ' class="home"' : ""}>${grp.join("")}</g>`);
+  });
+  // pose labels at their joint heights, pushed apart when two heights are close
+  labels.sort((p, q) => p.y - q.y).forEach((l, i, arr) => { if (i) l.y = Math.max(l.y, arr[i - 1].y + 14); });
+  labels.forEach((l) => out.push(`<text x="${l.x.toFixed(1)}" y="${l.y.toFixed(1)}" fill="${l.c}" dominant-baseline="middle">${l.html}</text>`));
+  out.push(`<circle class="shaft" cx="${X([0, 0])}" cy="${Y([0, 0])}" r="4"/>`);
+  svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
+  svg.innerHTML = out.join("");
+  const say = (l) => `<b style="color:${COL[l.name]}">${l.name === "low" ? "Lowest" : "Highest"} (${l.z > 0 ? "+" : "−"}${Math.abs(l.z)} mm)</b>: `
+    + `horn at ${l.alpha}°, horn–rod ${l.trans}°. Limit: ${esc(l.why ? l.why.replace(/^servo \d+:? ?/, "") : "—")}`;
+  $("#mo-leg-txt").innerHTML = legs.filter((l) => l.name !== "home").map(say).join("<br>")
+    + `<br>Seen along servo 0's shaft (all legs do the same in heave). Dotted arc and faint horns: the stroke ends (home ± stroke); a pose that stops before them was stopped by another limit. The angle at each horn ball is `
+    + `the horn–rod angle, from the horn's line (dotted) to the rod: 0° = straight on, 90° = ideal, 180° = folded back. `
+    + (tmin > 0 ? `Red wedge at each end: where the rod may not go, within ${tmin}° of straight on or of folded back, whichever that end heads for. ` : `Horn–rod limit is 0: no wedge, only the stroke stops it. `)
+    + `The rod also leans sideways out of this plane; it is drawn turned into it so its length and angle read true.`;
 }
 
 function renderMotionServos() {
@@ -5306,6 +5377,14 @@ function drawMotion() {
   out.push(`<polygon class="plat" points="${pts(ring)}"/>`);
   // the car: a box on the platform, nose marked
   const R = moRot(d.pose), t = [d.pose.x, d.pose.y, d.home_height + d.pose.z];
+  // rod ends: each bolt the rod end turns on, a short bar through the joint along its axis. The horn's
+  // bolt stays along the servo shaft; the platform's turns with the platform
+  const bolts = mo.d?.joints === "rod_end" && mo.d.bolts;
+  if (bolts) d.legs.forEach((L, i) => {
+    const bar = (c, v) => line(c.map((x, j) => x - 6 * v[j]), c.map((x, j) => x + 6 * v[j]), "bolt");
+    const vp = R.map((row) => row[0] * bolts.plat[i][0] + row[1] * bolts.plat[i][1] + row[2] * bolts.plat[i][2]);
+    out.push(bar(L.A, bolts.horn[i]), bar(L.P, vp));
+  });
   const W2 = (v) => R.map((row, i) => t[i] + row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
   const { length: cl, width: cw, height: ch } = car, z0 = 3;
   const corner = (sx, sy, z) => W2([sx * cl / 2, sy * cw / 2, z]);

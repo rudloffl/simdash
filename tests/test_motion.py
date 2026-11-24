@@ -458,3 +458,30 @@ def test_servos_driven_directly():
     assert not r["ok"] and "stroke" in r["why"]
     with pytest.raises(ValueError):
         motion.solve_servos([0] * 5, s)
+
+
+def test_rod_ends_turn_freely_about_their_bolts():
+    # a rod end is free about its bolt: the swing that a ball stud's cone refuses is fine, only the tilt counts
+    stud = {**G, "transmission_min_deg": 0.0, "joint_max_deg": 20.0, "joints": "stud"}
+    rod_end = {**stud, "joints": "rod_end"}
+    gm = motion.geo(rod_end)
+    for k, (_, u, _) in enumerate(gm["L"]):
+        b = gm["bolt_plat"][k]
+        assert abs(sum(b[i] * gm["home_rod"][k][i] for i in range(3))) < 1e-9   # square to the rod at home
+        assert gm["bolt_horn"][k] == (u[1], -u[0], 0.0)                         # along the servo shaft
+    assert motion.reach(rod_end)["z"][1] > motion.reach(stud)["z"][1]
+    # too tight a tilt and the rod end limits it, with its own reason
+    tight = {**rod_end, "joint_max_deg": 1.0}
+    p = {"roll": 10}
+    assert "off its bolt" in motion.why_not(motion.ik(p, tight), tight, p)
+    assert motion.design(rod_end)["joints"] == "rod_end"
+    assert "rod-end bolt" in motion.template_svg("base", rod_end) and "rod-end bolt" in motion.template_svg("platform", rod_end)
+
+
+def test_joints_setting_is_validated(tmp_path, monkeypatch):
+    monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
+    motion._cache["s"] = None
+    assert motion.save({"geometry": {"joints": "rod_end"}})["geometry"]["joints"] == "rod_end"
+    import pytest
+    with pytest.raises(ValueError):
+        motion.save({"geometry": {"joints": "glue"}})

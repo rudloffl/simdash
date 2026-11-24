@@ -723,6 +723,7 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .mo-view .horn { stroke: var(--s-spin); stroke-width: 3; stroke-linecap: round; }
 .mo-view .rod { stroke: var(--text-2); stroke-width: 2; }
 .mo-view .bad { stroke: var(--critical); }
+.mo-view .bolt { stroke: var(--text); stroke-width: 3; stroke-linecap: round; }
 .mo-view .plat { fill: color-mix(in srgb, var(--s-speed) 18%, transparent); stroke: var(--s-speed); stroke-width: 1.5; }
 .mo-view .car { fill: color-mix(in srgb, var(--text) 6%, transparent); stroke: var(--text); stroke-width: 1; stroke-linejoin: round; }
 .mo-view .nose { fill: var(--s-brake); }
@@ -748,6 +749,20 @@ a.btn:hover { border-color: var(--muted); }
 .mo-design dt { color: var(--muted); }
 .mo-design dd { margin: 0; font-variant-numeric: tabular-nums; }
 .mo-design .warn { color: var(--critical); }
+.mo-leg { width: 100%; max-width: 560px; height: 380px; display: block; margin-top: 4px; }
+.mo-leg .grid { stroke: var(--axis); stroke-width: 1; }
+.mo-leg .stroke-arc { fill: none; stroke: var(--text-2); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.mo-leg .stroke-end { stroke: var(--muted); stroke-width: 3; stroke-linecap: round; opacity: .45; }
+.mo-leg .stroke-lbl { fill: var(--muted); font-size: 10.5px; }
+.mo-leg .no-go { fill: color-mix(in srgb, var(--critical) 35%, transparent); stroke: var(--critical); stroke-width: 1; stroke-opacity: .6; }
+.mo-leg .horn { stroke-width: 4; stroke-linecap: round; }
+.mo-leg .rod { stroke-width: 2; }
+.mo-leg .ext { stroke-width: 1; stroke-dasharray: 2 3; }
+.mo-leg .ang { fill: none; stroke-width: 1.5; }
+.mo-leg .lvl { stroke-width: 1; stroke-dasharray: 5 3; }
+.mo-leg .shaft { fill: var(--text-2); }
+.mo-leg text { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.mo-leg .home { opacity: .55; }
 .mo-wiring svg { width: 100%; height: auto; max-width: 980px; display: block; }
 #mo-state.ok { color: var(--good); } #mo-state.bad { color: var(--critical); }
 /* the wiring drawing follows the page theme when inlined */
