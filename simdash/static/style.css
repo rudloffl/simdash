@@ -732,6 +732,7 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .mo-view .car-head { fill: #f2e6a6; stroke: none; }
 .mo-view .car-tail { fill: var(--s-brake); stroke: none; }
 .mo-view .car-dark { fill: color-mix(in srgb, var(--text) 85%, var(--surface)); stroke: var(--text); stroke-width: 0.4; stroke-linejoin: round; }
+.mo-view .car-box { fill: color-mix(in srgb, var(--text) 6%, transparent); stroke: var(--text); stroke-width: 1; stroke-linejoin: round; }
 .mo-view .car-roof { fill: #f1f0ea; stroke: color-mix(in srgb, var(--text) 55%, transparent); stroke-width: 0.5; stroke-linejoin: round; }
 .mo-view .car-helmet { fill: #f2c230; stroke: color-mix(in srgb, var(--text) 55%, transparent); stroke-width: 0.5; }
 .mo-view .car-suit { fill: color-mix(in srgb, var(--s-speed) 70%, #000); stroke: color-mix(in srgb, var(--text) 55%, transparent); stroke-width: 0.5; }

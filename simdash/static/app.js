@@ -5407,9 +5407,9 @@ function moRot(p) {
 // kept in the browser). Each face: p (points), cls, c (the centre of its part, to tell outward from inward),
 // lift (drawn a hair nearer than its depth), side (wheels: +1 left, -1 right), ref (a detail lying on a face:
 // the points of that face, so the detail sorts with it and is drawn just after it)
-const MO_CARS = { coupe: "Coupé", gt3: "GT3", f1: "F1", kart: "Kart", truck: "Trophy truck", mini: "MINI" };
+const MO_CARS = { coupe: "Coupé", gt3: "GT3", f1: "F1", kart: "Kart", truck: "Trophy truck", mini: "MINI", box: "Box" };
 const MO_CAR_COLOUR = { coupe: null, gt3: "var(--s-spin)", f1: "var(--s-brake)", kart: "var(--s-throttle)",
-  truck: "#d9a21b", mini: "#1f5c3d" };
+  truck: "#d9a21b", mini: "#1f5c3d", box: null };
 function moCarFaces(car, z0, model = "coupe") {
   const L = car.length * (model === "mini" ? 0.82 : 1), Wd = car.width, H = car.height;   // a MINI is stubby
   const faces = [];
@@ -5541,6 +5541,10 @@ function moCarFaces(car, z0, model = "coupe") {
         [[a.x, a.hw, a.zt], [a.x, -a.hw, a.zt], [b.x, -b.hw, b.zt], [b.x, b.hw, b.zt]]);
     }
     four(0.36 * L, -0.36 * L, 0.44 * Wd, r, r, 0.17 * Wd, 0.17 * Wd);
+  } else if (model === "box") {              // the plain box of the car settings, see-through, an arrow to the nose
+    box(-L / 2, L / 2, -Wd / 2, Wd / 2, z0, z0 + H, "car-box");
+    const top = [[L / 2, Wd / 2, z0 + H], [L / 2, -Wd / 2, z0 + H], [-L / 2, -Wd / 2, z0 + H], [-L / 2, Wd / 2, z0 + H]];
+    quad([[L / 2 - 4, 0, z0 + H], [L / 2 - 22, 9, z0 + H], [L / 2 - 22, -9, z0 + H]], "car-tail", [0, 0, z0 + H / 2], 0.01, 0, top);
   } else {                                   // coupe: bonnet lower than the boot, a glass cabin
     const r = Math.min(0.24 * H, 0.11 * L);
     const body = loft([[0.5, 0.40 * Wd, z0 + 0.75 * r, z0 + 0.36 * H], [0.40, 0.48 * Wd, z0 + 0.55 * r, z0 + 0.50 * H],
@@ -5626,7 +5630,7 @@ function drawMotion() {
     n = n.map((x) => x / m);
     const fc = w.reduce((s, q) => s.map((x, j) => x + q[j] / w.length), [0, 0, 0]);
     if (n.reduce((s, x, j) => s + x * (fc[j] - c[j]), 0) < 0) n = n.map((x) => -x);   // outward
-    if (n[0] * far[0] + n[1] * far[1] + n[2] * far[2] > 0.02) return;                 // its back is to us
+    if (f.cls !== "car-box" && n[0] * far[0] + n[1] * far[1] + n[2] * far[2] > 0.02) return;   // its back is to us (the see-through box shows all)
     const lit = Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
     drawn.push({ w, i, d: depth(f.ref ? f.ref.map(W2) : w) - (f.lift || 0), cls: f.cls, lit, l: layer(f.side) });
   });
