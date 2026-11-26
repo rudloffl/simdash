@@ -87,9 +87,9 @@ the old version 1 firmware or another board, the tab says why and nothing moves.
 A WS2812B ring (12 pixels by default, `ring.py`'s `N`) on **SPI2, MOSI only (Y8)**: each WS2812 bit becomes 3
 SPI bits (`0 = 0b100`, `1 = 0b110`) at 3.2 MHz, so the SPI peripheral's own clock does the timing, not a
 hand-tuned software loop — the usual trick for driving these LEDs from a chip with no PIO/RMT peripheral.
-Nothing is wired on SPI2's other pins (`Y6` SCK2, `Y7` MISO2): the OLED is only planned, so this is free for
-now; wire its SDA elsewhere when that's built. **Needs real hardware to confirm the timing is tight enough**
-(`tests/test_firmware.py` covers the buffer/colour maths on the PC, not the SPI bit pattern itself).
+`Y6` (SCK2) and `Y7` (MISO2, repurposed as the OLED's SDA once it's wired — see hardware.md) stay free of the
+ring. **Needs real hardware to confirm the timing is tight enough** (`tests/test_firmware.py` covers the
+buffer/colour maths on the PC, not the SPI bit pattern itself).
 
 While simdash is playing a course, an `L` line each tick sets the ring to the car's acceleration direction and
 size (0 = the nose; braking throws it that way, accelerating towards the tail, cornering towards the

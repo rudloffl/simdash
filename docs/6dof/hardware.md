@@ -9,7 +9,7 @@
 | 6 × MG90 metal-gear micro servo | on order | ~2 kg·cm at 4.8 V, ~0.1 s/60°, ~180° travel, 3-pin plug (brown GND, red V+, orange signal). Analog: 50 Hz. Pulses kept within 800–2200 µs (end stops near 600 / 2400). Calibrated per servo in the tab: level, +45°, −45° against a printed 45° gauge. |
 | PCA9685 16-channel PWM board | yes | I2C address 0x40 by default. Logic VCC 3.3 V from the pyboard, servo power on the V+ screw terminal. |
 | pyboard v1.1 (MicroPython) | yes | USB serial to the PC; I2C 1 on X9/X10. |
-| 2.42″ OLED, SSD1309, 128×64, SPI (7 pins) | yes | Planned: race stats while driving (not in the firmware yet). On SPI2 (Y side), 3.3 V logic; monochrome, so the whole screen is a 1 kB buffer sent in about 1 ms. Its SDA moves off Y8 to make room for the status ring below; pick a free pin (e.g. Y7) when it's actually wired. |
+| 2.42″ OLED, SSD1309, 128×64, SPI (7 pins) | yes | Planned: race stats while driving (not in the firmware yet). On SPI2 (Y side), 3.3 V logic; monochrome, so the whole screen is a 1 kB buffer sent in about 1 ms. Its SDA moves to Y7 (was Y8, now the status ring's) to make room for the ring below. |
 | micro-SD card | planned | In the pyboard's own slot. Firmware 6 mounts it at `/sd` (and `SKIPSD` keeps the board from booting off it): whole-race demos, later the track map for the display. |
 | WS2812B RGB LED ring, 12 pixels, 5 V | yes | Status ring: the car's acceleration direction and size while a course plays, a rotating rainbow otherwise (firmware 7, `ring.py`). Single data-in pin, daisy-chained internally; needs real hardware to confirm the timing (see firmware.md). |
 | 5–6 V supply, ≥ 5 A | to get | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V). |

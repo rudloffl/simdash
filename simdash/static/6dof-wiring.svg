@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 610" font-family="system-ui, sans-serif" font-size="13" role="img" aria-labelledby="w6-title">
-<title id="w6-title">Desk 6DOF wiring: PC USB to pyboard v1.1, I2C to a PCA9685, six servos on channels 0 to 5, servo power from a separate 5-6 V supply, and a 2.42 inch SSD1309 OLED on the pyboard's SPI2</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 745" font-family="system-ui, sans-serif" font-size="13" role="img" aria-labelledby="w6-title">
+<title id="w6-title">Desk 6DOF wiring: PC USB to pyboard v1.1, I2C to a PCA9685, six servos on channels 0 to 5, servo power from a separate 5-6 V supply, a WS2812B status ring on SPI2 MOSI, and a 2.42 inch SSD1309 OLED planned on the rest of SPI2</title>
 <style>
   .w6-bg { fill: #ffffff; }
   .w6-box { fill: #f4f3ef; stroke: #55554f; stroke-width: 1.2; }
@@ -22,7 +22,7 @@
     .w6-usb { stroke: #a3a29b; }
   }
 </style>
-<rect class="w6-bg" width="1040" height="610" rx="10"/>
+<rect class="w6-bg" width="1040" height="745" rx="10"/>
 
 <!-- legend: what is built, what is planned -->
 <path class="w6-w w6-usb" d="M690 406 H730"/><text class="w6-m" x="740" y="410">wired and working</text>
@@ -48,10 +48,6 @@
   <rect class="w6-pin" x="164" y="305" width="10" height="10"/><text x="156" y="314" text-anchor="end">DC</text>
   <rect class="w6-pin" x="164" y="325" width="10" height="10"/><text x="156" y="334" text-anchor="end">CS</text>
 </g>
-<text class="w6-m" x="99" y="368" text-anchor="middle">planned: race stats while</text>
-<text class="w6-m" x="99" y="383" text-anchor="middle">driving (not in the firmware yet)</text>
-<text class="w6-m" x="99" y="398" text-anchor="middle">power: pyboard 3V3, not the</text>
-<text class="w6-m" x="99" y="413" text-anchor="middle">servo supply (cleaner)</text>
 <!-- OLED wires -->
 <path class="w6-w w6-planw w6-gnd" d="M174 210 H266"/>
 <path class="w6-w w6-planw w6-3v3" d="M174 230 H266"/>
@@ -59,6 +55,20 @@
 <path class="w6-w w6-planw w6-sda" d="M174 270 H266"/>
 <path class="w6-w w6-planw w6-ctl" d="M174 290 H266 M174 310 H266 M174 330 H266"/>
 <text class="w6-m" x="220" y="202" text-anchor="middle">SPI2</text>
+
+<!-- status ring -->
+<rect class="w6-box" x="24" y="360" width="150" height="110" rx="6"/>
+<text class="w6-h" x="99" y="384" text-anchor="middle">Status ring</text>
+<text class="w6-m" x="99" y="400" text-anchor="middle">WS2812B · 12 px</text>
+<g class="w6-t">
+  <rect class="w6-pin" x="164" y="410" width="10" height="10"/><text x="156" y="419" text-anchor="end">DIN</text>
+  <rect class="w6-pin" x="164" y="430" width="10" height="10"/><text x="156" y="439" text-anchor="end">5V</text>
+  <rect class="w6-pin" x="164" y="450" width="10" height="10"/><text x="156" y="459" text-anchor="end">GND</text>
+</g>
+<!-- ring wires: data from the pyboard, power from the supply (not the pyboard) -->
+<path class="w6-w w6-sig" d="M174 415 H220 M266 350 V415 H220"/>
+<path class="w6-w w6-vp" d="M174 435 H590"/><circle class="w6-dot w6-vp" cx="590" cy="435" r="4"/>
+<path class="w6-w w6-gnd" d="M174 455 H610"/><circle class="w6-dot w6-gnd" cx="610" cy="455" r="4"/>
 
 <!-- pyboard -->
 <rect class="w6-box" x="266" y="30" width="230" height="330" rx="6"/>
@@ -72,14 +82,15 @@
   <rect class="w6-pin" x="486" y="174" width="10" height="10"/><text x="476" y="183" text-anchor="end">X9 · SCL1</text>
   <rect class="w6-pin" x="486" y="204" width="10" height="10"/><text x="476" y="213" text-anchor="end">X10 · SDA1</text>
   <rect class="w6-pin" x="486" y="234" width="10" height="10"/><text x="476" y="243" text-anchor="end">3V3</text>
-  <!-- left side: to the OLED -->
+  <!-- left side: to the OLED (planned, dashed) and the status ring (built, solid) -->
   <rect class="w6-pin" x="266" y="205" width="10" height="10"/><text x="284" y="214">GND</text>
   <rect class="w6-pin" x="266" y="225" width="10" height="10"/><text x="284" y="234">3V3</text>
   <rect class="w6-pin" x="266" y="245" width="10" height="10"/><text x="284" y="254">Y6 · SCK2</text>
-  <rect class="w6-pin" x="266" y="265" width="10" height="10"/><text x="284" y="274">Y8 · MOSI2</text>
+  <rect class="w6-pin" x="266" y="265" width="10" height="10"/><text x="284" y="274">Y7 · MISO2</text>
   <rect class="w6-pin" x="266" y="285" width="10" height="10"/><text x="284" y="294">Y3</text>
   <rect class="w6-pin" x="266" y="305" width="10" height="10"/><text x="284" y="314">Y4</text>
   <rect class="w6-pin" x="266" y="325" width="10" height="10"/><text x="284" y="334">Y5</text>
+  <rect class="w6-pin" x="266" y="345" width="10" height="10"/><text x="284" y="354">Y8 · MOSI2</text>
 </g>
 
 <!-- PCA9685 -->
@@ -134,23 +145,26 @@
 <text class="w6-m" x="963" y="322" text-anchor="middle">orange signal</text>
 
 <!-- power supply -->
-<rect class="w6-box" x="266" y="410" width="170" height="90" rx="6"/>
-<text class="w6-h" x="351" y="436" text-anchor="middle">5–6 V supply</text>
-<text class="w6-m" x="351" y="454" text-anchor="middle">≥ 5 A (6 × MG90 stall ≈ 4.5 A)</text>
+<rect class="w6-box" x="266" y="480" width="170" height="90" rx="6"/>
+<text class="w6-h" x="351" y="506" text-anchor="middle">5–6 V supply</text>
+<text class="w6-m" x="351" y="524" text-anchor="middle">≥ 5 A (6 × MG90 stall ≈ 4.5 A)</text>
 <g class="w6-t">
-  <rect class="w6-pin" x="426" y="464" width="10" height="10"/><text x="416" y="473" text-anchor="end">+</text>
-  <rect class="w6-pin" x="426" y="484" width="10" height="10"/><text x="416" y="493" text-anchor="end">−</text>
+  <rect class="w6-pin" x="426" y="534" width="10" height="10"/><text x="416" y="543" text-anchor="end">+</text>
+  <rect class="w6-pin" x="426" y="554" width="10" height="10"/><text x="416" y="563" text-anchor="end">−</text>
 </g>
-<path class="w6-w w6-vp" d="M436 469 H590 V279 H640"/>
-<path class="w6-w w6-gnd" d="M436 489 H610 V305 H640"/>
+<path class="w6-w w6-vp" d="M436 539 H590 V279 H640"/>
+<path class="w6-w w6-gnd" d="M436 559 H610 V305 H640"/>
+<!-- taps for the status ring (above): same rails, not the pyboard -->
 <!-- bulk capacitor -->
-<path class="w6-w w6-vp" d="M590 469 V500"/><circle class="w6-dot w6-vp" cx="590" cy="469" r="4"/>
-<path class="w6-w w6-gnd" d="M610 489 V530 H590 V520"/><circle class="w6-dot w6-gnd" cx="610" cy="489" r="4"/>
-<path class="w6-w w6-vp" d="M578 500 H602"/><path class="w6-w w6-gnd" d="M578 520 H602"/>
-<text class="w6-m" x="622" y="514">1000 µF ≥ 10 V across V+ / GND (stripe − to GND)</text>
+<path class="w6-w w6-vp" d="M590 539 V570"/><circle class="w6-dot w6-vp" cx="590" cy="539" r="4"/>
+<path class="w6-w w6-gnd" d="M610 559 V600 H590 V590"/><circle class="w6-dot w6-gnd" cx="610" cy="559" r="4"/>
+<path class="w6-w w6-vp" d="M578 570 H602"/><path class="w6-w w6-gnd" d="M578 590 H602"/>
+<text class="w6-m" x="622" y="584">1000 µF ≥ 10 V across V+ / GND (stripe − to GND)</text>
 
 <!-- notes -->
-<text class="w6-warn" x="24" y="560">Never feed servo current through the pyboard or USB. Join the grounds (GND ↔ GND ↔ supply −).</text>
-<text class="w6-m" x="24" y="580">OE: low = outputs on (pulled low on most breakouts). X8 high cuts all six servos at once. The pyboard's 3V3 feeds only logic: the PCA9685's and the OLED (~20–50 mA).</text>
-<text class="w6-m" x="24" y="598">OLED: the 7-pin module as sold for SPI (BS1/BS2 resistors on SPI); SPI2 = Y6 clock, Y8 data, Y5 chip select, Y4 data/command, Y3 reset. X8–X10 stay the PCA9685's.</text>
+<text class="w6-warn" x="24" y="650">Never feed servo (or ring) current through the pyboard or USB. Join the grounds (GND ↔ GND ↔ supply −).</text>
+<text class="w6-m" x="24" y="670">OE: low = outputs on (pulled low on most breakouts). X8 high cuts all six servos at once. The pyboard's 3V3 feeds only logic: the PCA9685's and the OLED (~20–50 mA).</text>
+<text class="w6-m" x="24" y="688">Status ring: WS2812B, 12 px, firmware 7 (ring.py); DIN from Y8 (SPI2, bit-banged through the SPI hardware), 5 V and GND from the supply, not the pyboard.</text>
+<text class="w6-m" x="24" y="706">OLED (planned): race stats while driving, not in the firmware yet; power from the pyboard's 3V3, not the servo supply (cleaner).</text>
+<text class="w6-m" x="24" y="724">The 7-pin module as sold for SPI (BS1/BS2 resistors on SPI); SPI2 = Y6 clock, Y7 data (moved off Y8 for the ring), Y5 chip select, Y4 data/command, Y3 reset.</text>
 </svg>
