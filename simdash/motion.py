@@ -1036,6 +1036,8 @@ class Link:
         self.home = None      # pulses sent first on each connect, and stored as park
         self.last = None      # the newest pulses
         self.pending = None   # the frame waiting for the sender thread
+        self.pending_leds = None   # the ring frame waiting for the sender thread (no keepalive: the board's
+                                    # own timeout falls back to its rainbow when this goes quiet)
         self.sent_at = 0.0
         self.next_try = 0.0
         self.firmware = None
@@ -1212,6 +1214,14 @@ class Link:
                 self.pending = _frame("S", us)
                 self.wake.set()
 
+    def send_leds(self, rgb):
+        """The ring's pixels (flat [r, g, b, ...] list, 0-255): a display update, no keepalive (quiet for
+        a moment, and firmware 7+ falls back to its own rainbow on its own). Ignored by older firmware."""
+        with self.lock:
+            if self.armed:
+                self.pending_leds = _frame("L", rgb)
+                self.wake.set()
+
     def _sender(self):
         while True:
             self.wake.wait(self.KEEP / 3)
@@ -1221,15 +1231,20 @@ class Link:
                     return
                 frame = self.pending
                 self.pending = None
+                leds = self.pending_leds
+                self.pending_leds = None
                 if frame is None and self.last and time.monotonic() - self.sent_at > self.KEEP:
                     frame = _frame("S", self.last)  # keepalive
-                if frame is None:
+                if frame is None and leds is None:
                     continue
                 if not self._connect_locked():
                     continue
                 try:
-                    self._write(frame)
-                    self.sent_at = time.monotonic()
+                    if frame is not None:
+                        self._write(frame)
+                        self.sent_at = time.monotonic()
+                    if leds is not None:
+                        self._write(leds)
                 except OSError as e:
                     self.error = str(e)
                     self._close()
@@ -1561,6 +1576,30 @@ class Course:
         return t
 
 
+RING_N = 12       # pixels on the status ring (firmware/6dof/ring.py's N)
+RING_MAX_G = 1.5  # the ring is at full brightness from here up
+
+
+def ring_colors(fwd, left, n=RING_N, max_g=RING_MAX_G):
+    """The status ring's n pixels (flat [r, g, b, ...] list, 0-255) for an acceleration (fwd, left, m/s²,
+    the car's frame): direction = where the car is being thrown, i.e. the opposite of the measured
+    acceleration (0 = the nose: braking throws you towards it, accelerating towards the tail; cornering
+    towards the outside, away from the turn), brightness = its size against max_g (green -> yellow -> red),
+    split between the two nearest pixels so the dot moves smoothly instead of jumping between them."""
+    mag = min(1.0, math.hypot(fwd, left) / (max_g * G))
+    pos = (math.degrees(math.atan2(-left, -fwd)) % 360) / 360 * n
+    i0, frac = int(pos) % n, pos - int(pos)
+    i1 = (i0 + 1) % n
+    if mag < 0.5:
+        r, g = round(510 * mag), 255
+    else:
+        r, g = 255, round(255 * (1 - 2 * (mag - 0.5)))
+    out = [0] * (3 * n)
+    for i, w in ((i0, 1 - frac), (i1, frac)):
+        out[3 * i], out[3 * i + 1] = round(r * mag * w), round(g * mag * w)
+    return out
+
+
 class Player:
     """Plays a course: 50 Hz, cueing -> fit inside the reach -> IK -> pulses to the pyboard (when armed)."""
 
@@ -1658,6 +1697,7 @@ class Player:
         self.last, self.inputs = r, s
         if r["ok"]:
             link.send(r["pulse"])
+        link.send_leds(ring_colors(s["fwd"], s["left"]))
 
     def _settled(self):
         return self.cue.fade == 0.0 and all(abs(v) < 0.05 for v in self.cue.out.values())
@@ -1831,7 +1871,7 @@ def _write_demo(port, data, pyboard):
 # ---------- the firmware itself, installed from simdash's copy ----------
 
 FIRMWARE_DIR = Path(__file__).resolve().parent.parent / "firmware" / "6dof"
-FIRMWARE_FILES = ("pca9685.py", "board.py", "demo.py", "fw.py", "main.py")
+FIRMWARE_FILES = ("pca9685.py", "ring.py", "board.py", "demo.py", "fw.py", "main.py")
 
 
 def firmware_version():

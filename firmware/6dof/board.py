@@ -15,7 +15,8 @@ starting point (the PC sends the home pose first). No line for timeout_ms: glide
 over about glide_ms, hold hold_ms, then go limp (no park pulses: limp at once).
 """
 
-VERSION = "6"   # 4: Q state report, hardware watchdog; 5: ver= in Q, LEDs red only for a problem; 6: SD card
+VERSION = "7"   # 4: Q state report, hardware watchdog; 5: ver= in Q, LEDs red only for a problem; 6: SD card;
+                # 7: L (status ring) command, leds= in the hello
 
 
 class Board:

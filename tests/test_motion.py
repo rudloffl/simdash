@@ -404,6 +404,50 @@ def test_body_mode_yaw_is_the_slip_angle():
     assert cue.step(s, 0.02)["yaw"] == pytest.approx(-8.0)
 
 
+def test_ring_colors_is_blank_at_rest():
+    assert motion.ring_colors(0.0, 0.0) == [0] * (3 * motion.RING_N)
+
+
+def test_ring_colors_points_the_way_the_car_is_thrown():
+    # braking (fwd negative): thrown forward, towards the nose -> pixel 0 (0 = the nose)
+    out = motion.ring_colors(-motion.G, 0.0)
+    lit = [i for i in range(motion.RING_N) if out[3 * i:3 * i + 3] != [0, 0, 0]]
+    assert lit == [0]
+    # accelerating (fwd positive): thrown back, towards the tail -> halfway round
+    out = motion.ring_colors(motion.G, 0.0)
+    lit = [i for i in range(motion.RING_N) if out[3 * i:3 * i + 3] != [0, 0, 0]]
+    assert lit == [motion.RING_N // 2]
+    # a hard left turn (left positive): thrown outwards, to the right -> three quarters round
+    out = motion.ring_colors(0.0, motion.G)
+    lit = [i for i in range(motion.RING_N) if out[3 * i:3 * i + 3] != [0, 0, 0]]
+    assert lit == [3 * motion.RING_N // 4]
+
+
+def test_ring_colors_brightness_and_hue_grow_with_g():
+    def brightest(fwd):
+        out = motion.ring_colors(fwd, 0.0)
+        return max(out)
+
+    gentle, hard, pinned = brightest(-0.3 * motion.G), brightest(-1.0 * motion.G), brightest(-3.0 * motion.G)
+    assert gentle < hard < pinned
+    assert pinned == 255                                      # clamped at RING_MAX_G, no overflow past it
+    low = motion.ring_colors(-0.2 * motion.G, 0.0)             # green: no red yet
+    high = motion.ring_colors(-1.4 * motion.G, 0.0)            # red: green fading out
+    assert low[1] > 0 and low[0] < low[1]
+    assert high[0] > high[1]
+
+
+def test_ring_colors_splits_between_the_two_nearest_pixels():
+    # halfway between pixel 0 (0°) and pixel 1 (360/n °) in the direction the car is thrown, both lit evenly
+    import math
+    angle = math.radians(360 / motion.RING_N / 2)
+    fwd, left = -motion.G * math.cos(angle), -motion.G * math.sin(angle)   # the throw is the opposite way
+    out = motion.ring_colors(fwd, left)
+    lit = [i for i in range(motion.RING_N) if out[3 * i:3 * i + 3] != [0, 0, 0]]
+    assert lit == [0, 1]
+    assert out[0:3] == pytest.approx(out[3:6], abs=2)
+
+
 def test_cueing_mode_is_saved_and_checked(tmp_path, monkeypatch):
     monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
     monkeypatch.setitem(motion._cache, "s", None)

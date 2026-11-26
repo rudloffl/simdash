@@ -1,4 +1,4 @@
-"""Desk 6DOF firmware logic: PC control, the standalone demo, the USR switch, the LEDs.
+"""Desk 6DOF firmware logic: PC control, the standalone demo, the USR switch, the LEDs, the status ring.
 
 Plain Python (MicroPython 1.9.4 and CPython for the tests); main.py wires it to the hardware and calls
 feed() with what arrives on USB and step() with the milliseconds since the last call.
@@ -12,22 +12,31 @@ feed() with what arrives on USB and step() with the milliseconds since the last 
 - USR short press: stop the demo and go limp, latched (no demo, no S/P from the PC) until the next power
   cycle or an A line from the PC. USR long press (LONG_MS): play the demo again from the start.
 - Q: a one-line state report (STATE mode=... board=... ticks=...), answered in any mode, changing nothing.
+- The ring (if wired): an L line sets its 12 pixels (simdash's acceleration G-meter, while playing a
+  course); RING_TIMEOUT_MS after the last one, it free-runs a rainbow instead -- no PC needed, same idea
+  as the standalone demo.
 """
 
 from board import VERSION
 from demo import DemoError, DemoPlayer
+from ring import rainbow
 
 WAIT_MS = 3000
 TICK_MS = 20          # the servos' PWM frame: outputs updated at 50 Hz
 HOLD_MS = 5000
 LONG_MS = 1500
+RING_TIMEOUT_MS = 500   # no L this long: the ring reverts to its own rainbow
 DEMO_PATHS = ("/sd/demo.bin", "/flash/demo.bin")
 
 
 class Firmware:
-    def __init__(self, board, write, leds, switch, open_file, exists, pca_ok=True, autoplay=True, host=None):
+    def __init__(self, board, write, leds, switch, open_file, exists, pca_ok=True, autoplay=True, host=None,
+                 ring=None):
         self.board, self.write, self.switch = board, write, switch
         self.red, self.green, self.yellow, self.blue = leds
+        self.ring = ring
+        self.ring_rgb = None
+        self.ring_since = None
         self.open_file, self.pca_ok = open_file, pca_ok
         self.autoplay = autoplay  # False after a watchdog reset: stay limp, no demo at power-up
         self.host = host or (lambda: False)   # True when a PC has set the board up over USB: no demo then
@@ -69,6 +78,14 @@ class Firmware:
         if op == "Q":             # state report: changes nothing (not even the demo)
             self.write(self.report())
             return
+        if op == "L":             # ring pixels: a display update, doesn't touch the demo, mode or latch
+            if self.ring and len(parts) - 1 == self.ring.n * 3:
+                try:
+                    self.ring_rgb = [max(0, min(255, int(v))) for v in parts[1:]]
+                    self.ring_since = self.clock
+                except ValueError:
+                    pass
+            return
         if self.mode != "pc":
             self.leave_demo()
             self.mode = "pc"
@@ -80,7 +97,8 @@ class Firmware:
             return
         reply = self.board.line(text, self.clock)
         if reply:
-            tags = ("" if self.pca_ok else " pca=missing") + (" latched" if self.latched else "")
+            tags = (("" if self.pca_ok else " pca=missing") + (" latched" if self.latched else "")
+                    + (" leds=%d" % self.ring.n if self.ring else ""))
             self.write(reply.replace("\n", tags + "\n"))
 
     def report(self):
@@ -176,6 +194,15 @@ class Firmware:
                 self.start_demo()
         self.board.tick(now, t)
         self._leds(now)
+        self._ring(now)
+
+    def _ring(self, now):
+        if not self.ring:
+            return
+        if self.ring_since is not None and now - self.ring_since < RING_TIMEOUT_MS:
+            self.ring.show(self.ring_rgb)
+        else:
+            self.ring.show(rainbow(now))
 
     def _leds(self, now):
         demo = self.mode in ("demo", "park")

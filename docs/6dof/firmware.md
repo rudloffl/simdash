@@ -2,7 +2,7 @@
 
 [← Desk 6DOF](README.md)
 
-`firmware/6dof/main.py` and `pca9685.py`, for a pyboard v1.1 running MicroPython.
+`firmware/6dof/main.py`, `ring.py` and `pca9685.py`, for a pyboard v1.1 running MicroPython.
 
 ## Install
 
@@ -13,13 +13,14 @@ as simdash's copy. By hand:
 
 
 `main.py` (wiring to the pyboard), `board.py` (pulses: clamp, slew, park, glide), `fw.py` (PC control,
-demo mode, USR switch, LEDs), `demo.py` (the demo file player) and `pca9685.py`, for a pyboard v1.1 running
-MicroPython 1.9.4 or later. All but `main.py` and `pca9685.py` are plain Python, tested on the PC. The pyboard shows up as a USB drive (PYBFLASH): copy the three files onto it, eject,
-press RST. Or with mpremote:
+demo mode, USR switch, LEDs, the ring), `demo.py` (the demo file player), `ring.py` (the WS2812B status
+ring) and `pca9685.py`, for a pyboard v1.1 running MicroPython 1.9.4 or later. All but `main.py` and
+`pca9685.py` are plain Python, tested on the PC. The pyboard shows up as a USB drive (PYBFLASH): copy the
+files onto it, eject, press RST. Or with mpremote:
 
 ```
 pip install --user mpremote
-mpremote connect /dev/ttyACM2 cp firmware/6dof/board.py firmware/6dof/demo.py firmware/6dof/fw.py firmware/6dof/pca9685.py firmware/6dof/main.py :
+mpremote connect /dev/ttyACM2 cp firmware/6dof/board.py firmware/6dof/demo.py firmware/6dof/fw.py firmware/6dof/ring.py firmware/6dof/pca9685.py firmware/6dof/main.py :
 mpremote connect /dev/ttyACM2 reset
 ```
 
@@ -53,7 +54,7 @@ glide to park after 1000 ms of silence over 1000 ms then limp; a tick takes unde
 into `main.py` and the handshake from simdash.
 `main.py` owns the USB serial port, so the REPL is busy: mpremote breaks in with Ctrl-C when it connects.
 
-## Protocol (version 5)
+## Protocol (version 7)
 
 Text lines over the USB serial port (no binary, so a stray byte can't look like Ctrl-C):
 
@@ -62,9 +63,10 @@ Text lines over the USB serial port (no binary, so a stray byte can't look like 
 | `S u0 u1 u2 u3 u4 u5` | Target pulses in µs for servos 0–5, clamped to 800–2200. |
 | `P u0 u1 u2 u3 u4 u5` | Park pulses: where to glide when the PC goes silent. |
 | `O` | Let go: every output off, servos limp. |
-| `H` | Hello: replies `6DOF 5 ch=6`, plus ` pca=missing` without a PCA9685 and ` latched` after a USR stop. |
+| `L r0 g0 b0 … r11 g11 b11` | The ring's 12 pixels (0–255 each), only if one is wired (version 7+): a display update, doesn't touch the servos, the demo or the latch. |
+| `H` | Hello: replies `6DOF 7 ch=6`, plus ` pca=missing` without a PCA9685, ` leds=12` with a ring wired, and ` latched` after a USR stop. |
 | `A` | Clear the USR stop latch (simdash sends it when you arm the servos in the tab). |
-| `Q` | State report, answered in any mode and changing nothing (not even a playing demo): `STATE ver=5 mode=pc board=limp latched=0 error=0 pca=1 demo=1 played=0 clock=… ticks=… loops=… ms=… reset=power wdt=2000`. simdash's System tab shows it (Desk 6DOF card) with the loop and output rates from two reports. |
+| `Q` | State report, answered in any mode and changing nothing (not even a playing demo): `STATE ver=7 mode=pc board=limp latched=0 error=0 pca=1 demo=1 played=0 clock=… ticks=… loops=… ms=… reset=power wdt=2000`. simdash's System tab shows it (Desk 6DOF card) with the loop and output rates from two reports. |
 
 The board:
 
@@ -79,6 +81,23 @@ The board:
 
 simdash refuses to arm without a `6DOF 2` (or later) hello: with the board in the REPL, a crashed `main.py`,
 the old version 1 firmware or another board, the tab says why and nothing moves.
+
+## The status ring (version 7)
+
+A WS2812B ring (12 pixels by default, `ring.py`'s `N`) on **SPI2, MOSI only (Y8)**: each WS2812 bit becomes 3
+SPI bits (`0 = 0b100`, `1 = 0b110`) at 3.2 MHz, so the SPI peripheral's own clock does the timing, not a
+hand-tuned software loop — the usual trick for driving these LEDs from a chip with no PIO/RMT peripheral.
+Nothing is wired on SPI2's other pins (`Y6` SCK2, `Y7` MISO2): the OLED is only planned, so this is free for
+now; wire its SDA elsewhere when that's built. **Needs real hardware to confirm the timing is tight enough**
+(`tests/test_firmware.py` covers the buffer/colour maths on the PC, not the SPI bit pattern itself).
+
+While simdash is playing a course, an `L` line each tick sets the ring to the car's acceleration direction and
+size (0 = the nose; braking throws it that way, accelerating towards the tail, cornering towards the
+outside); `RING_TIMEOUT_MS` (500 ms) after
+the last one, the board free-runs a plain rotating rainbow instead, with no PC needed, the same idea as the
+standalone demo. Unlike the PCA9685, there's no way to tell a ring is actually wired (SPI has no reply, so
+nothing to probe): `main.py` always sets one up and the hello always says `leds=12`, ring or no ring; writing
+to an unplugged pin is harmless, it just does nothing visible.
 
 ## SD card (version 6)
 

@@ -2,7 +2,7 @@
 
 The logic is in board.py (pulses: clamp, slew limit, park, glide), demo.py (the standalone demo file) and
 fw.py (PC control, demo mode, USR switch, LEDs); this file only wires them to the hardware.
-Copy main.py, fw.py, board.py, demo.py and pca9685.py to the board.
+Copy main.py, fw.py, board.py, demo.py, ring.py and pca9685.py to the board.
 
 LEDs: blue = demo playing, green = the PC driving, green flash every 2 s = on a PC, waiting for simdash
 (servos limp), yellow = gliding to park. Red only for a problem: blinking 1 Hz = limp with no PC, 5 Hz = no
@@ -29,6 +29,7 @@ from machine import I2C, Pin
 from board import Board
 from fw import Firmware
 from pca9685 import PCA9685
+from ring import Ring
 
 FIRST_CHANNEL = 0               # servos 0-5 on PCA9685 channels FIRST_CHANNEL.. FIRST_CHANNEL+5
 MIN_US, MAX_US = 800, 2200      # hard limits whatever the PC or the demo says (MG90 end stops near 600 / 2400)
@@ -74,6 +75,12 @@ try:
 except OSError:
     pca = None                     # not wired / not powered: answer the PC, never drive anything
 
+# status ring (optional): SPI2 on Y8 (MOSI2) only, bit-banged through the SPI hardware (ring.py); the OLED
+# is only planned, not wired, so this is free for now. Nothing to detect: writing to an unplugged ring is
+# harmless, so it's always set up.
+spi2 = machine.SPI(2, baudrate=3200000, polarity=0, phase=0, firstbit=machine.SPI.MSB)
+ring = Ring(spi2.write)
+
 
 class Out:
     def write(self, us):
@@ -98,7 +105,7 @@ usb = pyb.USB_VCP()
 sw = pyb.Switch()
 fw = Firmware(board, usb.write, (pyb.LED(1), pyb.LED(2), pyb.LED(3), pyb.LED(4)), sw, open, exists,
               pca_ok=pca is not None, autoplay=RESET != "watchdog",   # it froze: stay limp, no demo
-              host=on_a_pc)                                          # on a PC: only what simdash sends
+              host=on_a_pc, ring=ring)                                # on a PC: only what simdash sends
 
 loops = 0
 fw.stats = lambda: " loops=%d ms=%d reset=%s wdt=%d sd=%d" % (loops, utime.ticks_ms(), RESET, WDT_MS, SD)

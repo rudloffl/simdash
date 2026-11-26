@@ -13,6 +13,7 @@ FW = os.path.join(os.path.dirname(__file__), "..", "firmware", "6dof")
 sys.path.insert(0, FW)          # fw.py imports demo.py by name, as on the board
 board6 = importlib.import_module("board")
 demo6 = importlib.import_module("demo")
+ring6 = importlib.import_module("ring")
 fw6 = importlib.import_module("fw")
 
 
@@ -127,12 +128,22 @@ class Switch:
         return self.down
 
 
-def make_fw(data, pca_ok=True):
+class FakeRing:
+    def __init__(self, n=3):
+        self.n = n
+        self.shown = []
+
+    def show(self, rgb):
+        self.shown.append(list(rgb))
+
+
+def make_fw(data, pca_ok=True, ring=None):
     out, sw, said = Out(), Switch(), []
     board = board6.Board(out)
     leds = (Led(), Led(), Led(), Led())
     files = {"/flash/demo.bin": data} if data is not None else {}
-    fw = fw6.Firmware(board, said.append, leds, sw, lambda p, m: io.BytesIO(files[p]), lambda p: p in files, pca_ok)
+    fw = fw6.Firmware(board, said.append, leds, sw, lambda p, m: io.BytesIO(files[p]), lambda p: p in files, pca_ok,
+                       ring=ring)
     drives = []
     real = board.drive
     board.drive = lambda us, now: (drives.append((now, list(us))), real(us, now))[1]
@@ -300,3 +311,41 @@ def test_leds_red_only_for_a_problem():
     fw.feed(b"S 1500 1500 1500 1500 1500 1500\n")
     run(fw, 100)
     assert green.lit and not red.lit                                   # driven: steady green
+
+
+def test_ring_shows_what_the_pc_sends_then_falls_back_to_rainbow():
+    _, _, data, _ = _export()
+    ring = FakeRing(n=3)
+    fw, board, out, sw, said, leds, drives = make_fw(data, ring=ring)
+    fw.host = lambda: True
+    run(fw, 10)   # past the first tick, still in "wait": an L shouldn't need "pc" mode or touch the demo
+    rgb = [9, 0, 0] * ring.n
+    fw.feed(b"L " + " ".join(str(v) for v in rgb).encode() + b"\n")
+    run(fw, 20)
+    assert ring.shown[-1] == rgb                       # fresh L: shown as sent
+    run(fw, fw6.RING_TIMEOUT_MS + 100)                 # quiet for a while: the ring's own timeout, not fw's
+    assert ring.shown[-1] != rgb
+    assert ring.shown[-1] != [0] * (ring.n * 3)         # (the rainbow, not blank)
+    assert fw.mode == "wait"                            # an L alone never left "wait" (no demo interrupted)
+
+
+def test_bad_or_wrong_sized_L_is_ignored():
+    _, _, data, _ = _export()
+    ring = FakeRing(n=3)
+    fw, *_ = make_fw(data, ring=ring)
+    fw.feed(b"L 1 2 3\n")                   # too few values for 3 pixels (needs 9)
+    assert fw.ring_rgb is None
+    fw.feed(("L " + " ".join(["x"] * (ring.n * 3)) + "\n").encode())   # not integers
+    assert fw.ring_rgb is None
+
+
+def test_hello_reports_leds_when_a_ring_is_wired():
+    _, _, data, _ = _export()
+    fw_no_ring, *_ = make_fw(data)
+    fw_with_ring, *_ = make_fw(data, ring=FakeRing(n=3))
+    said, said2 = [], []
+    fw_no_ring.write, fw_with_ring.write = said.append, said2.append
+    fw_no_ring.command("H")
+    fw_with_ring.command("H")
+    assert "leds=" not in said[-1]
+    assert "leds=3" in said2[-1]
