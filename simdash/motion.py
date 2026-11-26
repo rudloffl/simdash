@@ -725,6 +725,7 @@ def template_svg(part, g):
     home_r = math.hypot(*tip(B0, u0, g["horn"], ha_home)[:2])
     stroke_ends = [ha_home - st, ha_home + st]
     stroke_r = [math.hypot(*tip(B0, u0, g["horn"], a)[:2]) for a in stroke_ends]
+    rc = reach(g)   # the range achievable, each axis alone: drawn on the platform, sizes both canvases
 
     def stud(x, y, rod, sign):
         """An arrow along the home rod's direction seen from above (sign -1: the other end's view)."""
@@ -816,7 +817,8 @@ def template_svg(part, g):
                 + text(*at(r + 6, deg), label, size=2.8, color="#666", along=deg))
 
     pad = 20
-    R = max((g["base_r"] + g["horn"] + MG90["len"]) if part == "base" else g["plat_r"] + 20, home_r, *stroke_r)
+    R = max((g["base_r"] + g["horn"] + MG90["len"]) if part == "base" else g["plat_r"] + 20,
+            home_r, *stroke_r, *rc["x"], *rc["y"])
     size = 2 * (R + pad)
     rows = 10                                   # coordinate table under the drawing
     height = size + 4.2 * rows + 6
@@ -886,6 +888,9 @@ def template_svg(part, g):
         e.append(chord_dim(B0, B1, 8, f"shafts {math.dist(B0, B1):.1f}"))
         crossed = _ball_gaps(g, L)[2]
         e.append(chord_dim(t0, t1, 17, "HORNS CROSS" if crossed else f"balls {math.dist(t0, t1):.1f}"))
+        lo = stroke_ends[0]   # the lowest position (most below horizontal): often where a pair's balls sit closest
+        tlo0, tlo1 = tip(B0, u0, g["horn"], lo), tip(B1, u1, g["horn"], lo)
+        e.append(chord_dim(tlo0, tlo1, 27, f"balls at {lo:+g}°: {math.dist(tlo0, tlo1):.1f}"))
         hm = ((B0[0] + t0[0]) / 2, (B0[1] + t0[1]) / 2)
         no = at(5, fp)   # beside the horn, away from the centre
         e.append(text(hm[0] + no[0], hm[1] + no[1], f"horn {g['horn']:g}" + (f" at {ha_home:+g}°" if ha_home else ""), size=2.8, color="#c00",
@@ -943,6 +948,15 @@ def template_svg(part, g):
         e.append(angle_dim(fp + 60 - ha, fp + 60 + ha, g["plat_r"] * 0.45, f"{g['plat_angle']:g}°"))
         e.append(angle_dim(fp, fp + 60, 12, "60°"))
         e.append(chord_dim(P1, P2, 8, f"{math.dist(P1, P2):.1f}"))
+        # the range achievable, each axis alone (surge/sway drawn; heave/roll/pitch/yaw in the note below)
+        rx, ry = rc["x"], rc["y"]
+        magenta = 'stroke="#c0c" stroke-width="0.3" stroke-dasharray="3 1.5"'
+        e.append(line((0, 0), (rx[1], 0), magenta) + line((0, 0), (-rx[0], 0), magenta))
+        e.append(line((0, 0), (0, ry[1]), magenta) + line((0, 0), (0, -ry[0]), magenta))
+        e.append(text(rx[1] / 2, 3.5, f"+{rx[1]:g}", size=2.6, color="#c0c")
+                 + text(-rx[0] / 2, 3.5, f"-{rx[0]:g}", size=2.6, color="#c0c")
+                 + text(3.5, ry[1] / 2, f"+{ry[1]:g}", size=2.6, color="#c0c", along=90)
+                 + text(3.5, -ry[0] / 2, f"-{ry[0]:g}", size=2.6, color="#c0c", along=90))
         if rod_end:
             # on platform pair 0: each bolt's angle from the radial line through its joint (dashed, outwards)
             for k in (1, 2):
@@ -955,6 +969,10 @@ def template_svg(part, g):
         note = (f"PLATFORM 1:1 (seen from above)  ball joints on R{g['plat_r']:g}, {g['plat_angle']:g}° apart in a pair; "
                 f"pairs 120° apart, 60° from the base pairs|joint k takes the rod from servo k; green = dimensions"
                 f"|red/orange = where the horn ball sits (top view) at rest, at each end of the stroke: a guide for plat_r"
+                f"|magenta = range achievable, each axis alone, within every limit: surge/sway (drawn) "
+                f"+{rx[1]:g}/-{rx[0]:g} / +{ry[1]:g}/-{ry[0]:g} mm; heave +{rc['z'][1]:g}/-{rc['z'][0]:g} mm; "
+                f"roll +{rc['roll'][1]:g}/-{rc['roll'][0]:g}°, pitch +{rc['pitch'][1]:g}/-{rc['pitch'][0]:g}°, "
+                f"yaw +{rc['yaw'][1]:g}/-{rc['yaw'][0]:g}°"
                 + (f"|blue = rod-end bolt under the platform, seen from above, square to the rod at home"
                    f"|dot = the bolt's end that rises {bolt_plan(0)[2]:.1f}° towards the platform; on pair 0: its angle from the radial (dashed)" if rod_end else
                    f"|blue = ball stud under the platform: aim it down along the rod at home, {lean:.0f}° from vertical, its tip leaning this way"))

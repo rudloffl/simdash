@@ -5653,14 +5653,16 @@ function drawMotion() {
   out.push(`<circle class="ref-home" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="5"/>`,
     `<circle class="ref-dot" cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="3.5"/>`);
   const f = (v, u) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}${u}`;
+  const rng = (ax, u) => { const r = mo.d?.reach?.[ax]; return r ? ` <tspan class="ref-rng">(−${r[0]}…+${r[1]}${u})</tspan>` : ""; };
   const dist = Math.hypot(p.x, p.y, p.z);
-  const rows = [
-    [["Δx", p.x, " mm", 0], ["Δy", p.y, " mm", 1], ["Δz", p.z, " mm", 2]],
-    [["roll", p.roll, "°", 0], ["pitch", p.pitch, "°", 1], ["yaw", p.yaw, "°", 2]],
+  const cols = [
+    [["Δx", p.x, " mm", 0, "x"], ["Δy", p.y, " mm", 1, "y"], ["Δz", p.z, " mm", 2, "z"]],
+    [["roll", p.roll, "°", 0, "roll"], ["pitch", p.pitch, "°", 1, "pitch"], ["yaw", p.yaw, "°", 2, "yaw"]],
   ];
-  rows.forEach((r, j) => out.push(`<text class="ref-txt" x="8" y="${16 + 15 * j}">`
-    + r.map(([n, v, u, i]) => `<tspan fill="${AXC[i]}">${n}</tspan>\u2009${f(v, u)}`).join("\u2003\u2003") + `</text>`));
-  out.push(`<text class="ref-txt" x="8" y="46">${dist.toFixed(1)} mm from home</text>`);
+  const colX = [8, 250], rowH = 20;
+  cols.forEach((col, ci) => col.forEach(([n, v, u, i, ax], ri) => out.push(`<text class="ref-txt" x="${colX[ci]}" y="${18 + rowH * ri}">`
+    + `<tspan fill="${AXC[i]}">${n}</tspan>\u2009${f(v, u)}${rng(ax, u)}` + `</text>`)));
+  out.push(`<text class="ref-txt" x="8" y="${18 + rowH * 3 + 6}">${dist.toFixed(1)} mm from home</text>`);
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.innerHTML = out.join("");
 }

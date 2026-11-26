@@ -744,7 +744,8 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .mo-view .ref-ghost { stroke-width: 1.2; stroke-dasharray: 1.5 2.5; }
 .mo-view .ref-home { fill: none; stroke: var(--text); stroke-width: 1.5; }
 .mo-view .ref-dot { fill: var(--text); stroke: var(--surface); stroke-width: 1.5; }
-.mo-view .ref-txt { fill: var(--text-2); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.mo-view .ref-txt { fill: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.mo-view .ref-rng { fill: var(--muted); font-size: 11px; }
 a.btn { display: inline-block; text-decoration: none; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
 a.btn:hover { border-color: var(--muted); }
 .mo-servos, .mo-reach { width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; border-collapse: collapse; }
