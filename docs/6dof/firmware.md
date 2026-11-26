@@ -20,8 +20,10 @@ mpremote connect /dev/ttyACM2 reset
 (Check which ttyACM it is: `ls -l /dev/serial/by-id/` lists it as `usb-MicroPython_…`. simdash finds it by
 MicroPython's USB vendor id `f055`, so the Moza ports are never touched.)
 
-LEDs: blue = demo playing, green = the PC driving, yellow = gliding to park, red blinking = limp (fast: no
-PCA9685; 4 Hz: the demo file failed), red steady = stopped with USR (latched).
+LEDs: blue = demo playing, green = the PC driving, a short green flash every 2 s = on a PC, waiting for
+simdash (servos limp: the normal resting state), yellow = gliding to park. **Red only for a problem**:
+blinking 1 Hz = limp with no PC, 5 Hz = no PCA9685, 4 Hz = the demo file failed; steady = stopped with USR
+(latched; Arm in simdash clears it).
 
 **Access to the port.** The pyboard's serial port belongs to the `dialout` group; a udev rule gives the
 logged-in user access instead (rules that add `uaccess` must sort before `73-seat-late.rules`):

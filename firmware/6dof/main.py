@@ -4,8 +4,9 @@ The logic is in board.py (pulses: clamp, slew limit, park, glide), demo.py (the 
 fw.py (PC control, demo mode, USR switch, LEDs); this file only wires them to the hardware.
 Copy main.py, fw.py, board.py, demo.py and pca9685.py to the board.
 
-LEDs: blue = demo playing, green = the PC driving, yellow = gliding to park, red blinking = limp
-(fast: no PCA9685; 4 Hz: the demo file failed), red steady = stopped with USR (latched).
+LEDs: blue = demo playing, green = the PC driving, green flash every 2 s = on a PC, waiting for simdash
+(servos limp), yellow = gliding to park. Red only for a problem: blinking 1 Hz = limp with no PC, 5 Hz = no
+PCA9685, 4 Hz = the demo file failed; steady = stopped with USR (latched).
 Ctrl-C still breaks into the REPL (the protocol is text only), and lets go of the servos on the way out.
 
 Watchdog: the board resets itself (servos limp, as with RST) when the timed part of the loop (outputs,

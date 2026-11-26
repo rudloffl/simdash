@@ -180,14 +180,19 @@ class Firmware:
         demo = self.mode in ("demo", "park")
         state = self.board.state
         _set(self.blue, demo)
-        _set(self.green, self.mode == "pc" and state == "drive")
+        # red only for a problem; on a PC, waiting for simdash with the servos limp is a green heartbeat
+        waiting = (self.mode == "pc" and state == "limp" and self.pca_ok and not self.error and not self.latched
+                   and self.host())
+        _set(self.green, (self.mode == "pc" and state == "drive") or (waiting and now % 2000 < 100))
         _set(self.yellow, state in ("glide", "hold"))
         if self.error:
             red = (now // 125) % 2                      # 4 Hz: the demo file failed
         elif self.latched:
             red = True                                  # stopped with USR: steady
-        elif state == "limp":
-            red = (now // (100 if not self.pca_ok else 500)) % 2
+        elif not self.pca_ok:
+            red = (now // 100) % 2                      # 5 Hz: no PCA9685
+        elif state == "limp" and not waiting:
+            red = (now // 500) % 2                      # 1 Hz: limp, no PC
         else:
             red = False
         _set(self.red, red)

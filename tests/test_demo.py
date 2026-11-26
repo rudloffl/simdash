@@ -278,3 +278,25 @@ def test_on_a_pc_no_demo_only_what_simdash_sends():
     assert " host=1" in said[-1]
     fw.feed(b"S 1600 1600 1600 1600 1600 1600\n")
     assert board.state == "drive"
+
+
+def test_leds_red_only_for_a_problem():
+    _, _, data, _ = _export()
+    fw, board, out, sw, said, leds, drives = make_fw(data)
+    red, green = leds[0], leds[1]
+    fw.host = lambda: True
+    seen = set()
+    for _ in range(4000):                                              # past the 3 s wait: on a PC, limp
+        fw.step(1)
+        if fw.clock > 3100:
+            seen.add((red.lit, green.lit))
+    assert (True, False) not in seen and (False, True) in seen and (False, False) in seen   # green heartbeat
+    fw.host = lambda: False
+    seen = set()
+    for _ in range(2000):
+        fw.step(1)
+        seen.add(red.lit)
+    assert seen == {True, False}                                       # no PC, limp: red blinks
+    fw.feed(b"S 1500 1500 1500 1500 1500 1500\n")
+    run(fw, 100)
+    assert green.lit and not red.lit                                   # driven: steady green
