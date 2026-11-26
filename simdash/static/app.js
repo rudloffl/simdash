@@ -5402,6 +5402,156 @@ function moRot(p) {
   const [cr, sr, cp, sp, cy, sy] = [Math.cos(r), Math.sin(r), Math.cos(q), Math.sin(q), Math.cos(y), Math.sin(y)];
   return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr], [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr], [-sp, cp * sr, cp * cr]];
 }
+// The car on the platform, a low-poly model in its own frame (x to the nose, y to the left, z up from the
+// platform at z0), sized by the car settings: one of MO_CARS (the pick is only a look,
+// kept in the browser). Each face: p (points), cls, c (the centre of its part, to tell outward from inward),
+// lift (drawn a hair nearer than its depth), side (wheels: +1 left, -1 right), ref (a detail lying on a face:
+// the points of that face, so the detail sorts with it and is drawn just after it)
+const MO_CARS = { coupe: "Coupé", gt3: "GT3", f1: "F1", kart: "Kart", truck: "Trophy truck", mini: "MINI" };
+const MO_CAR_COLOUR = { coupe: null, gt3: "var(--s-spin)", f1: "var(--s-brake)", kart: "var(--s-throttle)",
+  truck: "#d9a21b", mini: "#1f5c3d" };
+function moCarFaces(car, z0, model = "coupe") {
+  const L = car.length * (model === "mini" ? 0.82 : 1), Wd = car.width, H = car.height;   // a MINI is stubby
+  const faces = [];
+  const quad = (p, cls, c, lift, side = 0, ref = null) => faces.push({ p, cls, c, lift, side, ref });
+  const centre = (pts) => pts.reduce((s, q) => s.map((v, j) => v + q[j] / pts.length), [0, 0, 0]);
+  // a box from x0..x1, y0..y1, za..zb
+  const box = (x0, x1, y0, y1, za, zb, cls) => {
+    const c = [(x0 + x1) / 2, (y0 + y1) / 2, (za + zb) / 2];
+    quad([[x0, y0, za], [x1, y0, za], [x1, y1, za], [x0, y1, za]], cls, c);
+    quad([[x0, y0, zb], [x0, y1, zb], [x1, y1, zb], [x1, y0, zb]], cls, c);
+    quad([[x0, y0, za], [x0, y0, zb], [x1, y0, zb], [x1, y0, za]], cls, c);
+    quad([[x0, y1, za], [x1, y1, za], [x1, y1, zb], [x0, y1, zb]], cls, c);
+    quad([[x0, y0, za], [x0, y1, za], [x0, y1, zb], [x0, y0, zb]], cls, c);
+    quad([[x1, y0, za], [x1, y0, zb], [x1, y1, zb], [x1, y1, za]], cls, c);
+  };
+  // a body lofted through cross-sections [x, half width, bottom, top] (x as a fraction of the length), nose first
+  const loft = (sections, cls = "car") => {
+    const S = sections.map(([fx, hw, zb, zt]) => ({ x: fx * L, hw, zb, zt }));
+    const c = centre(S.map((s) => [s.x, 0, (s.zb + s.zt) / 2]));
+    for (let i = 0; i < S.length - 1; i++) {
+      const a = S[i], b = S[i + 1];
+      quad([[a.x, a.hw, a.zt], [a.x, -a.hw, a.zt], [b.x, -b.hw, b.zt], [b.x, b.hw, b.zt]], cls, c);
+      quad([[a.x, a.hw, a.zb], [b.x, b.hw, b.zb], [b.x, -b.hw, b.zb], [a.x, -a.hw, a.zb]], cls, c);
+      quad([[a.x, a.hw, a.zb], [a.x, a.hw, a.zt], [b.x, b.hw, b.zt], [b.x, b.hw, b.zb]], cls, c);
+      quad([[a.x, -a.hw, a.zb], [b.x, -b.hw, b.zb], [b.x, -b.hw, b.zt], [a.x, -a.hw, a.zt]], cls, c);
+    }
+    for (const s of [S[0], S[S.length - 1]]) quad([[s.x, s.hw, s.zb], [s.x, -s.hw, s.zb], [s.x, -s.hw, s.zt], [s.x, s.hw, s.zt]], cls, c);
+    return { S, c };
+  };
+  // head and tail lights on the end caps of a lofted body
+  const capOf = (s) => [[s.x, s.hw, s.zb], [s.x, -s.hw, s.zb], [s.x, -s.hw, s.zt], [s.x, s.hw, s.zt]];
+  const lamps = ({ S, c }, tail = true) => {
+    const lamp = (s, side, cls) => {
+      const y0 = side * s.hw * 0.45, y1 = side * s.hw * 0.85, za = s.zb + (s.zt - s.zb) * 0.45, zb = s.zb + (s.zt - s.zb) * 0.8;
+      quad([[s.x, y0, za], [s.x, y1, za], [s.x, y1, zb], [s.x, y0, zb]], cls, c, 0.01, 0, capOf(s));
+    };
+    for (const side of [1, -1]) { lamp(S[0], side, "car-head"); if (tail) lamp(S[S.length - 1], side, "car-tail"); }
+  };
+  // a cabin standing on the body's top line: windscreen, roof, rear window, side windows
+  const cabin = ({ S }, fx, rf, rb, rx, bw, tw, zr, roof = "car") => {
+    const ztAt = (x) => { for (let i = 0; i < S.length - 1; i++) { const a = S[i], b = S[i + 1];
+      if (x <= a.x && x >= b.x) return a.zt + (b.zt - a.zt) * (a.x - x) / (a.x - b.x); } return S[1].zt; };
+    [fx, rx, rf, rb] = [fx * L, rx * L, rf * L, rb * L];
+    const zf = ztAt(fx), zb = ztAt(rx), c = [(fx + rx) / 2, 0, (zf + zr) / 2];
+    quad([[fx, bw, zf], [fx, -bw, zf], [rf, -tw, zr], [rf, tw, zr]], "car-glass", c);
+    quad([[rf, tw, zr], [rf, -tw, zr], [rb, -tw, zr], [rb, tw, zr]], roof, c);
+    quad([[rb, tw, zr], [rb, -tw, zr], [rx, -bw, zb], [rx, bw, zb]], "car-glass", c);
+    quad([[fx, bw, zf], [rf, tw, zr], [rb, tw, zr], [rx, bw, zb]], "car-glass", c);
+    quad([[fx, -bw, zf], [rx, -bw, zb], [rb, -tw, zr], [rf, -tw, zr]], "car-glass", c);
+  };
+  // a wheel: a ten-sided drum standing on the platform, a hub on the outside
+  const wheel = (wx, yc, r, th) => {
+    const N = 10, side = Math.sign(yc), c = [wx, yc, z0 + r];
+    const ring = (y, rr) => Array.from({ length: N }, (_, k) => [wx + rr * Math.cos(2 * Math.PI * k / N), y, c[2] + rr * Math.sin(2 * Math.PI * k / N)]);
+    const out = ring(yc + side * th / 2, r), inn = ring(yc - side * th / 2, r);
+    quad(out, "car-wheel", c, 0, side);
+    quad(ring(yc + side * th / 2, r * 0.45), "car-hub", c, 0.5, side);
+    quad(inn, "car-wheel", c, 0, side);
+    for (let k = 0; k < N; k++) quad([out[k], out[(k + 1) % N], inn[(k + 1) % N], inn[k]], "car-wheel", c, 0, side);
+  };
+  const four = (xf, xr, y, rf, rr, thf, thr) => { for (const s of [1, -1]) { wheel(xf, s * y, rf, thf); wheel(xr, s * y, rr, thr); } };
+
+  if (model === "gt3") {                     // low and wide: splitter, flat cabin set back, big rear wing
+    const r = Math.min(0.26 * H, 0.12 * L);
+    const body = loft([[0.5, 0.42 * Wd, z0 + 0.35 * r, z0 + 0.24 * H], [0.36, 0.49 * Wd, z0 + 0.3 * r, z0 + 0.44 * H],
+                       [-0.38, 0.5 * Wd, z0 + 0.3 * r, z0 + 0.5 * H], [-0.5, 0.47 * Wd, z0 + 0.35 * r, z0 + 0.48 * H]]);
+    lamps(body);
+    cabin(body, 0.12, -0.04, -0.2, -0.34, 0.40 * Wd, 0.30 * Wd, z0 + 0.8 * H);
+    box(0.5 * L, 0.55 * L, -0.45 * Wd, 0.45 * Wd, z0 + 0.25 * r, z0 + 0.25 * r + 1.2, "car-dark");     // splitter
+    for (const s of [1, -1]) box(-0.53 * L, -0.40 * L, s * 0.41 * Wd, s * 0.43 * Wd, z0 + 0.46 * H, z0 + H, "car-dark");
+    box(-0.53 * L, -0.43 * L, -0.43 * Wd, 0.43 * Wd, z0 + 0.92 * H, z0 + 0.92 * H + 2, "car-dark"); // wing
+    four(0.31 * L, -0.31 * L, 0.45 * Wd, r, r, 0.2 * Wd, 0.2 * Wd);
+  } else if (model === "f1") {               // open wheels: needle nose, side pods, airbox, two wings, a helmet
+    const r = Math.min(0.3 * H, 0.1 * L);
+    loft([[0.5, 0.05 * Wd, z0 + 0.5 * r, z0 + 0.62 * r], [0.3, 0.1 * Wd, z0 + 0.45 * r, z0 + r],
+          [0.08, 0.16 * Wd, z0 + 0.4 * r, z0 + 1.25 * r], [-0.25, 0.14 * Wd, z0 + 0.4 * r, z0 + 1.2 * r],
+          [-0.45, 0.07 * Wd, z0 + 0.5 * r, z0 + 0.95 * r]]);
+    loft([[0.06, 0.34 * Wd, z0 + 0.4 * r, z0 + r], [-0.12, 0.34 * Wd, z0 + 0.4 * r, z0 + 0.95 * r],
+          [-0.32, 0.16 * Wd, z0 + 0.45 * r, z0 + 0.8 * r]]);
+    loft([[-0.12, 0.07 * Wd, z0 + 1.2 * r, z0 + 1.75 * r], [-0.42, 0.03 * Wd, z0 + 0.95 * r, z0 + 1.1 * r]]);  // airbox
+    box(-0.12 * L, -0.05 * L, -0.05 * Wd, 0.05 * Wd, z0 + 1.2 * r, z0 + 1.6 * r, "car-helmet");
+    box(0.43 * L, 0.53 * L, -0.48 * Wd, 0.48 * Wd, z0 + 0.15 * r, z0 + 0.27 * r, "car-dark");         // front wing
+    for (const s of [1, -1]) box(0.43 * L, 0.53 * L, s * 0.47 * Wd, s * 0.49 * Wd, z0 + 0.15 * r, z0 + 0.6 * r, "car-dark");
+    box(-0.54 * L, -0.46 * L, -0.36 * Wd, 0.36 * Wd, z0 + 1.9 * r, z0 + 2.05 * r, "car-dark");        // rear wing
+    for (const s of [1, -1]) box(-0.55 * L, -0.45 * L, s * 0.35 * Wd, s * 0.37 * Wd, z0 + 0.9 * r, z0 + 2.1 * r, "car-dark");
+    wheel(0.30 * L, 0.40 * Wd, r, 0.14 * Wd); wheel(0.30 * L, -0.40 * Wd, r, 0.14 * Wd);
+    wheel(-0.33 * L, 0.40 * Wd, 1.05 * r, 0.18 * Wd); wheel(-0.33 * L, -0.40 * Wd, 1.05 * r, 0.18 * Wd);
+  } else if (model === "kart") {             // a frame on four small wheels, side pods, seat, driver, engine
+    const r = Math.min(0.18 * H, 0.07 * L), fz = z0 + 0.5 * r;
+    box(-0.42 * L, 0.40 * L, -0.30 * Wd, 0.30 * Wd, fz, fz + 2, "car-dark");                            // frame
+    loft([[0.5, 0.30 * Wd, z0 + 0.45 * r, z0 + 0.75 * r], [0.38, 0.32 * Wd, z0 + 0.5 * r, z0 + 1.2 * r]]);    // nose
+    box(0.20 * L, 0.24 * L, -0.12 * Wd, 0.12 * Wd, z0 + 0.6 * r, z0 + 2.2 * r, "car");                  // front panel
+    for (const s of [1, -1]) box(-0.22 * L, 0.10 * L, s * 0.30 * Wd, s * 0.46 * Wd, fz, z0 + 1.1 * r, "car");   // side pods
+    box(-0.44 * L, -0.48 * L, -0.42 * Wd, 0.42 * Wd, z0 + 0.6 * r, z0 + r, "car");                      // rear bumper
+    box(-0.34 * L, -0.20 * L, -0.40 * Wd, -0.18 * Wd, z0 + 0.8 * r, z0 + 2.4 * r, "car-dark");         // engine
+    box(-0.20 * L, -0.16 * L, -0.12 * Wd, 0.12 * Wd, fz, z0 + 3 * r, "car-dark");                      // seat back
+    box(0.04 * L, 0.06 * L, -0.07 * Wd, 0.07 * Wd, z0 + 2.4 * r, z0 + 2.9 * r, "car-dark");           // steering wheel
+    box(-0.16 * L, -0.04 * L, -0.11 * Wd, 0.11 * Wd, z0 + 1.4 * r, z0 + 3.6 * r, "car-suit");          // driver
+    box(-0.13 * L, -0.03 * L, -0.07 * Wd, 0.07 * Wd, z0 + 3.6 * r, z0 + 4.7 * r, "car-helmet");
+    four(0.32 * L, -0.32 * L, 0.43 * Wd, 0.9 * r, r, 0.12 * Wd, 0.2 * Wd);
+  } else if (model === "truck") {            // trophy truck: huge wheels, body high above them, cab, open bed
+    const r = Math.min(0.3 * H, 0.13 * L), zb = z0 + 1.05 * r, zt = z0 + 0.64 * H;
+    const body = loft([[0.5, 0.36 * Wd, z0 + 1.25 * r, z0 + 0.5 * H], [0.36, 0.46 * Wd, zb, z0 + 0.62 * H],
+                       [0.05, 0.46 * Wd, zb, zt], [-0.16, 0.46 * Wd, zb, zt]]);
+    lamps(body, false);                                                                                // headlights (the bed has the tail lights)
+    cabin(body, 0.04, -0.01, -0.12, -0.16, 0.44 * Wd, 0.40 * Wd, z0 + H);
+    box(-0.5 * L, -0.16 * L, -0.46 * Wd, 0.46 * Wd, zb, zb + 2, "car");                                // bed floor
+    for (const s of [1, -1]) box(-0.5 * L, -0.16 * L, s * 0.43 * Wd, s * 0.46 * Wd, zb, zt, "car");      // bed sides
+    box(-0.5 * L, -0.48 * L, -0.43 * Wd, 0.43 * Wd, zb, zt, "car");                                    // tailgate
+    const gate = [[-0.5 * L, -0.43 * Wd, zb], [-0.5 * L, 0.43 * Wd, zb], [-0.5 * L, 0.43 * Wd, zt], [-0.5 * L, -0.43 * Wd, zt]];
+    for (const s of [-0.3, 0.3]) quad([[-0.5 * L - 0.1, s * Wd - 4, zt - 7], [-0.5 * L - 0.1, s * Wd + 4, zt - 7],
+      [-0.5 * L - 0.1, s * Wd + 4, zt - 3], [-0.5 * L - 0.1, s * Wd - 4, zt - 3]], "car-tail", [-0.33 * L, 0, zb], 0.01, 0, gate);
+    for (const s of [1, -1]) box(-0.2 * L, -0.17 * L, s * 0.36 * Wd, s * 0.40 * Wd, zt, z0 + 0.96 * H, "car-dark");  // roll hoop
+    box(-0.2 * L, -0.17 * L, -0.40 * Wd, 0.40 * Wd, z0 + 0.93 * H, z0 + 0.96 * H, "car-dark");
+    for (const s of [1, -1]) box(-0.46 * L, -0.2 * L, s * 0.37 * Wd, s * 0.39 * Wd, z0 + 0.94 * H - 2, z0 + 0.94 * H, "car-dark");
+    box(-0.09 * L, -0.05 * L, -0.36 * Wd, 0.36 * Wd, z0 + H, z0 + H + 2.5, "car-head");                  // light bar
+    box(0.47 * L, 0.53 * L, -0.34 * Wd, 0.34 * Wd, z0 + 0.95 * r, z0 + 1.3 * r, "car-dark");            // skid plate
+    four(0.34 * L, -0.31 * L, 0.42 * Wd, r, r, 0.2 * Wd, 0.2 * Wd);
+  } else if (model === "mini") {             // MINI: short bonnet, upright glasshouse, white roof and stripes
+    const r = Math.min(0.24 * H, 0.11 * L);
+    const body = loft([[0.5, 0.44 * Wd, z0 + 0.7 * r, z0 + 0.42 * H], [0.38, 0.48 * Wd, z0 + 0.55 * r, z0 + 0.54 * H],
+                       [-0.44, 0.48 * Wd, z0 + 0.55 * r, z0 + 0.56 * H], [-0.5, 0.46 * Wd, z0 + 0.65 * r, z0 + 0.55 * H]]);
+    lamps(body);
+    cabin(body, 0.24, 0.12, -0.42, -0.47, 0.46 * Wd, 0.42 * Wd, z0 + H, "car-roof");
+    const [a, b] = body.S;
+    for (const s of [1, -1]) {                                                                        // bonnet stripes
+      const y0 = s * 0.06 * Wd, y1 = s * 0.15 * Wd;
+      quad([[a.x, y0, a.zt], [a.x, y1, a.zt], [b.x, y1, b.zt], [b.x, y0, b.zt]], "car-roof", body.c, 0.01, 0,
+        [[a.x, a.hw, a.zt], [a.x, -a.hw, a.zt], [b.x, -b.hw, b.zt], [b.x, b.hw, b.zt]]);
+    }
+    four(0.36 * L, -0.36 * L, 0.44 * Wd, r, r, 0.17 * Wd, 0.17 * Wd);
+  } else {                                   // coupe: bonnet lower than the boot, a glass cabin
+    const r = Math.min(0.24 * H, 0.11 * L);
+    const body = loft([[0.5, 0.40 * Wd, z0 + 0.75 * r, z0 + 0.36 * H], [0.40, 0.48 * Wd, z0 + 0.55 * r, z0 + 0.50 * H],
+                       [-0.40, 0.48 * Wd, z0 + 0.55 * r, z0 + 0.56 * H], [-0.5, 0.44 * Wd, z0 + 0.75 * r, z0 + 0.52 * H]]);
+    lamps(body);
+    cabin(body, 0.2, 0.02, -0.22, -0.36, 0.44 * Wd, 0.34 * Wd, z0 + H);
+    four(0.31 * L, -0.31 * L, 0.44 * Wd, r, r, 0.16 * Wd, 0.16 * Wd);
+  }
+  return faces;
+}
+
 function drawMotion() {
   const d = mo.last, svg = $("#mo-view");
   if (!d || !svg.clientWidth) return;
@@ -5456,15 +5606,36 @@ function drawMotion() {
     out.push(bar(L.A, bolts.horn[i]), bar(L.P, vp));
   });
   const W2 = (v) => R.map((row, i) => t[i] + row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
-  const { length: cl, width: cw, height: ch } = car, z0 = 3;
-  const corner = (sx, sy, z) => W2([sx * cl / 2, sy * cw / 2, z]);
-  const bot = [corner(1, 1, z0), corner(1, -1, z0), corner(-1, -1, z0), corner(-1, 1, z0)];
-  const top = [corner(1, 1, z0 + ch), corner(1, -1, z0 + ch), corner(-1, -1, z0 + ch), corner(-1, 1, z0 + ch)];
-  const faces = [bot, top, [bot[0], bot[1], top[1], top[0]], [bot[1], bot[2], top[2], top[1]], [bot[2], bot[3], top[3], top[2]], [bot[3], bot[0], top[0], top[3]]];
-  // far faces first (depth = distance along the view direction)
-  const depth = (f) => f.reduce((s, [x, y, z]) => s + (x * Math.sin(az) + y * Math.cos(az)) * Math.cos(el) - z * Math.sin(el), 0) / f.length;
-  faces.sort((a, b) => depth(b) - depth(a)).forEach((f) => out.push(`<polygon class="car" points="${pts(f)}"/>`));
-  out.push(`<polygon class="nose" points="${pts([W2([cl / 2, 0, z0 + ch + 0.5]), W2([cl / 2 - 18, 8, z0 + ch + 0.5]), W2([cl / 2 - 18, -8, z0 + ch + 0.5])])}"/>`);
+  // the car: a low-poly model sized by the car settings, faces turned away from the camera left out,
+  // the rest painted far to near and shaded by the way they face
+  const far = [Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), -Math.sin(el)];   // into the screen
+  const depth = (f) => f.reduce((s, q) => s + q[0] * far[0] + q[1] * far[1] + q[2] * far[2], 0) / f.length;
+  const sub = (a, b) => a.map((v, j) => v - b[j]);
+  const light = [0.35, 0.45, 0.82];
+  const drawn = [];
+  // painter's order by part, then depth: the wheels on the far side, the body, the wheels on the near side
+  // (by depth alone the bonnet, one big face, would cover a near wheel or show through a far one)
+  const leftAway = R[0][1] * far[0] + R[1][1] * far[1] + R[2][1] * far[2] > 0;
+  const layer = (side) => side === 0 ? 1 : (side > 0) === leftAway ? 0 : 2;
+  const model = mo.carModel in MO_CARS ? mo.carModel : "coupe", colour = MO_CAR_COLOUR[model];
+  moCarFaces(car, 3, model).forEach((f, i) => {
+    const w = f.p.map(W2), c = W2(f.c);
+    const u = sub(w[1], w[0]), v = sub(w[2], w[0]);
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const m = Math.hypot(...n) || 1;
+    n = n.map((x) => x / m);
+    const fc = w.reduce((s, q) => s.map((x, j) => x + q[j] / w.length), [0, 0, 0]);
+    if (n.reduce((s, x, j) => s + x * (fc[j] - c[j]), 0) < 0) n = n.map((x) => -x);   // outward
+    if (n[0] * far[0] + n[1] * far[1] + n[2] * far[2] > 0.02) return;                 // its back is to us
+    const lit = Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+    drawn.push({ w, i, d: depth(f.ref ? f.ref.map(W2) : w) - (f.lift || 0), cls: f.cls, lit, l: layer(f.side) });
+  });
+  drawn.sort((a, b) => a.l - b.l || b.d - a.d || a.i - b.i).forEach((f) => {
+    const tone = f.cls !== "car" ? "" : colour
+      ? `style="fill:color-mix(in srgb, ${colour} ${Math.round(55 + 45 * f.lit)}%, #000)"`
+      : `style="fill:color-mix(in srgb, var(--text) ${Math.round(14 + 30 * f.lit)}%, var(--surface))"`;
+    out.push(`<polygon class="${f.cls}" ${tone} points="${pts(f.w)}"/>`);
+  });
   // reference point: the platform's centre against where it sits at home. The path home -> centre is drawn
   // leg by leg (x red, then y green, then z blue) plus straight; the platform's own axes turn with it, the
   // home axes stay put (dotted), so roll / pitch / yaw show as the angle between the two
@@ -5510,6 +5681,11 @@ $("#mo-az").addEventListener("input", (e) => {
   drawMotion();
 });
 $("#mo-az").addEventListener("change", () => pref.set("moAz", mo.az));
+// the car's look on the platform (only a picture: kept in the browser)
+mo.carModel = pref.get("moCarModel", "coupe");
+$("#mo-car-pick").innerHTML = Object.entries(MO_CARS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
+$("#mo-car-pick").value = mo.carModel in MO_CARS ? mo.carModel : "coupe";
+$("#mo-car-pick").onchange = (e) => { mo.carModel = e.target.value; pref.set("moCarModel", mo.carModel); drawMotion(); };
 $("#mo-view-pick").onchange = (e) => {
   const to = MO_VIEWS[e.target.value];
   if (!to) return;
