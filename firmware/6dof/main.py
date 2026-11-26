@@ -7,10 +7,17 @@ Copy main.py, fw.py, board.py, demo.py and pca9685.py to the board.
 LEDs: blue = demo playing, green = the PC driving, yellow = gliding to park, red blinking = limp
 (fast: no PCA9685; 4 Hz: the demo file failed), red steady = stopped with USR (latched).
 Ctrl-C still breaks into the REPL (the protocol is text only), and lets go of the servos on the way out.
+
+Watchdog: the board resets itself (servos limp, as with RST) when the timed part of the loop (outputs,
+speed limit, PC timeout, LEDs) hasn't run for WDT_MS. It can't be stopped once started: after Ctrl-C it is
+set to WDT_REPL_MS and `wdt` stays in the REPL's globals (simdash's copy tool feeds it); an idle REPL
+resets after that long. For a REPL with no watchdog, start in safe mode (hold USR while pressing RST,
+release at the orange LED): main.py doesn't run.
 """
 import os
 
 import pyb
+import machine
 import utime
 from machine import I2C, Pin
 
@@ -24,6 +31,19 @@ RATE_US_PER_MS = 6.0            # slew limit, about an MG90's top speed
 TIMEOUT_MS = 1000               # PC silence before gliding to park
 FREQ = 50                       # Hz; analog MG90 servos want ~50 Hz
 OSC = 25000000                  # PCA9685 clock; trim if a 1500 µs pulse measures off (scope / servo tester)
+WDT_MS = 2000                   # the timed loop stuck this long: reset (servos limp)
+WDT_REPL_MS = 30000             # after Ctrl-C (REPL, a copy from the PC)
+
+USB_DCFG = 0x50000800             # STM32F405 USB OTG FS device config: bits 4-10 = the address the host gave
+
+
+def on_a_pc():
+    """A PC has enumerated the board (a USB charger never gives it an address): simdash decides then."""
+    return (machine.mem32[USB_DCFG] >> 4) & 0x7F != 0
+
+
+RESET = {machine.PWRON_RESET: "power", machine.HARD_RESET: "button", machine.WDT_RESET: "watchdog",
+         machine.DEEPSLEEP_RESET: "sleep", machine.SOFT_RESET: "soft"}.get(machine.reset_cause(), "other")
 
 oe = Pin("X8", Pin.OUT, value=1)   # high = outputs disabled until the PCA9685 is set up
 i2c = I2C(1, freq=400000)          # X9 = SCL, X10 = SDA
@@ -56,20 +76,32 @@ board = Board(Out(), min_us=MIN_US, max_us=MAX_US, rate_us_per_ms=RATE_US_PER_MS
 usb = pyb.USB_VCP()
 sw = pyb.Switch()
 fw = Firmware(board, usb.write, (pyb.LED(1), pyb.LED(2), pyb.LED(3), pyb.LED(4)), sw, open, exists,
-              pca_ok=pca is not None)
+              pca_ok=pca is not None, autoplay=RESET != "watchdog",   # it froze: stay limp, no demo
+              host=on_a_pc)                                          # on a PC: only what simdash sends
+
+loops = 0
+fw.stats = lambda: " loops=%d ms=%d reset=%s wdt=%d" % (loops, utime.ticks_ms(), RESET, WDT_MS)
 
 board.let_go()
 last = utime.ticks_ms()
+wdt = machine.WDT(timeout=WDT_MS)
+fed = fw.ticks
 try:
     while True:
-        n = usb.any()
-        if n:
-            fw.feed(usb.read(n))
+        loops = (loops + 1) & 0x3FFFFFFF   # a small int forever (no heap use); the PC takes differences
+        # any() is True/False on MicroPython 1.9.4, not a count: read(any()) took ONE byte a loop
+        # (~1 kB/s, about 30 S lines/s: simdash's 50 Hz stream fell behind and the board went limp)
+        if usb.any():
+            fw.feed(usb.read(256))
         now = utime.ticks_ms()
         # one clock: only ever adds the time measured between two looks (no ms counted twice, no wrap)
         fw.step(utime.ticks_diff(now, last))
         last = now
+        if fw.ticks != fed:        # fed only while the timed part runs, not merely the loop
+            fed = fw.ticks
+            wdt.feed()
         pyb.delay(1)
 finally:
+    wdt = machine.WDT(timeout=WDT_REPL_MS)   # can't be stopped: the REPL gets longer
     if pca:
         pca.all_off()              # interrupted (Ctrl-C, a copy from the PC): never leave the servos holding

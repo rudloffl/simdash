@@ -6,6 +6,7 @@ Lines from the PC:
   O          let go now (outputs off, servos limp)
   H          hello -> "6DOF <version> ch=<n>"
   A          (fw.py) clear the stop latch set by a short press on USR
+  Q          (fw.py) state report -> "STATE mode=... board=... ticks=..." (version 4)
 
 Each servo moves towards its target by at most rate_us_per_ms (an MG90's top speed is about
 6 µs/ms: a 600 µs step takes 100 ms). Outputs are updated by tick(), at a fixed period, not when a
@@ -14,7 +15,7 @@ starting point (the PC sends the home pose first). No line for timeout_ms: glide
 over about glide_ms, hold hold_ms, then go limp (no park pulses: limp at once).
 """
 
-VERSION = "3"
+VERSION = "4"   # 4: Q state report, hardware watchdog
 
 
 class Board:

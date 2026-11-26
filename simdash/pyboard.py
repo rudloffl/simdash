@@ -59,6 +59,11 @@ def _drain(fd):
         pass
 
 
+# firmware v4 starts a hardware watchdog that can't be stopped; after Ctrl-C main.py leaves it at 30 s as
+# `wdt` in the REPL's globals: every exec feeds it (a no-op on older firmware or in safe mode)
+FEED = "try:\n    wdt.feed()\nexcept NameError:\n    pass\n"
+
+
 class Board:
     def __init__(self, port):
         self.port = port
@@ -76,7 +81,7 @@ class Board:
 
     def exec(self, code, timeout=30):
         """Run code on the board; returns what it printed. Raises BoardError on a Python error there."""
-        data = code.encode()
+        data = (FEED + code).encode()
         for i in range(0, len(data), 256):
             _write(self.fd, data[i:i + 256])
             time.sleep(0.01)

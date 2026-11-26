@@ -235,3 +235,46 @@ def test_no_file_or_no_pca_means_no_demo():
     for fw, *_ in (make_fw(None), make_fw(data, pca_ok=False)):
         run(fw, 4000)
         assert fw.mode == "pc" and fw.played == 0
+
+
+def test_q_reports_the_state_and_changes_nothing():
+    _, _, data, _ = _export()
+    fw, board, out, sw, said, leds, drives = make_fw(data)
+    fw.stats = lambda: " loops=7 ms=123 reset=watchdog wdt=2000"
+    run(fw, 4000)
+    assert fw.mode == "demo"
+    t0 = fw.ticks
+    run(fw, 1000)
+    assert fw.ticks - t0 == 50                                         # the timed part: 50 steps a second
+    fw.feed(b"Q\n")
+    assert fw.mode == "demo" and board.state == "drive"                # still playing: Q changes nothing
+    line = said[-1]
+    assert line.startswith("STATE ") and line.endswith(" loops=7 ms=123 reset=watchdog wdt=2000\n")
+    kv = dict(x.split("=") for x in line.split()[1:])
+    assert kv["mode"] == "demo" and kv["board"] == "drive" and kv["latched"] == "0" and kv["pca"] == "1"
+    assert int(kv["ticks"]) == fw.ticks and int(kv["clock"]) == fw.clock
+
+
+def test_no_demo_after_a_watchdog_reset_but_a_long_press_plays():
+    _, _, data, _ = _export()
+    fw, board, out, sw, said, leds, drives = make_fw(data)
+    fw.autoplay = False
+    run(fw, 5000)
+    assert fw.mode == "pc" and fw.played == 0 and board.state == "limp" and drives == []
+    sw.down = True
+    run(fw, fw6.LONG_MS + 50)
+    sw.down = False
+    run(fw, 100)
+    assert fw.mode == "demo" and fw.played == 1
+
+
+def test_on_a_pc_no_demo_only_what_simdash_sends():
+    _, _, data, _ = _export()
+    fw, board, out, sw, said, leds, drives = make_fw(data)
+    fw.host = lambda: True
+    run(fw, 5000)
+    assert fw.mode == "pc" and fw.played == 0 and board.state == "limp" and drives == []
+    fw.feed(b"Q\n")
+    assert " host=1" in said[-1]
+    fw.feed(b"S 1600 1600 1600 1600 1600 1600\n")
+    assert board.state == "drive"

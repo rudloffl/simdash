@@ -45,7 +45,7 @@ glide to park after 1000 ms of silence over 1000 ms then limp; a tick takes unde
 into `main.py` and the handshake from simdash.
 `main.py` owns the USB serial port, so the REPL is busy: mpremote breaks in with Ctrl-C when it connects.
 
-## Protocol (version 3)
+## Protocol (version 4)
 
 Text lines over the USB serial port (no binary, so a stray byte can't look like Ctrl-C):
 
@@ -54,8 +54,9 @@ Text lines over the USB serial port (no binary, so a stray byte can't look like 
 | `S u0 u1 u2 u3 u4 u5` | Target pulses in µs for servos 0–5, clamped to 800–2200. |
 | `P u0 u1 u2 u3 u4 u5` | Park pulses: where to glide when the PC goes silent. |
 | `O` | Let go: every output off, servos limp. |
-| `H` | Hello: replies `6DOF 3 ch=6`, plus ` pca=missing` without a PCA9685 and ` latched` after a USR stop. |
+| `H` | Hello: replies `6DOF 4 ch=6`, plus ` pca=missing` without a PCA9685 and ` latched` after a USR stop. |
 | `A` | Clear the USR stop latch (simdash sends it when you arm the servos in the tab). |
+| `Q` | State report, answered in any mode and changing nothing (not even a playing demo): `STATE mode=pc board=limp latched=0 error=0 pca=1 demo=1 played=0 clock=… ticks=… loops=… ms=… reset=power wdt=2000`. simdash's System tab shows it (Desk 6DOF card) with the loop and output rates from two reports. |
 
 The board:
 
@@ -70,6 +71,20 @@ The board:
 
 simdash refuses to arm without a `6DOF 2` (or later) hello: with the board in the REPL, a crashed `main.py`,
 the old version 1 firmware or another board, the tab says why and nothing moves.
+
+## Watchdog (version 4)
+
+The board resets itself when the **timed part** of its loop (outputs, speed limit, PC timeout, LEDs) hasn't
+run for 2 s: the hardware watchdog is fed only when that part runs, not merely when the loop turns. This
+covers the freeze seen on 2026-11-25 (the board still answered `H`, but its LED stood still on red until RST).
+After a watchdog reset the board stays **limp and doesn't play its demo** (a long USR press still does), and
+`Q` says `reset=watchdog` (System tab: *Last reset: watchdog*).
+
+The watchdog can't be stopped once started. After Ctrl-C (the REPL, or simdash copying files) `main.py`
+sets it to 30 s and leaves it as `wdt` in the REPL's globals; simdash's raw-REPL copier feeds it before every
+command, so copies are fine, but an idle REPL resets after 30 s (mpremote and Thonny don't feed it). For a
+REPL with no watchdog, start in safe mode: hold USR, press RST, release USR when the orange LED is lit;
+`main.py` doesn't run.
 
 ## Standalone demo (no PC)
 
@@ -87,7 +102,8 @@ the tab says how many frames were clipped). 150 bytes a second: about 8 minutes 
 `simdash/pyboard.py`, checked byte for byte: 16 kB in 7 s) and restarts the board. Or download `demo.bin`
 and copy it onto the PYBFLASH drive.
 
-On the board: with no line from a PC within 3 s of power-up and a `demo.bin` present (and a PCA9685), it plays
+On the board: **only without a PC** (powered from a charger: no PC has given it a USB address, read from the
+STM32's USB register; `host=0` in `Q`), with a `demo.bin` present and a PCA9685, 3 s after power-up it plays
 (blue LED): frames streamed from the file through one small buffer, interpolated to 50 Hz, a 20 ms output
 tick, through the same clamp and speed limit as PC control. At the end it holds park 5 s and plays again. Any
 line from a PC leaves the demo (glide to park) and the PC drives. **USR short press**: stop and go limp,
