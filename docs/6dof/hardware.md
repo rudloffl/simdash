@@ -10,6 +10,7 @@
 | PCA9685 16-channel PWM board | yes | I2C address 0x40 by default. Logic VCC 3.3 V from the pyboard, servo power on the V+ screw terminal. |
 | pyboard v1.1 (MicroPython) | yes | USB serial to the PC; I2C 1 on X9/X10. |
 | 2.42″ OLED, SSD1309, 128×64, SPI (7 pins) | yes | Planned: race stats while driving (not in the firmware yet). On SPI2 (Y side), 3.3 V logic; monochrome, so the whole screen is a 1 kB buffer sent in about 1 ms. |
+| micro-SD card | planned | In the pyboard's own slot. Firmware 6 mounts it at `/sd` (and `SKIPSD` keeps the board from booting off it): whole-race demos, later the track map for the display. |
 | 5–6 V supply, ≥ 5 A | to get | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V). |
 | 1000 µF ≥ 10 V electrolytic | to get | Across V+/GND at the PCA9685: servo current comes in spikes. |
 | 12 × M3 ball-joint rod ends | to get | RC car linkage ends (or ball studs + sockets). One per rod end. |

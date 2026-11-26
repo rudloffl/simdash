@@ -9,6 +9,10 @@ LEDs: blue = demo playing, green = the PC driving, green flash every 2 s = on a 
 PCA9685, 4 Hz = the demo file failed; steady = stopped with USR (latched).
 Ctrl-C still breaks into the REPL (the protocol is text only), and lets go of the servos on the way out.
 
+SD card: /flash/SKIPSD (written by simdash's Install firmware) stops the pyboard from booting off a card,
+so this firmware on /flash always starts; main.py then mounts a card itself at /sd (a demo there wins over
+the one on /flash). A card that can't be mounted is ignored.
+
 Watchdog: the board resets itself (servos limp, as with RST) when the timed part of the loop (outputs,
 speed limit, PC timeout, LEDs) hasn't run for WDT_MS. It can't be stopped once started: after Ctrl-C it is
 set to WDT_REPL_MS and `wdt` stays in the REPL's globals (simdash's copy tool feeds it); an idle REPL
@@ -46,6 +50,22 @@ def on_a_pc():
 RESET = {machine.PWRON_RESET: "power", machine.HARD_RESET: "button", machine.WDT_RESET: "watchdog",
          machine.DEEPSLEEP_RESET: "sleep", machine.SOFT_RESET: "soft"}.get(machine.reset_cause(), "other")
 
+def mount_sd():
+    """/sd from the card when one is in (SKIPSD keeps the boot from doing it). True when mounted."""
+    try:
+        if "sd" in os.listdir("/"):
+            return True
+        sd = pyb.SDCard()
+        if not sd.present():
+            return False
+        os.mount(sd, "/sd")
+        return True
+    except OSError:
+        return False
+
+
+SD = mount_sd()
+
 oe = Pin("X8", Pin.OUT, value=1)   # high = outputs disabled until the PCA9685 is set up
 i2c = I2C(1, freq=400000)          # X9 = SCL, X10 = SDA
 try:
@@ -81,7 +101,7 @@ fw = Firmware(board, usb.write, (pyb.LED(1), pyb.LED(2), pyb.LED(3), pyb.LED(4))
               host=on_a_pc)                                          # on a PC: only what simdash sends
 
 loops = 0
-fw.stats = lambda: " loops=%d ms=%d reset=%s wdt=%d" % (loops, utime.ticks_ms(), RESET, WDT_MS)
+fw.stats = lambda: " loops=%d ms=%d reset=%s wdt=%d sd=%d" % (loops, utime.ticks_ms(), RESET, WDT_MS, SD)
 
 board.let_go()
 last = utime.ticks_ms()

@@ -4347,6 +4347,7 @@ function renderSystemMotion(m) {
         : esc({ power: "power-up", button: "RST button", soft: "soft (a copy or Ctrl-D)", sleep: "deep sleep" }[b.reset] || b.reset)],
       b.wdt && ["Watchdog", `${b.wdt / 1000} s`],
       b.host != null && ["Plugged into", b.host ? "a PC: no demo on its own, only simdash moves it" : "no PC (a charger): plays its demo"],
+      b.sd != null && ["SD card", b.sd ? "in, mounted at /sd (a demo there plays first)" : "none"],
       b.demo != null && ["Demo file", b.demo ? `on the board${b.played ? `, played ${b.played}×` : ""}` : "none"],
     ]) + "</dl>");
   const btn = (a) => document.querySelector(`#tab-system [data-act="${a}"]`);

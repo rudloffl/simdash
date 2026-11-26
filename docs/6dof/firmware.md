@@ -8,7 +8,7 @@
 
 From simdash: **System → Desk 6DOF → Install firmware on the board** copies every file below to the
 pyboard's `/flash` (each as `<name>.new`, checked, then all renamed at once, so a failed copy leaves the old
-firmware whole) and restarts it; `demo.bin` is kept. The card says whether the board runs the same version
+firmware whole), writes an empty `/flash/SKIPSD` and restarts it; `demo.bin` is kept. The card says whether the board runs the same version
 as simdash's copy. By hand:
 
 
@@ -79,6 +79,14 @@ The board:
 
 simdash refuses to arm without a `6DOF 2` (or later) hello: with the board in the REPL, a crashed `main.py`,
 the old version 1 firmware or another board, the tab says why and nothing moves.
+
+## SD card (version 6)
+
+The pyboard v1.1 has a micro-SD slot. Out of the box it **boots from a card** when one is in (`/sd/main.py`)
+instead of `/flash`, where this firmware lives. `/flash/SKIPSD` (written by *Install firmware*) stops that;
+`main.py` then mounts the card itself at `/sd`, and `/sd/demo.bin` wins over `/flash/demo.bin` (room for a
+whole race, and later the track map for the display). `Q` says `sd=1` (System tab: *SD card*). A board that
+booted off a card before this still takes *Install firmware* (the copy uses absolute `/flash` paths).
 
 ## Watchdog (version 4)
 

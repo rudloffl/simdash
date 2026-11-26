@@ -545,6 +545,8 @@ def test_write_firmware_copies_then_renames_all(monkeypatch):
                 return "['main.py', 'demo.bin']\n60000\n"
             if "os.stat(" in code:
                 return str([len((motion.FIRMWARE_DIR / f).read_bytes()) for f in motion.FIRMWARE_FILES]) + "\n"
+            if "os.rename" in code:
+                assert "open('/flash/SKIPSD', 'w')" in code        # never boot off an SD card
             log.append("rename" if "os.rename" in code else code)
             return ""
 

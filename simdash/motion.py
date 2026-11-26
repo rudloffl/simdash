@@ -1800,8 +1800,10 @@ def firmware_version():
 
 def write_firmware():
     """Install simdash's firmware/6dof on the pyboard's /flash: every file copied as <name>.new first
-    (checked by size), then all renamed at once, so a failed copy leaves the old firmware whole. The
-    servos let go first; the board restarts into the new firmware after (demo.bin and other files kept)."""
+    (checked by size), then all renamed at once, so a failed copy leaves the old firmware whole, plus an
+    empty /flash/SKIPSD so a micro-SD card never replaces /flash at boot (main.py mounts it at /sd). The
+    servos let go first; the board restarts into the new firmware after (demo.bin and other files kept).
+    Also the way back for a board that booted off a card: the copy goes by absolute /flash paths."""
     from . import pyboard
     files = {f: (FIRMWARE_DIR / f).read_bytes() for f in FIRMWARE_FILES}
     port = find_port()
@@ -1821,7 +1823,9 @@ def write_firmware():
                 b.put(data, "/flash/" + f + ".new")
             b.exec("import os\nfor f in %r:\n"
                    "    try:\n        os.remove('/flash/' + f)\n    except OSError:\n        pass\n"
-                   "    os.rename('/flash/' + f + '.new', '/flash/' + f)\n" % (list(files),))
+                   "    os.rename('/flash/' + f + '.new', '/flash/' + f)\n"
+                   # never boot off an SD card: the firmware is on /flash and mounts a card itself
+                   "open('/flash/SKIPSD', 'w').close()\n" % (list(files),))
             sizes = b.exec("import os\nprint([os.stat('/flash/' + f)[6] for f in %r])" % (list(files),))
             if sizes.strip() != str([len(d) for d in files.values()]):
                 raise pyboard.BoardError("the files on the board don't match: " + sizes.strip())
