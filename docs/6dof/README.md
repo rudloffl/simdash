@@ -28,7 +28,7 @@ dragging turns it freely. A reference point marks the platform's centre against 
 there leg by leg (x red, y green, z blue), the platform's own axes beside the home axes, and a readout of
 Δx, Δy, Δz, roll, pitch, yaw and the distance from home.
 
-![The 6DOF tab: the platform in 3D with the car, pose sliders, servo angles and pulses, geometry with its reach, calibration](../img/6dof-tab.png)
+![The 6DOF tab while a recorded race plays (Road America): the platform in 3D with a GT3 on top (the car picker also has a coupé, F1, kart, trophy truck and MINI), where the car is on the track and what the haptics play, pose sliders with servo angles and pulses, the geometry with its reach and one leg seen from the side, and the wiring with the planned OLED](../img/6dof-tab.png)
 
 ![The Demo: each axis in turn (surge, sway, heave, roll, pitch, yaw) swung to 70 % of its reach and back, with the reference point and the pose readout](../img/6dof-demo.gif)
 
