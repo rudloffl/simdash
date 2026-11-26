@@ -53,6 +53,13 @@ AMS2 ──shared memory──▶ simdash (PC)                                  
 All the maths lives in simdash (`simdash/motion.py`), where it is easy to change and to test; the
 pyboard only clamps the six pulses, writes them, and lets go of the servos when nothing arrives for a second.
 
+## On / off
+
+The System tab has a **Desk 6DOF** card: whether the board is plugged in, its firmware, the servos (armed or
+limp), the pulses and a playing course, with *Let go of the servos* and *Turn off* / *Turn on*. Off (kept as
+`"enabled": false` in `motion.json`): a playing course stops, the servos let go, the 6DOF tab is hidden, and the
+API refuses whatever would move the servos or write to the board (409). The settings are kept.
+
 ## Plan
 
 1. **Build and jog** (now): design and print the base, platform and rods; wire it; flash the firmware;

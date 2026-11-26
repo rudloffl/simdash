@@ -90,6 +90,7 @@ _cache = {"key": None, "s": None}
 
 def _read():
     s = copy.deepcopy(DEFAULTS)
+    s["enabled"] = True   # the 6DOF in use (System tab); off: the board is left alone and the tab hidden
     try:
         saved = json.loads(SETTINGS.read_text())
     except (OSError, ValueError):
@@ -108,6 +109,7 @@ def _read():
     for k in s:
         if isinstance(saved.get(k), dict):
             s[k].update({kk: vv for kk, vv in saved[k].items() if kk in s[k] or k == "cueing"})
+    s["enabled"] = saved.get("enabled") is not False
     return s
 
 
@@ -195,12 +197,42 @@ def save(patch):
         raise ValueError("pulse range must be within 500-2500 µs")
     s["car"] = {k: float(v) for k, v in s["car"].items()}
     h0(g)  # raises if the rods can't reach
+    return _write(s)
+
+
+def _write(s):
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     tmp = SETTINGS.with_suffix(".tmp")
     tmp.write_text(json.dumps(s, indent=1))
     tmp.replace(SETTINGS)
     _cache["s"] = None  # invalidate
     return s
+
+
+def enabled():
+    return settings()["enabled"]
+
+
+def set_enabled(on):
+    """The 6DOF on or off (System tab). Off: a playing course stops, the servos let go, and simdash leaves
+    the board alone (no arming, no calibration moves, no demo writes) and hides the 6DOF tab."""
+    on = bool(on)
+    if not on:
+        player.stop()
+        link.arm(False)
+    s = load()
+    s["enabled"] = on
+    _write(s)
+
+
+def status():
+    """The System tab's 6DOF card: whether it is in use, the board, the link and a course."""
+    st, c = link.status(), player.course
+    on = enabled()
+    return {"enabled": on, "port": find_port(), "board": link.query() if on else None, "connected": st["connected"], "armed": st["armed"],
+            "firmware": st["firmware"], "error": st["error"], "last": st["last"], "playing": player.playing,
+            "course": {"ref": c.ref, "car": c.d["car"], "track": c.d["track"], "t": player.t - c.t0,
+                       "length": c.t1 - c.t0} if c else None}
 
 
 # ---------- geometry ----------
@@ -964,6 +996,7 @@ class Link:
         self.firmware = None
         self.error = None
         self.thread = None
+        self.prev_report = None   # (monotonic, report) of the last Q, for rates
 
     # -- port
 
@@ -972,11 +1005,7 @@ class Link:
         if not port:
             raise OSError("pyboard not found (MicroPython USB device f055)")
         fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        a = termios.tcgetattr(fd)
-        a[0] = a[1] = a[3] = 0
-        a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-        a[4] = a[5] = termios.B115200
-        termios.tcsetattr(fd, termios.TCSANOW, a)
+        self._raw(fd)
         self.fd, self.port = fd, port
         self.firmware = self._ask(b"H\n")
         ver = None
@@ -997,33 +1026,84 @@ class Link:
             self._write(_frame("P", self.home))
             self._write(_frame("S", self.home))
 
-    def _ask(self, line, wait=0.5):
+    def _ask(self, line, wait=0.5, prefix="6DOF", fd=None):
+        fd = self.fd if fd is None else fd
         try:
-            os.read(self.fd, 4096)
+            os.read(fd, 4096)
         except (BlockingIOError, OSError):
             pass
-        self._write(line)
+        self._write(line, fd=fd)
         buf, end = b"", time.monotonic() + wait
-        while time.monotonic() < end and b"\n" not in buf:
-            select.select([self.fd], [], [], max(0.0, end - time.monotonic()))
+        while time.monotonic() < end and not any(ln.startswith(prefix.encode()) for ln in buf.split(b"\n")[:-1]):
+            select.select([fd], [], [], max(0.0, end - time.monotonic()))
             try:
-                buf += os.read(self.fd, 256)
+                buf += os.read(fd, 512)
             except BlockingIOError:
                 pass
         for ln in buf.decode(errors="replace").splitlines():
-            if ln.startswith("6DOF"):
+            if ln.startswith(prefix):
                 return ln.strip()
         return None
 
-    def _write(self, data, wait=0.05):
+    def query(self):
+        """The board's own state (firmware 4+: the Q line), with rates from the previous query. Read-only:
+        Q changes nothing on the board, not even a playing demo. None when no board answers."""
+        if board_busy.is_set():
+            return {"answered": False, "busy": True}
+        with self.lock:
+            try:
+                if self.fd is not None:
+                    line = self._ask(b"Q\n", wait=0.3, prefix="STATE")
+                else:
+                    port = find_port()
+                    if not port:
+                        return None
+                    fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+                    try:
+                        self._raw(fd)
+                        line = self._ask(b"Q\n", wait=0.3, prefix="STATE", fd=fd)
+                    finally:
+                        os.close(fd)
+            except OSError:
+                return None
+            return self._report(line)
+
+    def _report(self, line):
+        if not line:
+            return {"answered": False}
+        r = {"answered": True}
+        for kv in line.split()[1:]:
+            k, _, v = kv.partition("=")
+            r[k] = int(v) if v.lstrip("-").isdigit() else v
+        now, prev = time.monotonic(), self.prev_report
+        self.prev_report = (now, r)
+        if prev and "ms" in r and "ms" in prev[1]:
+            dt = now - prev[0]
+            board_dt = ((r["ms"] - prev[1]["ms"]) % (1 << 30)) / 1000   # ticks_ms wraps at 2^30
+            if 0.5 < dt < 60 and abs(board_dt - dt) < 1.0:              # the same board run, no reset between
+                r["loop_hz"] = round(((r["loops"] - prev[1]["loops"]) % (1 << 30)) / board_dt)
+                r["tick_hz"] = round((r["ticks"] - prev[1]["ticks"]) / board_dt)
+                r["clock_ok"] = abs((r["clock"] - prev[1]["clock"]) / 1000 - board_dt) < 0.2
+        return r
+
+    @staticmethod
+    def _raw(fd):
+        a = termios.tcgetattr(fd)
+        a[0] = a[1] = a[3] = 0
+        a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        a[4] = a[5] = termios.B115200
+        termios.tcsetattr(fd, termios.TCSANOW, a)
+
+    def _write(self, data, wait=0.05, fd=None):
+        fd = self.fd if fd is None else fd
         end = time.monotonic() + wait
         while data:
             try:
-                data = data[os.write(self.fd, data):]
+                data = data[os.write(fd, data):]
             except BlockingIOError:
                 if time.monotonic() > end:
                     raise OSError("the pyboard is not reading")
-                select.select([], [self.fd], [], 0.01)
+                select.select([], [fd], [], 0.01)
 
     def _close(self):
         if self.fd is not None:
@@ -1116,6 +1196,7 @@ class Link:
 
 
 link = Link()
+board_busy = threading.Event()   # simdash is copying files to the board (raw REPL): leave the port alone
 
 
 def setup():
@@ -1666,8 +1747,6 @@ def export_demo(ref, what="session", lap=None, from_s=None, to_s=None):
 def write_demo():
     """Put DEMO_FILE on the board: /sd/demo.bin with an SD card, else /flash/demo.bin. mpremote when
     installed, else simdash's own raw-REPL copy. The servos are let go first; the board restarts after."""
-    import shutil
-    import subprocess
     from . import pyboard
     if not DEMO_FILE.exists():
         raise ValueError("build the demo first")
@@ -1676,6 +1755,16 @@ def write_demo():
     if not port:
         raise OSError("pyboard not found (MicroPython USB device f055)")
     link.arm(False)                       # sends O and lets go of the port
+    board_busy.set()                      # no status Q lines into the raw REPL meanwhile
+    try:
+        return _write_demo(port, data, pyboard)
+    finally:
+        board_busy.clear()
+
+
+def _write_demo(port, data, pyboard):
+    import shutil
+    import subprocess
     with pyboard.Board(port) as b:
         info = b.info()
         dest = "/sd/demo.bin" if info["sd"] else "/flash/demo.bin"

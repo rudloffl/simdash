@@ -630,6 +630,20 @@
         really ran dry, counted by PipeWire (xruns).</div>
       <div class="sys-note">Plays every shaker effect in place of monocoque, from the same settings; saved changes apply at once. Tick "played by simdash" (AMS2 card) to switch.</div>
     </div>
+    <div class="card sys-card" data-c="motion">
+      <h3><span class="dot"></span>Desk 6DOF <span class="right muted" id="sys-motion-state"></span></h3>
+      <dl id="sys-motion"></dl>
+      <div id="sys-motion-board"></div>
+      <div class="sys-btns">
+        <button id="sys-motion-open">Open the 6DOF tab</button>
+        <button data-act="motion/letgo">Let go of the servos</button>
+        <button data-act="motion/disable" data-confirm-motion="Turn the 6DOF off? A playing course stops, the servos let go and the 6DOF tab is hidden.">Turn off</button>
+        <button data-act="motion/enable" class="primary">Turn on</button>
+      </div>
+      <div class="sys-note">The servo platform on the pyboard. <b>Off</b>: simdash leaves the board alone (no arming,
+        no calibration moves, no demo writes) and hides the 6DOF tab; the settings are kept. Plugged into this PC the board
+        only does what simdash sends (no demo on its own); powered from a charger, with no PC, it plays its demo.</div>
+    </div>
     <div class="card sys-card" data-c="others">
       <h3>CrewChief, shaker card, session</h3>
       <dl id="sys-others"></dl>

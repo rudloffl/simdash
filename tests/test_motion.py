@@ -485,3 +485,39 @@ def test_joints_setting_is_validated(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ValueError):
         motion.save({"geometry": {"joints": "glue"}})
+
+
+def test_turned_off_is_kept_and_lets_go(tmp_path, monkeypatch):
+    monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
+    monkeypatch.setitem(motion._cache, "s", None)
+    calls = []
+    monkeypatch.setattr(motion.player, "stop", lambda: calls.append("stop"))
+    monkeypatch.setattr(motion.link, "arm", lambda on, home=None: calls.append(("arm", on)) or True)
+    assert motion.enabled()                                     # no file: in use
+    motion.set_enabled(False)
+    assert calls == ["stop", ("arm", False)]                    # a course stops, the servos let go
+    assert not motion.enabled()
+    motion.save({"geometry": {"horn": 20}})                     # a settings save keeps it off
+    assert not motion.enabled() and motion.load()["geometry"]["horn"] == 20
+    motion.set_enabled(True)
+    assert motion.enabled() and len(calls) == 2                 # turning on moves nothing
+    assert motion.status()["enabled"] is True
+
+
+def test_board_report_rates(monkeypatch):
+    lk = motion.Link()
+    now = [100.0]
+    monkeypatch.setattr(motion.time, "monotonic", lambda: now[0])
+    line = "STATE mode=pc board=limp latched=0 error=0 pca=1 demo=1 played=0 clock={c} ticks={t} loops={l} ms={m} reset=power wdt=2000"
+    r = lk._report(line.format(c=5000, t=250, l=(1 << 30) - 500, m=5000))
+    assert r["answered"] and r["mode"] == "pc" and r["reset"] == "power" and "tick_hz" not in r
+    now[0] += 2.0
+    r = lk._report(line.format(c=7000, t=350, l=1500, m=7000))      # the loop counter wrapped
+    assert (r["loop_hz"], r["tick_hz"], r["clock_ok"]) == (1000, 50, True)
+    now[0] += 2.0
+    r = lk._report(line.format(c=7000, t=350, l=3500, m=9000))      # loop runs, timed part frozen
+    assert (r["loop_hz"], r["tick_hz"], r["clock_ok"]) == (1000, 0, False)
+    now[0] += 2.0
+    r = lk._report(line.format(c=100, t=5, l=100, m=100))           # reset in between: no rates
+    assert "tick_hz" not in r
+    assert lk._report(None) == {"answered": False}

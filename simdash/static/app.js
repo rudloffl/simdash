@@ -4260,6 +4260,7 @@ function renderSystem() {
     ["Process", d.monocoque.pid ? `pid ${d.monocoque.pid}, up ${fmtAge(d.monocoque.since, d.now)}` : "–"],
     ["Last log", `<span class="muted">${esc((d.monocoque.log || []).slice(-1)[0] || "–")}</span>`],
   ]);
+  renderSystemMotion(d.motion);
   $("#sys-others").innerHTML = dl([
     ["CrewChief", `${stDot(st.crewchief)} ${st.crewchief[1]}${d.crewchief.running ? (d.crewchief.listening ? " (UDP 5606)" : "") : ""}`],
     ["Shaker card", `${stDot(st.card)} ${esc(d.card.description || d.card.devid || "none chosen")}`],
@@ -4284,6 +4285,9 @@ function renderSystem() {
     "monocoque/stop": d.monocoque.running,
     "engine/restart": true,
     "engine/stop": !!(d.engine && d.engine.running),
+    "motion/letgo": !!(d.motion && d.motion.armed),
+    "motion/disable": !!(d.motion && d.motion.enabled),
+    "motion/enable": !!(d.motion && !d.motion.enabled),
   };
   document.querySelectorAll(SYS_BUTTONS).forEach((b) => {
     if (b.id === "hdr-start") $("#hdr-start-grp").hidden = !can[b.dataset.act] && sys.busy !== b.dataset.act;
@@ -4291,6 +4295,58 @@ function renderSystem() {
     b.classList.toggle("busy", sys.busy === b.dataset.act || (b.dataset.act.startsWith("ams2/") && !!d.busy.ams2));
   });
 }
+
+// the Desk 6DOF card; off also hides the 6DOF tab (and leaves it if open)
+function renderSystemMotion(m) {
+  if (!m) return;
+  const b = m.board;
+  const frozen = b && b.tick_hz === 0 && b.loop_hz > 0;
+  const st = !m.enabled ? ["off", "turned off"]
+    : m.error ? ["bad", "error"]
+    : frozen ? ["bad", "board frozen"]
+    : m.port && b && !b.answered ? ["warn", "board not answering"]
+    : m.playing ? ["ok", "playing a course"]
+    : m.armed ? ["ok", "armed, holding"]
+    : m.port ? ["ok", "board found, servos limp"]
+    : ["off", "no board plugged in"];
+  document.querySelector('.sys-card[data-c="motion"] h3').className = "st-" + st[0];
+  $("#sys-motion-state").textContent = st[1];
+  const c = m.course;
+  $("#sys-motion").innerHTML = dl([
+    ["In use", m.enabled ? "yes" : "no: tab hidden, board left alone"],
+    ["Board", m.port ? `${esc(m.port)}${m.firmware ? ` · ${esc(m.firmware)}` : ""}` : "not found (MicroPython USB f055)"],
+    m.enabled && ["Servos", m.armed ? `armed, ${m.connected ? "connected" : '<span class="bad">reconnecting</span>'}` : "limp (not armed)"],
+    m.armed && m.last && ["Pulses", `<span class="num">${m.last.join(" ")}</span> µs`],
+    c && ["Course", `${esc(c.track)} · ${esc(c.car)} — ${m.playing ? "playing" : "paused"} at ${fmtSecs(Math.round(c.t))} of ${fmtSecs(Math.round(c.length))}`],
+    m.error && ["Error", `<span class="bad">${esc(m.error)}</span>`],
+  ]);
+  $("#sys-motion-board").innerHTML = (!b ? "" : !b.answered
+    ? `<h3 class="sub-h">On the board</h3><div class="sys-note">No state report: firmware 4 or later answers it (in the REPL, or busy, it can't).</div>`
+    : `<h3 class="sub-h">On the board</h3><dl>` + dl([
+      ["Mode", esc({ pc: "driven by the PC", demo: "playing its demo", park: "demo: holding park", wait: "just started, waiting for the PC" }[b.mode] || b.mode)],
+      ["Servos", esc({ limp: "limp", drive: "driving", glide: "gliding to park", hold: "holding park" }[b.board] || b.board)
+        + (b.latched ? ' · <span class="bad">stopped with USR</span> (Arm clears it)' : "")
+        + (b.error ? ' · <span class="bad">demo file error</span>' : "")
+        + (b.pca ? "" : ' · <span class="bad">no PCA9685</span>')],
+      ["Loop", b.tick_hz == null ? "measuring…" : frozen
+        ? `<span class="bad">${b.loop_hz}/s, timed part stopped</span> (the watchdog should reset it within 2 s; else press RST)`
+        : `${b.loop_hz}/s, outputs ${b.tick_hz}/s${b.clock_ok ? "" : ' · <span class="bad">clock off</span>'}`],
+      b.ms != null && ["Up", fmtSecs(Math.round(b.ms / 1000))],
+      b.reset && ["Last reset", b.reset === "watchdog" ? '<span class="bad">watchdog</span> (it had frozen and reset itself)'
+        : esc({ power: "power-up", button: "RST button", soft: "soft (a copy or Ctrl-D)", sleep: "deep sleep" }[b.reset] || b.reset)],
+      b.wdt && ["Watchdog", `${b.wdt / 1000} s`],
+      b.host != null && ["Plugged into", b.host ? "a PC: no demo on its own, only simdash moves it" : "no PC (a charger): plays its demo"],
+      b.demo != null && ["Demo file", b.demo ? `on the board${b.played ? `, played ${b.played}×` : ""}` : "none"],
+    ]) + "</dl>");
+  const btn = (a) => document.querySelector(`#tab-system [data-act="${a}"]`);
+  btn("motion/enable").hidden = m.enabled;
+  btn("motion/disable").hidden = !m.enabled;
+  btn("motion/letgo").hidden = !m.enabled;
+  $("#sys-motion-open").hidden = !m.enabled;
+  document.querySelector('nav button[data-tab="motion"]').hidden = !m.enabled;
+  if (!m.enabled && currentTab === "motion") showTab("system");
+}
+$("#sys-motion-open").onclick = () => { showTab("motion"); history.replaceState(null, "", "#motion"); };
 
 async function loadSystem() {
   loadStorage();
@@ -4312,6 +4368,7 @@ async function loadSystemLog() {
 
 document.querySelectorAll(SYS_BUTTONS).forEach((b) => (b.onclick = async () => {
   if (b.dataset.confirm && sys.data?.ams2.running && !confirm(b.dataset.confirm)) return;
+  if (b.dataset.confirmMotion && !confirm(b.dataset.confirmMotion)) return;
   sys.busy = b.dataset.act;
   renderSystem();
   try {

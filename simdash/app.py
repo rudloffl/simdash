@@ -592,6 +592,11 @@ def create_app(recorder=None):
 
     # ---- desk 6DOF (servo Stewart platform, tab /#motion) ----
 
+    def motion_in_use():
+        """Anything that moves the servos or writes to the board: refused while the 6DOF is off (System tab)."""
+        if not motion.enabled():
+            raise HTTPException(409, "the 6DOF is turned off: turn it on in the System tab")
+
     @app.get("/api/motion")
     def motion_setup():
         return motion.setup()
@@ -646,6 +651,7 @@ def create_app(recorder=None):
             if act == "load":
                 return await asyncio.to_thread(p.load, str(body.get("ref")))
             if act == "play":
+                motion_in_use()
                 p.play(body.get("speed") or 1.0)
             elif act == "pause":
                 p.pause()
@@ -686,6 +692,7 @@ def create_app(recorder=None):
     async def motion_demo_write():
         """Copy the demo to the board (it lets go of the servos and restarts)."""
         from . import pyboard
+        motion_in_use()
         try:
             return await asyncio.to_thread(motion.write_demo)
         except ValueError as e:
@@ -697,6 +704,8 @@ def create_app(recorder=None):
     def motion_arm(body: dict):
         """Arming checks the firmware's hello first; refused (409) without a valid answer."""
         on = bool(body.get("on"))
+        if on:
+            motion_in_use()
         home = motion.solve({})
         if not motion.link.arm(on, home["pulse"] if home["ok"] else None):
             raise HTTPException(409, motion.link.status()["error"] or "cannot arm")
@@ -715,6 +724,7 @@ def create_app(recorder=None):
         sv = st["servos"]
         if not 0 <= i < 6:
             raise HTTPException(400, "servo 0-5")
+        motion_in_use()
         if motion.player.playing:
             raise HTTPException(409, "a course is playing")
         try:

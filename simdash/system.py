@@ -203,6 +203,8 @@ def status(rec_live=None):
     out["launch"] = get_launch()
     from . import presets
     out["haptic_preset"] = presets.active()
+    from . import motion
+    out["motion"] = motion.status()
     return out
 
 
@@ -369,7 +371,30 @@ def restart_ams2():
     _in_background("ams2", "restarting AMS2", run)
 
 
+def enable_motion():
+    from . import motion
+    motion.set_enabled(True)
+    _note("6DOF turned on")
+
+
+def disable_motion():
+    from . import motion
+    motion.set_enabled(False)
+    _note("6DOF turned off: servos let go, tab hidden")
+
+
+def let_go_motion():
+    from . import motion
+    was = motion.link.status()["armed"]
+    motion.player.stop()
+    motion.link.arm(False)
+    _note("6DOF servos let go" if was else "6DOF servos were not armed")
+
+
 ACTIONS = {
+    "motion/enable": enable_motion,
+    "motion/disable": disable_motion,
+    "motion/letgo": let_go_motion,
     "simd/restart": restart_simd,
     "monocoque/restart": restart_monocoque,
     "monocoque/stop": stop_monocoque,
