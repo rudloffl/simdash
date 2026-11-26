@@ -7,8 +7,8 @@ limits how fast each servo moves, and when nothing arrives for a second glides t
 before going limp (firmware/6dof).
 
 Frame: x forward (the car's nose), y left, z up, origin at the centre of the base plate at the
-height of the servo shafts. Servos sit in three pairs around the base; each horn swings in a
-vertical plane tangent to the base circle, pointing away from its pair's centre. Angle 0 = horn
+height of the servo shafts. Servos sit in three pairs around the base; each shaft's rotation axis
+is set, on its own, by `shaft_angle` from the base centre -> shaft line (see legs()). Angle 0 = horn
 horizontal; the platform height where all six horns are horizontal is the home height.
 
 Leg k: shaft B, horn direction u, horn length a, rod length s, platform anchor P (world).
@@ -40,9 +40,11 @@ USB_VENDOR = "f055"  # MicroPython (pyboard: f055:9800 and friends)
 
 DEFAULTS = {
     "geometry": {
-        # "flat": the two servos of a pair side by side on one flat face, back to back, shafts parallel,
-        #         horns swinging outwards (like most kits); "radial": each shaft points away from the centre
-        "layout": "flat",
+        # each shaft's rotation axis, on its own, from perpendicular to the base centre -> shaft line (0°)
+        # towards that line (90°, parallel): 0-90° tips the horn in, over the base (closer to its own rod,
+        # less rod lean); 90° is the classic arrangement (each shaft radial, horn tangent to the base circle);
+        # 90-180° tips it out, past the base edge
+        "shaft_angle": 90.0,
         # "out": each horn points away from its pair's centre (horn-end ball joints far apart);
         # "in": the two horns of a pair point at each other, their ball joints close together
         "horns": "out",
@@ -97,8 +99,6 @@ def _read():
         saved = json.loads(SETTINGS.read_text())
     except (OSError, ValueError):
         return s
-    if isinstance(saved.get("geometry"), dict) and "layout" not in saved["geometry"]:
-        saved["geometry"]["layout"] = "radial"  # saved before the flat layout existed: keep its meaning
     if isinstance(saved.get("geometry"), dict):
         _old_geometry(saved["geometry"])
     sv = saved.get("servos")
@@ -117,7 +117,9 @@ def _read():
 
 def _old_geometry(g):
     """Saved before 2026-11-22 (base_r to the pair's face + shaft_spacing, or half-angles): the same platform
-    in today's terms (radius to the shafts, full angles within a pair). Changes g in place."""
+    in today's terms (radius to the shafts, full angles within a pair). Saved before the continuous
+    `shaft_angle` existed (2026-11-26): the discrete "flat" / "radial" / "aimed" `layout` is dropped, each
+    shaft's own radial direction (90°, same as the old "radial") is the closest fit. Changes g in place."""
     if "base_angle" not in g and ("base_half" in g or "shaft_spacing" in g or "base_r" in g):
         r = float(g.get("base_r", 58.0))
         if g.get("layout") == "flat":
@@ -129,7 +131,9 @@ def _old_geometry(g):
         g["plat_angle"] = 2 * float(g["plat_half"])
     if "stroke" not in g and "servo_limit" in g:   # travel ± from horizontal: the same with home level
         g["stroke"] = float(g["servo_limit"])
-    for k in ("shaft_spacing", "base_half", "plat_half", "servo_limit"):
+    if "shaft_angle" not in g:
+        g["shaft_angle"] = 90.0
+    for k in ("shaft_spacing", "base_half", "plat_half", "servo_limit", "layout"):
         g.pop(k, None)
 
 
@@ -165,10 +169,10 @@ def save(patch):
             s["cueing"][kk] = float(v)
     g = s["geometry"]
     for k in g:
-        if k not in ("layout", "horns", "mount", "joints"):
+        if k not in ("horns", "mount", "joints"):
             g[k] = float(g[k])
-    if g["layout"] not in ("flat", "radial"):
-        raise ValueError("layout is flat or radial")
+    if not 0 <= g["shaft_angle"] <= 180:
+        raise ValueError("shaft angle must be within 0-180°")
     if g["horns"] not in ("out", "in"):
         raise ValueError("horns point out or in")
     if g["mount"] not in ("lying", "upright"):
@@ -241,8 +245,18 @@ def status():
 # ---------- geometry ----------
 
 def legs(g):
-    """[(B, u, P)] per servo 0-5: shaft (x, y), horn direction (x, y), platform anchor (x, y) at home."""
+    """[(B, u, P)] per servo 0-5: shaft (x, y), horn direction (x, y), platform anchor (x, y) at home.
+
+    Each shaft's rotation axis is set, on its own, by `shaft_angle` (deg) from the tangent to the base
+    circle at B, turning towards the base centre -> B line as the angle grows: 90° is that line (the
+    classic "radial" shaft, horn tangent to the base circle). The horn direction u is square to it: at 0°
+    u points straight at the centre (its tip lands inside the base); between 0° and 90° it still leans in;
+    at 90° u is tangent (neither in nor out); past 90°, up to 180°, it leans the other way, out past the
+    base edge. That lean is the same for both shafts of a pair (shaft_angle doesn't depend on which of the
+    pair it is); "side" and horns "in"/"out" only flip the tangential part, as before, to keep the pair
+    symmetric and the horns pointing away from (or towards) their own pair's centre."""
     flip = -1 if g.get("horns", "out") == "in" else 1   # in: towards the pair's centre
+    theta = math.radians(g.get("shaft_angle", 90.0))
     out = []
     for k in range(6):
         side = 1 if k % 2 else -1          # 0: clockwise servo of the pair, 1: counter-clockwise
@@ -250,13 +264,11 @@ def legs(g):
         # shafts on the base_r circle, base_angle apart in a pair
         b = cb + side * math.radians(g["base_angle"] / 2)
         B = (g["base_r"] * math.cos(b), g["base_r"] * math.sin(b))
-        if g.get("layout", "radial") == "flat":
-            # both shafts on the pair's flat face, parallel (pointing outwards), horns along the face
-            u = (-math.sin(cb) * side * flip, math.cos(cb) * side * flip)
-        else:
-            u = (-math.sin(b) * side * flip, math.cos(b) * side * flip)   # tangent, away from the pair's centre (out)
         p = cb + side * math.radians(60) - side * math.radians(g["plat_angle"] / 2)
         P = (g["plat_r"] * math.cos(p), g["plat_r"] * math.sin(p))
+        et, er = (-math.sin(b), math.cos(b)), (math.cos(b), math.sin(b))      # tangent, radial (outward) at B
+        tang, rad = side * math.sin(theta), -math.cos(theta)                  # side only flips the tangential part
+        u = (flip * (tang * et[0] + rad * er[0]), flip * (tang * et[1] + rad * er[1]))
         out.append((B, u, P))
     return out
 
@@ -432,18 +444,13 @@ def design(g):
     lean = _angle(gm["home_rod"][0], (0, 0, 1))
     trans = [_angle(tuple(r["A"][i] - r["B"][i] for i in range(3)), gm["home_rod"][k]) for k, r in enumerate(home)]
     spacing = 2 * g["base_r"] * math.sin(math.radians(g["base_angle"] / 2))
-    upright = g.get("mount", "lying") == "upright"
     p_spacing = 2 * g["plat_r"] * math.sin(math.radians(g["plat_angle"] / 2))
     gap_home, gap_min, cross = _ball_gaps(g, L)
     h, st = g.get("home_angle", 0.0), g["stroke"]
     drop = max(0.0, -math.sin(math.radians(h - st))) * g["horn"]   # how far the horn's ball goes below the shaft
     return {
         "home_height": round(H, 1),
-        "layout": g.get("layout", "radial"),
-        # flat: the two bodies sit back to back between the shafts
-        # bodies plus the screw tabs that stick out past them, and 1 mm of air
-        "min_spacing": (round(MG90["wid"] + 1, 1) if upright else
-                        round(2 * (MG90["len"] - MG90["shaft"] + (MG90["tabs"] - MG90["len"]) / 2) + 1, 1)) if g.get("layout") == "flat" else None,
+        "shaft_angle": g.get("shaft_angle", 90.0),
         "mount": g.get("mount", "lying"),
         # shaft axis above the base plate: the body (and its tabs) below the shaft, or the horn swung down
         "shaft_height": round(max(_below_shaft(g) + 1, drop + 4), 1),
@@ -452,8 +459,6 @@ def design(g):
         "rod_lean": round(lean, 1),
         "transmission_home": round(trans[0], 1),   # horn-rod angle at home (90 is ideal)
         "shaft_spacing": round(spacing, 1),
-        # flat: the pair's face (horns' plane), from the base centre
-        "face_dist": round(g["base_r"] * math.cos(math.radians(g["base_angle"] / 2)), 1) if g.get("layout") == "flat" else None,
         "joint_spacing": round(p_spacing, 1),
         "horns": g.get("horns", "out"),
         "joints": g.get("joints", "stud"),
@@ -710,11 +715,16 @@ def template_svg(part, g):
     L = gm["L"]
     lean = _angle(gm["home_rod"][0], (0, 0, 1))
     ha_home, st = g.get("home_angle", 0.0), g["stroke"]
-    flat = g.get("layout") == "flat"
     horns_in = g.get("horns", "out") == "in"
     upright = g.get("mount", "lying") == "upright"
     sh = max(_below_shaft(g) + 1, max(0.0, -math.sin(math.radians(ha_home - st))) * g["horn"] + 4)
     DIM = "#080"   # dimensions
+    # the horn ball's distance from the base centre (top view) at rest (home) and at each end of the
+    # stroke: a guide for plat_r (every leg reaches the same radii, by symmetry, so leg 0 alone gives them)
+    B0, u0 = L[0][0], L[0][1]
+    home_r = math.hypot(*tip(B0, u0, g["horn"], ha_home)[:2])
+    stroke_ends = [ha_home - st, ha_home + st]
+    stroke_r = [math.hypot(*tip(B0, u0, g["horn"], a)[:2]) for a in stroke_ends]
 
     def stud(x, y, rod, sign):
         """An arrow along the home rod's direction seen from above (sign -1: the other end's view)."""
@@ -806,7 +816,7 @@ def template_svg(part, g):
                 + text(*at(r + 6, deg), label, size=2.8, color="#666", along=deg))
 
     pad = 20
-    R = (g["base_r"] + g["horn"] + MG90["len"]) if part == "base" else g["plat_r"] + 20
+    R = max((g["base_r"] + g["horn"] + MG90["len"]) if part == "base" else g["plat_r"] + 20, home_r, *stroke_r)
     size = 2 * (R + pad)
     rows = 10                                   # coordinate table under the drawing
     height = size + 4.2 * rows + 6
@@ -820,6 +830,14 @@ def template_svg(part, g):
          f'<g stroke="#000" fill="none" stroke-width="0.25">',
          f'<line x1="{c-6}" y1="{c}" x2="{c+6}" y2="{c}"/><line x1="{c}" y1="{c-6}" x2="{c}" y2="{c+6}"/>']
     fp = g["first_pair"]
+    # horn reach: where the horn ball sits (top view, distance from the centre) at rest and at each end
+    # of the stroke
+    e.append(f'<circle cx="{c}" cy="{c}" r="{home_r:.2f}" stroke="#c00" stroke-width="0.25" stroke-dasharray="1 2"/>')
+    e.append(text(*at(home_r, fp + 180), f"horn reach home: R{home_r:.1f}", size=2.6, color="#c00", along=fp + 180))
+    for a, r in zip(stroke_ends, stroke_r):
+        e.append(f'<circle cx="{c}" cy="{c}" r="{r:.2f}" stroke="#c80" stroke-width="0.25" stroke-dasharray="1 2"/>')
+    for a, r, deg in zip(stroke_ends, stroke_r, (fp + 170, fp + 190)):
+        e.append(text(*at(r, deg), f"horn reach {a:+g}°: R{r:.1f}", size=2.6, color="#c80", along=deg))
     table = []
     if part == "base":
         ha = g["base_angle"] / 2
@@ -827,31 +845,22 @@ def template_svg(part, g):
         for j in range(3):
             cb = fp + 120 * j
             e.append(centre_line(cb, g["base_r"] + 26, f"pair {j}"))
-            if flat:  # each pair's mounting face (where the horns swing)
-                f = g["base_r"] * math.cos(math.radians(ha))
-                n, tc = at(1, cb), at(1, cb + 90)
-                # past the outer shaft: the horn (out) or the body and its tabs, whichever reaches further
-                body = MG90["wid"] / 2 if upright else MG90["shaft"] + (MG90["tabs"] - MG90["len"]) / 2
-                L2 = g["base_r"] * math.sin(math.radians(ha)) + max(body, 0 if horns_in else g["horn"]) + 4
-                e.append(line((f * n[0] - L2 * tc[0], f * n[1] - L2 * tc[1]), (f * n[0] + L2 * tc[0], f * n[1] + L2 * tc[1]),
-                              'stroke-dasharray="2 2"'))
         for k, (B, u, P) in enumerate(L):
             bx, by = X(B[0]), Y(B[1])
             tp = tip(B, u, g["horn"], ha_home)   # the horn's ball at home
             t = (-u[0], -u[1]) if horns_in else u   # along the swing, away from the pair's centre
-            # servo body seen from above: the shaft points outwards, so the body reaches inwards from
-            # the horn's plane; its length lies along the horn's swing. Flat: bodies back to back between
-            # the shafts, all facing the pair's outward direction. Radial: each body radial, running from its
-            # shaft towards the next pair (towards each other they collide).
-            # The tabs (screws parallel to the shaft) need a wall at the tab depth: drawn as a strip.
-            # upright: the body stands on end, so from above it is only its width along the swing,
-            # centred on the shaft; its tabs point up and down (screw them into a wall at the tab depth)
-            if flat:
-                n = at(1, fp + 120 * (k // 2))
-                c0 = 0.0 if upright else MG90["shaft"] - MG90["len"] / 2
-            else:
-                n = (B[0] / math.hypot(*B), B[1] / math.hypot(*B))
-                c0 = 0.0 if upright else MG90["len"] / 2 - MG90["shaft"]   # body centre along t, from the shaft
+            # servo body seen from above: the shaft's rotation axis (square to the horn's own swing, pointing
+            # away from the base centre) is n; the body's length lies along the swing (t). At shaft_angle
+            # 90° (the classic radial shaft) this runs the body from its shaft towards the next pair, so a
+            # tight base_angle has the two bodies of a pair meeting; away from 90° it tilts, which can bring
+            # the bodies of a pair closer still (check the drawing). The tabs (screws parallel to the shaft)
+            # need a wall at the tab depth: drawn as a strip. Upright: the body stands on end, so from above
+            # it is only its width along the swing, centred on the shaft; its tabs point up and down (screw
+            # them into a wall at the tab depth).
+            n = (u[1], -u[0])   # square to the horn's own swing direction
+            if n[0] * B[0] + n[1] * B[1] < 0:   # the outward-pointing one of the two
+                n = (-n[0], -n[1])
+            c0 = 0.0 if upright else MG90["len"] / 2 - MG90["shaft"]   # body centre along t, from the shaft
             along, tabs = (MG90["wid"], MG90["wid"]) if upright else (MG90["len"], MG90["tabs"])
 
             def box(t0, t1, r0, r1, style):
@@ -881,14 +890,28 @@ def template_svg(part, g):
         no = at(5, fp)   # beside the horn, away from the centre
         e.append(text(hm[0] + no[0], hm[1] + no[1], f"horn {g['horn']:g}" + (f" at {ha_home:+g}°" if ha_home else ""), size=2.8, color="#c00",
                       along=math.degrees(math.atan2(u0[1], u0[0]))))
-        if flat:
-            f = g["base_r"] * math.cos(math.radians(ha))
-            e.append(text(*at(f - 6, fp + 120), f"face {f:.1f}", size=2.8, color=DIM))
-        pair = ("flat: each pair back to back on a flat face" if flat else "radial: each shaft pointing away from the centre")
+        # shaft_angle on shaft 0: 0° reference is the tangent (perpendicular to the centre -> shaft line,
+        # dashed), 90° is that line itself (dashed); the arc between the 0° reference and the actual axis
+        # is the angle itself
+        sa = g.get("shaft_angle", 90.0)
+        b0deg = math.degrees(math.atan2(B0[1], B0[0]))
+        tang0, rad0, axis0 = b0deg + 90, b0deg, b0deg + 90 - sa
+        rr = 10
+        for d in (tang0, rad0):
+            e.append(line(B0, (B0[0] + rr * 1.8 * math.cos(math.radians(d)), B0[1] + rr * 1.8 * math.sin(math.radians(d))),
+                          'stroke="#06c" stroke-width="0.2" stroke-dasharray="1 0.8"'))
+        e.append(point_angle(B0, tang0, axis0, rr, f"shaft_angle {sa:g}°"))
+        pair = (f"shaft_angle {sa:g}°: each shaft's own rotation axis, from perpendicular to the base centre "
+                f"→ shaft line (0°) towards that line (90°, parallel: the classic radial shaft, "
+                f"horn tangent to the circle); 0-90° tips the horn in, over the base, 90-180° tips it "
+                f"out, past the base edge")
         pair += (f"|servos upright (shaft near the top), shaft axis {sh:.1f} mm above the base plate" if upright
                  else f"|servos lying, shaft axis {sh:.1f} mm above the base plate")
         note = (f"BASE 1:1 (seen from above)  servo shafts on R{g['base_r']:g}, {g['base_angle']:g}° apart in a pair; "
                 f"pairs 120° apart, pair 0 at {fp:g}°; {pair}"
+                f"|on shaft 0: dashed blue lines are 0° (tangent) and 90° (centre -> shaft) for shaft_angle, "
+                f"the blue arc between them is the angle itself"
+                f"|red/orange = where the horn ball sits (top view) at rest, at each end of the stroke: a guide for plat_r"
                 f"|red = horn {g['horn']:g} mm at home: {ha_home:+g}° from horizontal (stroke ±{st:g}°: {ha_home - st:+g}° to {ha_home + st:+g}°)"
                 + (f", {g['horn'] * math.cos(math.radians(ha_home)):.1f} mm seen from above" if ha_home else "") + f"|horns pointing {'at their neighbour' if horns_in else 'away from their pair'}; "
                 f"green = dimensions|dashed = MG90 body seen from above, strip = its screw tabs{' (pointing up and down)' if upright else ''} (approx., measure yours)"
@@ -931,6 +954,7 @@ def template_svg(part, g):
                 e.append(point_angle(P, rad, rad + rel, 8, f"{abs(rel):.1f}°"))
         note = (f"PLATFORM 1:1 (seen from above)  ball joints on R{g['plat_r']:g}, {g['plat_angle']:g}° apart in a pair; "
                 f"pairs 120° apart, 60° from the base pairs|joint k takes the rod from servo k; green = dimensions"
+                f"|red/orange = where the horn ball sits (top view) at rest, at each end of the stroke: a guide for plat_r"
                 + (f"|blue = rod-end bolt under the platform, seen from above, square to the rod at home"
                    f"|dot = the bolt's end that rises {bolt_plan(0)[2]:.1f}° towards the platform; on pair 0: its angle from the radial (dashed)" if rod_end else
                    f"|blue = ball stud under the platform: aim it down along the rod at home, {lean:.0f}° from vertical, its tip leaning this way"))

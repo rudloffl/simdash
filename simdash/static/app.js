@@ -5039,6 +5039,7 @@ const MO_AXES = [
 ];
 const MO_GEO = [
   ["base_r", "Base radius (centre to servo shafts)", 20, 200, 0.1], ["base_angle", "Base: angle between the shafts of a pair", 1, 119, 0.1],
+  ["shaft_angle", "Each shaft's own axis, from perpendicular to the centre→shaft line (0°) to that line (90°, the classic radial shaft); under 90° tips the horn in over the base, over 90° tips it out past the edge", 0, 180, 1],
   ["plat_r", "Platform radius (centre to ball joints)", 20, 200, 0.1], ["plat_angle", "Platform: angle between the joints of a pair", 0, 119, 0.1],
   ["rod", "Rod length (ball to ball)", 30, 250, 0.1], ["horn", "Horn length (shaft to ball)", 5, 50, 0.1],
   ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["home_angle", "Horn angle at home (° from horizontal, + = up)", -60, 60, 0.5],
@@ -5106,11 +5107,7 @@ $("#mo-mode").onclick = (e) => {
 function buildMotionForms() {
   buildMoveFields();
   const g = mo.s.geometry, sv = mo.s.servos, car = mo.s.car;
-  const flat = g.layout === "flat";
-  $("#mo-geo").innerHTML = `<label>Servo pairs<select data-k="layout">`
-    + `<option value="flat"${flat ? " selected" : ""}>Back to back on a flat face (like kits)</option>`
-    + `<option value="radial"${flat ? "" : " selected"}>Splayed, each shaft pointing out</option></select></label>`
-    + `<label>Horns point<select data-k="horns">`
+  $("#mo-geo").innerHTML = `<label>Horns point<select data-k="horns">`
     + `<option value="out"${g.horns === "in" ? "" : " selected"}>Away from each other (ball joints far apart)</option>`
     + `<option value="in"${g.horns === "in" ? " selected" : ""}>At each other (ball joints close together)</option></select></label>`
     + `<label>Servo bodies<select data-k="mount">`
@@ -5154,7 +5151,7 @@ $("#mo-axes").addEventListener("input", (e) => {
 });
 for (const [box, part] of [["#mo-geo", "geometry"], ["#mo-cal", "servos"], ["#mo-car", "car"]]) {
   $(box).addEventListener("input", (e) => {
-    if (["layout", "horns", "mount", "joints"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
+    if (["horns", "mount", "joints"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
       mo.s.geometry[e.target.dataset.k] = e.target.value;
       buildMotionForms();
       scheduleMotionSave();
@@ -5240,7 +5237,7 @@ async function sendPose() {
 function renderMotionDesign() {
   const d = mo.d;
   if (!d || d.error) { $("#mo-design").innerHTML = `<dt>Problem</dt><dd class="warn">${esc(d?.error)}</dd>`; $("#mo-reach").innerHTML = ""; return; }
-  const tight = d.min_spacing ? d.shaft_spacing < d.min_spacing : d.shaft_spacing < 2 * 6 + 8;
+  const tight = d.shaft_spacing < 2 * 6 + 8;   // rough clearance: check the 1:1 drawing at this shaft_angle
   $("#mo-design").innerHTML = `<dt>Home height</dt><dd>${d.home_height} mm from the shafts to the platform joints</dd>`
     + `<dt>Rod lean at home</dt><dd>${d.rod_lean}° from vertical${d.rod_lean > 30 ? ' <span class="warn">(steep: ball joints may bind)</span>' : ""};`
     + (d.joints === "rod_end"
@@ -5249,8 +5246,7 @@ function renderMotionDesign() {
       : ` print the ball studs along it (blue on the 1:1 drawings)</dd>`)
     + `<dt>Horn–rod angle at home</dt><dd>${d.transmission_home}° (90° is ideal)</dd>`
     + `<dt>Shafts in a pair</dt><dd${tight ? ' class="warn"' : ""}>${d.shaft_spacing} mm apart (centre to centre)`
-    + `${d.min_spacing ? (tight ? ` — MG90 bodies and tabs back to back need ${d.min_spacing} mm` : ` (bodies and tabs need ${d.min_spacing})`) : ""}`
-    + `${d.face_dist ? `; the pair's flat face is ${d.face_dist} mm from the centre` : ""}</dd>`
+    + ` — check the 1:1 base drawing for body clearance at shaft_angle ${d.shaft_angle}°</dd>`
     + `<dt>Shaft height</dt><dd>${d.shaft_height} mm from the base plate to the shaft axis (servos ${d.mount === "upright" ? "upright" : "lying"}, horn swung fully down included)</dd>`
     + `<dt>Servos</dt><dd>horns at ${d.home_angle}° from horizontal at home, turning ±${d.stroke}°: `
     + `from ${d.horn_range[0]}° to ${d.horn_range[1]}° (+ = up). The pulses come from the calibration (level, ±45°)</dd>`

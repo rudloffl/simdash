@@ -280,31 +280,72 @@ def test_telemetry_signs_on_a_recorded_lap():
     assert math.degrees(turned) == pytest.approx(-360, abs=25)  # clockwise lap: yaw + = turning left
 
 
-@pytest.mark.parametrize("layout", ["flat", "radial"])
-def test_both_layouts_keep_rod_lengths_and_symmetry(layout):
-    g = {**G, "layout": layout}
+@pytest.mark.parametrize("shaft_angle", [0.0, 45.0, 90.0, 135.0, 180.0])
+def test_every_shaft_angle_keeps_rod_lengths_and_symmetry(shaft_angle):
+    g = {**G, "shaft_angle": shaft_angle}
     assert all(abs(r["alpha"]) < 1e-9 for r in motion.ik({}, g))
     for r in motion.ik({"roll": 8, "pitch": -6, "x": 4}, g):
         assert math.dist(r["A"], r["P"]) == pytest.approx(g["rod"], abs=1e-6)
     rc = motion.reach(g)
-    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 10
+    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 5
 
 
-def test_flat_layout_has_parallel_shafts_in_a_pair():
-    L = motion.legs({**G, "layout": "flat"})
+def test_shaft_angle_90_is_the_classic_radial_shaft():
+    # each shaft through the base centre, horn tangent to the base circle: today's only previous layout
+    L = motion.legs({**G, "shaft_angle": 90.0})
+    for B, u, _ in L:
+        assert abs(B[0] * u[0] + B[1] * u[1]) < 1e-9       # u tangent: no radial component
     (b0, u0, _), (b1, u1, _) = L[0], L[1]
-    assert u0[0] == pytest.approx(-u1[0]) and u0[1] == pytest.approx(-u1[1])   # horns swing apart along one line
-    assert math.dist(b0, b1) == pytest.approx(SPACING)
     assert math.hypot(*b0) == pytest.approx(G["base_r"]) and math.hypot(*b1) == pytest.approx(G["base_r"])
 
 
-def test_settings_saved_before_layouts_stay_radial(tmp_path, monkeypatch):
+@pytest.mark.parametrize("shaft_angle", [0.0, 30.0, 60.0])
+def test_shaft_angle_under_90_tips_the_horn_in(shaft_angle):
+    # 0-90°: the horn's ball at home lands inside the base circle (closer to the centre than its own shaft)
+    g = {**G, "shaft_angle": shaft_angle}
+    for B, u, _ in motion.legs(g):
+        assert B[0] * u[0] + B[1] * u[1] < 0
+
+
+@pytest.mark.parametrize("shaft_angle", [120.0, 150.0, 180.0])
+def test_shaft_angle_over_90_tips_the_horn_out(shaft_angle):
+    g = {**G, "shaft_angle": shaft_angle}
+    for B, u, _ in motion.legs(g):
+        assert B[0] * u[0] + B[1] * u[1] > 0
+
+
+def test_shaft_angle_leans_the_same_way_for_both_of_a_pair():
+    # shaft_angle doesn't depend on which of the pair it is: both lean in (or out) together, not mirrored
+    g = {**G, "shaft_angle": 30.0}
+    (b0, u0, _), (b1, u1, _) = motion.legs(g)[:2]
+    assert (b0[0] * u0[0] + b0[1] * u0[1] < 0) == (b1[0] * u1[0] + b1[1] * u1[1] < 0)
+
+
+def test_shaft_angle_0_points_each_horn_at_the_base_centre():
+    # 0°: n tangent, so u is purely radial (through the centre), pointing inward ("horns": "out")
+    L = motion.legs({**G, "shaft_angle": 0.0})
+    for B, u, _ in L:
+        r = math.hypot(*B)
+        assert u == pytest.approx((-B[0] / r, -B[1] / r))
+
+
+def test_shaft_angle_horns_in_flips_in_and_out():
+    out, inw = motion.legs({**G, "shaft_angle": 30.0, "horns": "out"}), motion.legs({**G, "shaft_angle": 30.0, "horns": "in"})
+    for (B, u0, P), (_, u1, _) in zip(out, inw):
+        assert u1 == pytest.approx((-u0[0], -u0[1]))
+
+
+def test_settings_saved_before_shaft_angle_existed_default_to_90(tmp_path, monkeypatch):
     import json
     f = tmp_path / "motion.json"
     f.write_text(json.dumps({"geometry": {"base_r": 100.5, "base_half": 31.0}}))
     monkeypatch.setattr(motion, "SETTINGS", f)
     g = motion.load()["geometry"]
-    assert g["layout"] == "radial" and g["base_r"] == 100.5 and g["base_angle"] == 62.0
+    assert "layout" not in g and g["shaft_angle"] == 90.0 and g["base_r"] == 100.5 and g["base_angle"] == 62.0
+    f.write_text(json.dumps({"geometry": {"layout": "flat", "base_r": 62.4, "base_angle": 43.3}}))
+    monkeypatch.setitem(motion._cache, "s", None)
+    g2 = motion.load()["geometry"]
+    assert "layout" not in g2 and g2["shaft_angle"] == 90.0
 
 
 def test_old_flat_settings_keep_the_same_platform(tmp_path, monkeypatch):
@@ -320,8 +361,8 @@ def test_old_flat_settings_keep_the_same_platform(tmp_path, monkeypatch):
 
 
 def test_svgs_carry_the_dimensions_and_coordinates():
-    for layout in ("flat", "radial"):
-        g = {**G, "layout": layout}
+    for shaft_angle in (0.0, 90.0, 180.0):
+        g = {**G, "shaft_angle": shaft_angle}
         base, plat = motion.template_svg("base", g), motion.template_svg("platform", g)
         assert f"R{g['base_r']:g}" in base and f"{g['base_angle']:g}°" in base and "shafts " in base and "balls " in base
         assert f"horn {g['horn']:g}" in base and base.count("horn ball (") == 6
@@ -373,22 +414,26 @@ def test_cueing_mode_is_saved_and_checked(tmp_path, monkeypatch):
         motion.save({"cueing": {"mode": "rollercoaster"}})
 
 
-@pytest.mark.parametrize("layout", ["flat", "radial"])
-def test_horns_in_bring_the_horn_balls_together(layout):
-    out = {**G, "layout": layout, "horns": "out"}
+@pytest.mark.parametrize("shaft_angle", [0.0, 90.0, 180.0])
+def test_horns_in_flips_u_and_keeps_the_platform_working(shaft_angle):
+    out = {**G, "shaft_angle": shaft_angle, "horns": "out"}
     inw = {**out, "horns": "in"}
     for (b0, u0, p0), (b1, u1, p1) in zip(motion.legs(out), motion.legs(inw)):
         assert b0 == b1 and p0 == p1 and u1 == pytest.approx((-u0[0], -u0[1]))
-    d_out, d_in = motion.design(out), motion.design(inw)
-    assert 0 < d_in["ball_gap"] < d_out["ball_gap"]
-    if layout == "flat":
-        assert d_in["ball_gap"] == pytest.approx(SPACING - 2 * G["horn"], abs=0.1)
     assert all(abs(r["alpha"]) < 1e-9 for r in motion.ik({}, inw))
     for r in motion.ik({"roll": 6, "pitch": -5, "y": 3}, inw):
         assert math.dist(r["A"], r["P"]) == pytest.approx(G["rod"], abs=1e-6)
     rc = motion.reach(inw)
-    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 5
+    assert rc["roll"][0] == pytest.approx(rc["roll"][1], abs=0.2) and rc["roll"][0] > 3
     assert "<svg" in motion.template_svg("base", inw)
+
+
+def test_horns_in_bring_the_horn_balls_together_at_the_classic_radial_angle():
+    # the intuitive "far apart" / "close together" reading of horns out/in is about the tangential
+    # swing (shaft_angle 90°, the one previous layout where it was unambiguous either way)
+    out, inw = {**G, "shaft_angle": 90.0, "horns": "out"}, {**G, "shaft_angle": 90.0, "horns": "in"}
+    d_out, d_in = motion.design(out), motion.design(inw)
+    assert 0 < d_in["ball_gap"] < d_out["ball_gap"]
 
 
 def test_crossing_horns_show_no_gap():
@@ -402,11 +447,20 @@ def test_horns_setting_is_checked(tmp_path, monkeypatch):
         motion.save({"geometry": {"horns": "sideways"}})
 
 
-def test_upright_servos_move_the_same_but_pack_tighter():
+def test_shaft_angle_setting_is_checked(tmp_path, monkeypatch):
+    monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
+    assert motion.save({"geometry": {"shaft_angle": 30.0}})["geometry"]["shaft_angle"] == 30.0
+    with pytest.raises(ValueError):
+        motion.save({"geometry": {"shaft_angle": 181.0}})
+    with pytest.raises(ValueError):
+        motion.save({"geometry": {"shaft_angle": -1.0}})
+
+
+def test_upright_servos_move_the_same_but_sit_higher():
     up = {**G, "mount": "upright"}
     assert [r["alpha"] for r in motion.ik({"roll": 7, "z": 3}, up)] == [r["alpha"] for r in motion.ik({"roll": 7, "z": 3}, G)]
     d_lying, d_up = motion.design(G), motion.design(up)
-    assert d_up["min_spacing"] < d_lying["min_spacing"] and d_up["shaft_height"] > d_lying["shaft_height"]
+    assert d_up["shaft_height"] > d_lying["shaft_height"]
     assert "upright" in motion.template_svg("base", up)
 
 

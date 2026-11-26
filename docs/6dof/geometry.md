@@ -9,31 +9,41 @@ Angles in the tab: roll + leans right, pitch + nose up, yaw + nose left.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `layout` | flat | **flat**: the two servos of a pair back to back on one flat face, shafts parallel, horns swinging outwards (like most kits: one flat bracket per pair). **radial**: each shaft points away from the centre (pairs splay apart; bodies end up facing the next pair). |
 | `base_r` | 62.4 mm | Base centre → each servo shaft (where it crosses the horns' plane), as in the CAD sketch. |
-| `base_angle` | 43.3° | Angle, seen from the centre, between the two shafts of a pair. Flat: the shafts are 2·`base_r`·sin(`base_angle`/2) apart (MG90 bodies plus their screw tabs back to back need ≈ 44.5 mm) and the pair's face is `base_r`·cos(`base_angle`/2) from the centre. |
+| `base_angle` | 43.3° | Angle, seen from the centre, between the two shafts of a pair. The shafts are 2·`base_r`·sin(`base_angle`/2) apart, and the line through a pair's two shafts is `base_r`·cos(`base_angle`/2) from the centre. |
+| `shaft_angle` | 90° | Each shaft's own rotation axis, from **perpendicular** to the base centre → shaft line (0°) turning towards that line (90°, **parallel**): at 0° the horn points straight at (or away from) the centre, its ball at home landing inside the base circle; at 90° the shaft is radial and the horn tangent to the base circle (the only layout this platform had before 2026-11-26); past 90°, up to 180°, it leans the other way, out past the base edge. Both shafts of a pair lean the same way (in or out) together — it doesn't depend on which of the pair. Pushing it towards 0° or 180° trades rod lean and the horn–rod angle (both improve) against the two servo bodies of a pair sitting closer together, or even colliding: check the 1:1 base drawing before printing anything. |
 | `plat_r` | 46 mm | Platform centre → rod ball joint. |
 | `plat_angle` | 48° | Angle between the two joints of a platform pair. Platform pairs sit 60° from base pairs. |
 | `rod` | 90 mm | Ball centre to ball centre. |
 | `horn` | 18 mm | Shaft → rod hole on the horn. Longer = faster, bigger moves, less resolution and torque. |
-| `horns` | out | **out**: the horns of a pair point away from each other. **in**: they point at each other, so the horn-end ball joints sit close together (2·`base_r`·sin(`base_angle`/2) − 2·`horn` apart at home). |
-| `mount` | lying | The servo bodies; the shafts are horizontal either way, so the motion is identical. **lying**: length along the horn's swing (flat pairs need ≈ 44.5 mm between shafts; shaft axis ≈ 7 mm above the plate, or more if the horn swung down needs it). **upright**: standing on end, shaft near the top: only the 12.2 mm body width along the swing (flat pairs need ≈ 13.2 mm), tabs pointing up and down, shaft axis ≈ 22.8 mm above the plate. The design panel and the base SVG give the shaft height. |
+| `horns` | out | **out**: the horns of a pair point away from each other (at `shaft_angle` 90°, the horn-end ball joints sit far apart: 2·`base_r`·sin(`base_angle`/2) − 2·`horn` closer with **in**, where they point at each other instead). Away from 90° this still flips the horn's direction, but "far apart" / "close together" no longer describes it as simply. |
+| `mount` | lying | The servo bodies; the shafts are horizontal either way, so the motion is identical. **lying**: length along the horn's swing (shaft axis ≈ 7 mm above the plate, or more if the horn swung down needs it). **upright**: standing on end, shaft near the top: only the 12.2 mm body width along the swing, tabs pointing up and down, shaft axis ≈ 22.8 mm above the plate. The design panel and the base SVG give the shaft height. |
 | `first_pair` | 0° | Where servos 0–1 sit (0 = under the nose, so pitch and roll are symmetric left/right). |
 | `home_angle` | 0° | Horn angle at home, from horizontal (+ = horn tip up). Every horn sits there when the platform is at home; the home height and the ball studs' directions follow. |
 | `stroke` | 60° | How far each servo may turn each way from `home_angle` (e.g. 30 ± 35 = −5° … +65°; horn and rod must not hit the body or the base). |
 | `transmission_min_deg` | 35° | Horn–rod angle kept within 35–145°. Near 0 or 180 the leg toggles: the horn turns, the platform barely moves, loads spike. 99° at home with the defaults (90 is ideal). |
 | `joint_max_deg` | 30° | Each ball joint's swivel from its home direction, at the horn end and at the platform end (typical RC rod ends). |
 
-The three servo pairs are 120° apart; the horns of a pair point away from each other or, with `horns` = in, at each other. In the flat layout
-both horns swing along the pair's face; in the radial one each swings in a plane tangent to the base circle and
-each body runs from its shaft towards the next pair. Settings saved before the flat layout existed (2026-11-21)
-stay radial. Settings saved before 2026-11-22 (`base_r` to the pair's face + `shaft_spacing`, half-angles `base_half` / `plat_half`, `servo_limit` = travel from horizontal) are read as the same platform in today's terms.
+The three servo pairs are 120° apart; the horns of a pair point away from each other or, with `horns` = in, at
+each other. Settings saved before `shaft_angle` existed (2026-11-26, when the discrete `flat` / `radial` /
+`aimed` `layout` choice was dropped in its favour) read as `shaft_angle` 90° — each shaft's own radial direction,
+the same as the old `radial` (and the closest single value to the old `flat`). Settings saved before 2026-11-22
+(`base_r` to the pair's face + `shaft_spacing`, half-angles `base_half` / `plat_half`, `servo_limit` = travel
+from horizontal) are read as the same platform in today's terms.
 
 The 1:1 SVGs (Base / Platform buttons) carry the same dimensions in green (radius, angle within a pair, 120°/60° between pairs, distance between the shafts and between the horn balls, horn length) and list every point's x, y, z under the drawing, ready to type into the CAD sketch.
 
-With the defaults (flat): home height 86.4 mm (shafts to platform joints), rods lean 16° from vertical, and each
-axis alone reaches about ±23 mm surge/sway, ±9 mm heave, ±11° roll, ±12.5° pitch, ±30° yaw with the joint
-limits (±35 mm, ±15 mm, ±19.5°, ±22°, ±49° without them). The tab recomputes all of this as the numbers change.
+With the defaults (`shaft_angle` 90°): home height 86.4 mm (shafts to platform joints), rods lean 16° from
+vertical, and each axis alone reaches about ±23 mm surge/sway, ±9 mm heave, ±11° roll, ±12.5° pitch, ±30° yaw
+with the joint limits (±35 mm, ±15 mm, ±19.5°, ±22°, ±49° without them). The tab recomputes all of this as the
+numbers change.
+
+Pushing `shaft_angle` towards 0° (everything else at its default) lowers the rod lean and brings the horn–rod
+angle closer to the 90° ideal: at 0° home height is 89.9 mm, rods lean only 2° from vertical (horn–rod angle
+88° against 99° at 90°), and the reach per axis is about the same. The trade-off: the two horn balls of a pair
+end up closer together (≈ 53 mm at home, ≈ 50 mm over the stroke, against ≈ 82 / 64 mm at 90°) — still clear of
+each other with these dimensions, but with less margin, and the two servo bodies themselves start to crowd each
+other (see the 1:1 base drawing).
 
 ## Limits
 

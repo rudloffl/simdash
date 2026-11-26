@@ -14,7 +14,7 @@ when leaving the tab). Nothing drives it live from the game yet.
 
 The geometry is set the way it is drawn in CAD (FreeCAD): base radius to the servo shafts and the angle between
 the two shafts of a pair, platform radius and angle between the two joints of a pair, rod and horn length; plus
-how the servos sit (pairs on a flat face or splayed, horns pointing away from or at each other, bodies lying or
+how the servos sit (each shaft's own angle from radial, horns pointing away from or at each other, bodies lying or
 upright) and how they are used (horn angle at home, stroke ± from it). The 1:1 SVGs carry those dimensions and
 every point's coordinates. See [Geometry](geometry.md).
 
