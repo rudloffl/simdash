@@ -9,6 +9,7 @@
 | 6 × MG90 metal-gear micro servo | on order | ~2 kg·cm at 4.8 V, ~0.1 s/60°, ~180° travel, 3-pin plug (brown GND, red V+, orange signal). Analog: 50 Hz. Pulses kept within 800–2200 µs (end stops near 600 / 2400). Calibrated per servo in the tab: level, +45°, −45° against a printed 45° gauge. |
 | PCA9685 16-channel PWM board | yes | I2C address 0x40 by default. Logic VCC 3.3 V from the pyboard, servo power on the V+ screw terminal. |
 | pyboard v1.1 (MicroPython) | yes | USB serial to the PC; I2C 1 on X9/X10. |
+| 2.42″ OLED, SSD1309, 128×64, SPI (7 pins) | yes | Planned: race stats while driving (not in the firmware yet). On SPI2 (Y side), 3.3 V logic; monochrome, so the whole screen is a 1 kB buffer sent in about 1 ms. |
 | 5–6 V supply, ≥ 5 A | to get | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V). |
 | 1000 µF ≥ 10 V electrolytic | to get | Across V+/GND at the PCA9685: servo current comes in spikes. |
 | 12 × M3 ball-joint rod ends | to get | RC car linkage ends (or ball studs + sockets). One per rod end. |
@@ -33,6 +34,22 @@ Budget beyond what's on hand: roughly €20–30 (supply, capacitor, rod ends, r
 | supply **+** | PCA9685 **V+** terminal | servo power |
 | supply **−** | PCA9685 **GND** terminal | servo ground (the board joins it to the logic GND) |
 | PCA9685 channels **0–5** | servos **0–5** | servo k = PCA9685 channel k, numbered as in the tab |
+
+The OLED (planned, the firmware doesn't drive it yet), on the pyboard's SPI2, away from the PCA9685's pins:
+
+| OLED pin | pyboard | Why |
+|---|---|---|
+| **GND** | **GND** | ground |
+| **VCC** | **3V3** | power (~20–50 mA). Chosen over the servo supply's 5 V (the module's regulator would take it): the servos' current spikes can reset the display mid-race, the 3V3 is clean and the display goes on and off with the board |
+| **SCK** (D0) | **Y6** (SCK2) | SPI clock |
+| **SDA** (D1) | **Y8** (MOSI2) | SPI data (the pin is called SDA on the module, but it is SPI here) |
+| **RES** | **Y3** | reset (the SSD1309 needs a reset pulse at start-up) |
+| **DC** | **Y4** | data / command |
+| **CS** | **Y5** | chip select |
+
+- Keep the module in SPI mode (as sold for SPI: the BS1/BS2 resistors on the back). The I2C mode would also
+  work on X9/X10, but a full screen takes ~25 ms at 400 kHz there, longer than a servo tick.
+- Y7 (MISO2) stays free: the display is write-only.
 
 - **Never power the servos from the pyboard or USB.** Six MG90s can pull 3–4.5 A when they stall or start
   together; USB gives 0.5 A and the pyboard's regulator far less.
