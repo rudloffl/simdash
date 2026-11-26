@@ -652,6 +652,11 @@ def create_app(recorder=None):
                 return await asyncio.to_thread(p.load, str(body.get("ref")))
             if act == "play":
                 motion_in_use()
+                if not motion.link.armed and motion.find_port():
+                    # Play means move: arm (hello check, park + home first) unless already armed. A board that
+                    # can't be armed doesn't stop the play (the 3D view still runs); the link says why.
+                    home = motion.solve({})
+                    await asyncio.to_thread(motion.link.arm, True, home["pulse"] if home["ok"] else None)
                 p.play(body.get("speed") or 1.0)
             elif act == "pause":
                 p.pause()
