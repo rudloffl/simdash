@@ -521,3 +521,41 @@ def test_board_report_rates(monkeypatch):
     r = lk._report(line.format(c=100, t=5, l=100, m=100))           # reset in between: no rates
     assert "tick_hz" not in r
     assert lk._report(None) == {"answered": False}
+
+
+def test_write_firmware_copies_then_renames_all(monkeypatch):
+    from simdash import pyboard
+    log = []
+
+    class FakeBoard:
+        def __init__(self, port):
+            log.append(("open", port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            log.append("restart")
+
+        def put(self, data, dest):
+            log.append(("put", dest, len(data)))
+
+        def exec(self, code, timeout=30):
+            if "statvfs" in code:
+                return "['main.py', 'demo.bin']\n60000\n"
+            if "os.stat(" in code:
+                return str([len((motion.FIRMWARE_DIR / f).read_bytes()) for f in motion.FIRMWARE_FILES]) + "\n"
+            log.append("rename" if "os.rename" in code else code)
+            return ""
+
+    monkeypatch.setattr(pyboard, "Board", FakeBoard)
+    monkeypatch.setattr(motion, "find_port", lambda: "/dev/ttyACM9")
+    monkeypatch.setattr(motion.link, "arm", lambda on, home=None: True)
+    monkeypatch.setattr(motion.link, "query", lambda: {"answered": not motion.board_busy.is_set()})
+    monkeypatch.setattr(motion.time, "sleep", lambda s: None)
+    r = motion.write_firmware()
+    puts = [e for e in log if isinstance(e, tuple) and e[0] == "put"]
+    assert [p[1] for p in puts] == ["/flash/%s.new" % f for f in motion.FIRMWARE_FILES]
+    assert log.index("rename") > log.index(puts[-1]) and log[-1] == "restart"   # all copied, then renamed
+    assert r["running"] and r["version"] == motion.firmware_version() and not motion.board_busy.is_set()
+    assert motion.FIRMWARE_FILES[-1] == "main.py"

@@ -14,6 +14,7 @@ feed() with what arrives on USB and step() with the milliseconds since the last 
 - Q: a one-line state report (STATE mode=... board=... ticks=...), answered in any mode, changing nothing.
 """
 
+from board import VERSION
 from demo import DemoError, DemoPlayer
 
 WAIT_MS = 3000
@@ -85,8 +86,8 @@ class Firmware:
     def report(self):
         """One line: STATE key=value ... (no spaces in values). clock and ticks are counters: two reports
         a second apart show whether the timed part runs (ticks +50/s) even when lines are still answered."""
-        s = "STATE mode=%s board=%s latched=%d error=%d pca=%d demo=%d played=%d clock=%d ticks=%d host=%d" % (
-            self.mode, self.board.state, self.latched, self.error, self.pca_ok, self.path is not None,
+        s = "STATE ver=%s mode=%s board=%s latched=%d error=%d pca=%d demo=%d played=%d clock=%d ticks=%d host=%d" % (
+            VERSION, self.mode, self.board.state, self.latched, self.error, self.pca_ok, self.path is not None,
             self.played, self.clock, self.ticks, bool(self.host()))
         if self.stats:
             s += self.stats()

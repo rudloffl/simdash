@@ -252,7 +252,7 @@ def test_q_reports_the_state_and_changes_nothing():
     assert line.startswith("STATE ") and line.endswith(" loops=7 ms=123 reset=watchdog wdt=2000\n")
     kv = dict(x.split("=") for x in line.split()[1:])
     assert kv["mode"] == "demo" and kv["board"] == "drive" and kv["latched"] == "0" and kv["pca"] == "1"
-    assert int(kv["ticks"]) == fw.ticks and int(kv["clock"]) == fw.clock
+    assert int(kv["ticks"]) == fw.ticks and int(kv["clock"]) == fw.clock and kv["ver"] == board6.VERSION
 
 
 def test_no_demo_after_a_watchdog_reset_but_a_long_press_plays():

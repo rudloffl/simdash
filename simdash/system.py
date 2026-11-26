@@ -391,7 +391,21 @@ def let_go_motion():
     _note("6DOF servos let go" if was else "6DOF servos were not armed")
 
 
+def install_motion_firmware():
+    from . import motion, pyboard
+    if not motion.enabled():
+        raise RuntimeError("the 6DOF is turned off: turn it on first")
+    try:
+        r = motion.write_firmware()
+    except (OSError, ValueError, pyboard.BoardError) as e:
+        _note(f"6DOF firmware not installed: {e}")
+        raise RuntimeError(f"firmware not installed: {e}")
+    _note(f"6DOF firmware {r['version']} installed on the board"
+          + ("" if r["running"] else ", but it doesn't answer after the restart"))
+
+
 ACTIONS = {
+    "motion/firmware": install_motion_firmware,
     "motion/enable": enable_motion,
     "motion/disable": disable_motion,
     "motion/letgo": let_go_motion,

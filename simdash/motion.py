@@ -23,10 +23,12 @@ import json
 import logging
 import math
 import os
+import re
 import select
 import termios
 import threading
 import time
+from pathlib import Path
 
 from . import store
 
@@ -229,7 +231,8 @@ def status():
     """The System tab's 6DOF card: whether it is in use, the board, the link and a course."""
     st, c = link.status(), player.course
     on = enabled()
-    return {"enabled": on, "port": find_port(), "board": link.query() if on else None, "connected": st["connected"], "armed": st["armed"],
+    return {"enabled": on, "port": find_port(), "board": link.query() if on else None,
+            "firmware_here": firmware_version(), "connected": st["connected"], "armed": st["armed"],
             "firmware": st["firmware"], "error": st["error"], "last": st["last"], "playing": player.playing,
             "course": {"ref": c.ref, "car": c.d["car"], "track": c.d["track"], "t": player.t - c.t0,
                        "length": c.t1 - c.t0} if c else None}
@@ -1781,3 +1784,54 @@ def _write_demo(port, data, pyboard):
         if r.returncode:
             raise OSError("mpremote: " + (r.stderr or r.stdout).strip()[-300:])
     return {"dest": dest, "bytes": len(data), "with": "mpremote" if tool else "simdash", "port": port}
+
+
+# ---------- the firmware itself, installed from simdash's copy ----------
+
+FIRMWARE_DIR = Path(__file__).resolve().parent.parent / "firmware" / "6dof"
+FIRMWARE_FILES = ("pca9685.py", "board.py", "demo.py", "fw.py", "main.py")
+
+
+def firmware_version():
+    """VERSION in simdash's copy of board.py (what the button installs)."""
+    m = re.search(r'^VERSION = "(\d+)"', (FIRMWARE_DIR / "board.py").read_text(), re.M)
+    return m.group(1) if m else None
+
+
+def write_firmware():
+    """Install simdash's firmware/6dof on the pyboard's /flash: every file copied as <name>.new first
+    (checked by size), then all renamed at once, so a failed copy leaves the old firmware whole. The
+    servos let go first; the board restarts into the new firmware after (demo.bin and other files kept)."""
+    from . import pyboard
+    files = {f: (FIRMWARE_DIR / f).read_bytes() for f in FIRMWARE_FILES}
+    port = find_port()
+    if not port:
+        raise OSError("pyboard not found (MicroPython USB device f055)")
+    player.stop()
+    link.arm(False)
+    board_busy.set()
+    try:
+        with pyboard.Board(port) as b:
+            have = b.exec("import os\nprint(os.listdir('/flash'))\ns = os.statvfs('/flash')\nprint(s[0] * s[3])")
+            free = int(have.strip().splitlines()[-1])
+            need = sum(len(d) for d in files.values()) + 2048
+            if need > free:                       # old and new side by side until the renames
+                raise ValueError(f"the firmware needs {need // 1024} kB, the board's flash has {free // 1024} kB free")
+            for f, data in files.items():
+                b.put(data, "/flash/" + f + ".new")
+            b.exec("import os\nfor f in %r:\n"
+                   "    try:\n        os.remove('/flash/' + f)\n    except OSError:\n        pass\n"
+                   "    os.rename('/flash/' + f + '.new', '/flash/' + f)\n" % (list(files),))
+            sizes = b.exec("import os\nprint([os.stat('/flash/' + f)[6] for f in %r])" % (list(files),))
+            if sizes.strip() != str([len(d) for d in files.values()]):
+                raise pyboard.BoardError("the files on the board don't match: " + sizes.strip())
+    finally:
+        board_busy.clear()
+    r = None                              # it restarts into the new main.py: see it answer
+    for _ in range(10):
+        time.sleep(0.5)
+        r = link.query()
+        if r and r.get("answered"):
+            break
+    return {"version": firmware_version(), "files": {f: len(d) for f, d in files.items()}, "port": port,
+            "running": bool(r and r.get("answered")), "state": r}

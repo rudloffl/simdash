@@ -15,7 +15,7 @@ starting point (the PC sends the home pose first). No line for timeout_ms: glide
 over about glide_ms, hold hold_ms, then go limp (no park pulses: limp at once).
 """
 
-VERSION = "4"   # 4: Q state report, hardware watchdog
+VERSION = "5"   # 4: Q state report, hardware watchdog; 5: ver= in Q, LEDs red only for a problem
 
 
 class Board:

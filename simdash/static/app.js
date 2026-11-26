@@ -4286,6 +4286,7 @@ function renderSystem() {
     "engine/restart": true,
     "engine/stop": !!(d.engine && d.engine.running),
     "motion/letgo": !!(d.motion && d.motion.armed),
+    "motion/firmware": !!(d.motion && d.motion.enabled && d.motion.port),
     "motion/disable": !!(d.motion && d.motion.enabled),
     "motion/enable": !!(d.motion && !d.motion.enabled),
   };
@@ -4294,6 +4295,15 @@ function renderSystem() {
     b.disabled = sys.busy === b.dataset.act || !can[b.dataset.act];
     b.classList.toggle("busy", sys.busy === b.dataset.act || (b.dataset.act.startsWith("ams2/") && !!d.busy.ams2));
   });
+}
+
+// the firmware on the board (from its state report, else its hello) against simdash's copy
+function fwRow(m) {
+  const on = String(m.board?.ver ?? (m.firmware || "").split(" ")[1] ?? "") || null;   // the report parses it as a number
+  const here = String(m.firmware_here);
+  if (!on) return `unknown on the board (simdash has version ${esc(here)}: <b>Install firmware</b> puts it there)`;
+  return on === here ? `version ${esc(on)}, the same as simdash's`
+    : `<span class="bad">version ${esc(on)}</span> on the board, simdash has ${esc(here)}: <b>Install firmware</b> updates it`;
 }
 
 // the Desk 6DOF card; off also hides the 6DOF tab (and leaves it if open)
@@ -4315,6 +4325,7 @@ function renderSystemMotion(m) {
   $("#sys-motion").innerHTML = dl([
     ["In use", m.enabled ? "yes" : "no: tab hidden, board left alone"],
     ["Board", m.port ? `${esc(m.port)}${m.firmware ? ` · ${esc(m.firmware)}` : ""}` : "not found (MicroPython USB f055)"],
+    m.enabled && m.port && ["Firmware", fwRow(m)],
     m.enabled && ["Servos", m.armed ? `armed, ${m.connected ? "connected" : '<span class="bad">reconnecting</span>'}` : "limp (not armed)"],
     m.armed && m.last && ["Pulses", `<span class="num">${m.last.join(" ")}</span> µs`],
     c && ["Course", `${esc(c.track)} · ${esc(c.car)} — ${m.playing ? "playing" : "paused"} at ${fmtSecs(Math.round(c.t))} of ${fmtSecs(Math.round(c.length))}`],
@@ -4342,6 +4353,7 @@ function renderSystemMotion(m) {
   btn("motion/enable").hidden = m.enabled;
   btn("motion/disable").hidden = !m.enabled;
   btn("motion/letgo").hidden = !m.enabled;
+  btn("motion/firmware").hidden = !m.enabled;
   $("#sys-motion-open").hidden = !m.enabled;
   document.querySelector('nav button[data-tab="motion"]').hidden = !m.enabled;
   if (!m.enabled && currentTab === "motion") showTab("system");
