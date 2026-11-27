@@ -66,9 +66,16 @@
   <rect class="w6-pin" x="164" y="450" width="10" height="10"/><text x="156" y="459" text-anchor="end">GND</text>
 </g>
 <!-- ring wires: data from the pyboard, power from the supply (not the pyboard) -->
-<path class="w6-w w6-sig" d="M174 415 H220 M266 350 V415 H220"/>
+<path class="w6-w w6-sig" d="M174 415 H189 M205 415 H220 M266 350 V415 H220"/>
+<!-- series resistor on DIN, right at the ring -->
+<rect class="w6-pin" x="189" y="411" width="16" height="8"/>
+<text class="w6-m" x="197" y="406" text-anchor="middle">330 Ω</text>
 <path class="w6-w w6-vp" d="M174 435 H590"/><circle class="w6-dot w6-vp" cx="590" cy="435" r="4"/>
 <path class="w6-w w6-gnd" d="M174 455 H610"/><circle class="w6-dot w6-gnd" cx="610" cy="455" r="4"/>
+<!-- local capacitor across the ring's own 5V/GND, right at the ring -->
+<path class="w6-w w6-vp" d="M250 435 V443"/><path class="w6-w w6-gnd" d="M250 455 V447"/>
+<path class="w6-w w6-vp" d="M238 443 H262"/><path class="w6-w w6-gnd" d="M238 447 H262"/>
+<text class="w6-m" x="270" y="448">100–470 µF, at the ring</text>
 
 <!-- pyboard -->
 <rect class="w6-box" x="266" y="30" width="230" height="330" rx="6"/>

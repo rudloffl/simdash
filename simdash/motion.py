@@ -72,6 +72,11 @@ DEFAULTS = {
         # shaft; under the platform it is fixed square to the rod at home, as near parallel to that shaft as can be
         "joints": "stud",
         "joint_max_deg": 30.0,
+        # the status ring: "color" (green -> yellow -> red by g), or "red" for a ring behind a red
+        # diffuser (other colours would just look muddy through it) -- see ring_colors(). brightness:
+        # an overall dimmer, 0-1, for either palette
+        "ring_palette": "color",
+        "ring_brightness": 1.0,
     },
     "servos": {
         # three calibration points per servo: the pulse with the horn level, at +45° (up) and at -45°.
@@ -169,7 +174,7 @@ def save(patch):
             s["cueing"][kk] = float(v)
     g = s["geometry"]
     for k in g:
-        if k not in ("horns", "mount", "joints"):
+        if k not in ("horns", "mount", "joints", "ring_palette"):
             g[k] = float(g[k])
     if not 0 <= g["shaft_angle"] <= 180:
         raise ValueError("shaft angle must be within 0-180°")
@@ -179,6 +184,10 @@ def save(patch):
         raise ValueError("servo bodies lying or upright")
     if g["joints"] not in ("stud", "rod_end"):
         raise ValueError("joints are ball studs or rod ends")
+    if g["ring_palette"] not in ("color", "red"):
+        raise ValueError("ring palette is color or red")
+    if not 0 <= g["ring_brightness"] <= 1:
+        raise ValueError("ring brightness must be within 0-1")
     if not 0 < g["base_angle"] < 120 or not 0 <= g["plat_angle"] < 120:
         raise ValueError("angles within a pair: base 0-120°, platform 0-120°")
     if not (g["horn"] > 0 and g["rod"] > g["horn"] and g["base_r"] > 0 and g["plat_r"] > 0):
@@ -1013,6 +1022,12 @@ def _frame(cmd, us):
     return (cmd + " " + " ".join(str(int(v)) for v in us) + "\n").encode()
 
 
+def _palette_frame(palette, brightness):
+    """C <palette> <brightness 0-100>: which idle animation the board's ring free-runs when nothing is
+    driving it (firmware 7+; older firmware just ignores the unknown line)."""
+    return ("C %s %d\n" % (palette, round(100 * min(1.0, max(0.0, brightness))))).encode()
+
+
 class Link:
     """Pulses to the pyboard.
 
@@ -1034,6 +1049,7 @@ class Link:
         self.port = None
         self.armed = False
         self.home = None      # pulses sent first on each connect, and stored as park
+        self.palette, self.brightness = "color", 1.0   # the ring's idle animation, resent on each connect
         self.last = None      # the newest pulses
         self.pending = None   # the frame waiting for the sender thread
         self.pending_leds = None   # the ring frame waiting for the sender thread (no keepalive: the board's
@@ -1072,6 +1088,7 @@ class Link:
         if self.home:
             self._write(_frame("P", self.home))
             self._write(_frame("S", self.home))
+        self._write(_palette_frame(self.palette, self.brightness))   # its own idle animation when quiet
 
     def _ask(self, line, wait=0.5, prefix="6DOF", fd=None):
         fd = self.fd if fd is None else fd
@@ -1221,6 +1238,18 @@ class Link:
             if self.armed:
                 self.pending_leds = _frame("L", rgb)
                 self.wake.set()
+
+    def set_palette(self, palette, brightness):
+        """Which idle animation the board's ring free-runs on its own (rainbow or a red comet), and how
+        bright: remembered and resent on every connect, so a fresh board always matches the setting even
+        without a course playing yet. A one-off, not run through the sender thread."""
+        with self.lock:
+            self.palette, self.brightness = palette, brightness
+            if self.armed and self.fd is not None:
+                try:
+                    self._write(_palette_frame(palette, brightness))
+                except OSError:
+                    pass   # the sender thread will notice the link is down and reconnect; _open() resends it
 
     def _sender(self):
         while True:
@@ -1576,27 +1605,48 @@ class Course:
         return t
 
 
-RING_N = 12       # pixels on the status ring (firmware/6dof/ring.py's N)
-RING_MAX_G = 1.5  # the ring is at full brightness from here up
+RING_N = 12          # pixels on the status ring (firmware/6dof/ring.py's N)
+RING_MAX_G = 1.5     # the ring is at full brightness from here up
+RING_GAMMA = 2.2      # red palette: brightness = mag ** this (a straight mag would look mostly-off then
+                       # suddenly bright; the eye doesn't read light levels linearly)
+RING_TAIL = 0.3       # red palette: the two pixels flanking the dot, as a fraction of its own brightness --
+                       # spreads a dim dot over more pixels, which reads as "a little", not "off"
 
 
-def ring_colors(fwd, left, n=RING_N, max_g=RING_MAX_G):
+def ring_colors(fwd, left, palette="color", brightness=1.0, n=RING_N, max_g=RING_MAX_G):
     """The status ring's n pixels (flat [r, g, b, ...] list, 0-255) for an acceleration (fwd, left, m/s²,
     the car's frame): direction = where the car is being thrown, i.e. the opposite of the measured
     acceleration (0 = the nose: braking throws you towards it, accelerating towards the tail; cornering
-    towards the outside, away from the turn), brightness = its size against max_g (green -> yellow -> red),
-    split between the two nearest pixels so the dot moves smoothly instead of jumping between them."""
+    towards the outside, away from the turn), split between the two nearest pixels so the dot moves
+    smoothly instead of jumping between them.
+
+    palette "color": brightness = the size against max_g, green -> yellow -> red.
+    palette "red": for a ring behind a red diffuser (other colours would just look muddy through it) --
+    only the red channel, brightness gamma-corrected (RING_GAMMA) and with a two-pixel fading tail
+    (RING_TAIL) either side so a gentle g still shows as more than a single faint pixel.
+
+    brightness (0-1): an overall dimmer on top of either palette."""
     mag = min(1.0, math.hypot(fwd, left) / (max_g * G))
     pos = (math.degrees(math.atan2(-left, -fwd)) % 360) / 360 * n
     i0, frac = int(pos) % n, pos - int(pos)
     i1 = (i0 + 1) % n
-    if mag < 0.5:
-        r, g = round(510 * mag), 255
-    else:
-        r, g = 255, round(255 * (1 - 2 * (mag - 0.5)))
     out = [0] * (3 * n)
-    for i, w in ((i0, 1 - frac), (i1, frac)):
-        out[3 * i], out[3 * i + 1] = round(r * mag * w), round(g * mag * w)
+    if palette == "red":
+        bright = mag ** RING_GAMMA
+        for i, w in ((i0, 1 - frac), (i1, frac)):
+            out[3 * i] = round(255 * bright * w)
+        for i in ((i0 - 1) % n, (i1 + 1) % n):
+            out[3 * i] = round(255 * bright * RING_TAIL)
+    else:
+        if mag < 0.5:
+            r, g = round(510 * mag), 255
+        else:
+            r, g = 255, round(255 * (1 - 2 * (mag - 0.5)))
+        for i, w in ((i0, 1 - frac), (i1, frac)):
+            out[3 * i], out[3 * i + 1] = round(r * mag * w), round(g * mag * w)
+    if brightness != 1.0:
+        k = min(1.0, max(0.0, brightness))
+        out = [round(v * k) for v in out]
     return out
 
 
@@ -1697,7 +1747,8 @@ class Player:
         self.last, self.inputs = r, s
         if r["ok"]:
             link.send(r["pulse"])
-        link.send_leds(ring_colors(s["fwd"], s["left"]))
+        g = st["geometry"]
+        link.send_leds(ring_colors(s["fwd"], s["left"], g.get("ring_palette", "color"), g.get("ring_brightness", 1.0)))
 
     def _settled(self):
         return self.cue.fade == 0.0 and all(abs(v) < 0.05 for v in self.cue.out.values())

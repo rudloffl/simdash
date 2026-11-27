@@ -59,6 +59,20 @@ def rainbow(t_ms, n=N, v=160):
     return out
 
 
+COMET_TAIL = 4   # pixels behind the head, each dimmer
+
+
+def red_comet(t_ms, n=N, v=200, tail=COMET_TAIL):
+    """A bright red pixel rotating with a fading tail: the red-palette equivalent of rainbow(), for a ring
+    behind a red diffuser (other colours would just look muddy through it). Same rotation speed as
+    rainbow(), so switching palette doesn't change how fast it goes round."""
+    head = int((t_ms * ROT_DEG_PER_MS) % 360 / 360 * n)
+    out = [0] * (3 * n)
+    for k in range(tail + 1):
+        out[3 * ((head - k) % n)] = round(v * (1 - k / (tail + 1)))
+    return out
+
+
 def _hsv(hue, v):
     """Hue 0-360, full saturation, value 0-255 (int) -> (r, g, b)."""
     h = hue / 60.0

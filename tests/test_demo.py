@@ -349,3 +349,34 @@ def test_hello_reports_leds_when_a_ring_is_wired():
     fw_with_ring.command("H")
     assert "leds=" not in said[-1]
     assert "leds=3" in said2[-1]
+
+
+def test_c_switches_the_idle_animation_and_brightness():
+    _, _, data, _ = _export()
+    ring = FakeRing(n=ring6.N)
+    fw, *_ = make_fw(data, ring=ring)
+    run(fw, 10)
+    assert fw.ring_palette == "color" and fw.ring_bright == 100       # default: the rainbow, full brightness
+    run(fw, fw6.RING_TIMEOUT_MS + 50)
+    rainbow_frame = ring.shown[-1]
+    assert rainbow_frame != [0] * (ring.n * 3)
+    assert any(rainbow_frame[3 * i + 1] or rainbow_frame[3 * i + 2] for i in range(ring.n))   # not red-only
+
+    fw.feed(b"C red 40\n")
+    assert fw.ring_palette == "red" and fw.ring_bright == 40
+    run(fw, fw6.RING_TIMEOUT_MS + 50)
+    comet_frame = ring.shown[-1]
+    assert comet_frame != [0] * (ring.n * 3)
+    assert all(comet_frame[3 * i + 1] == 0 and comet_frame[3 * i + 2] == 0 for i in range(ring.n))   # red only
+    assert max(comet_frame) < max(rainbow_frame)                      # dimmer: 40 % against the rainbow's 100 %
+
+
+def test_bad_c_is_ignored():
+    _, _, data, _ = _export()
+    fw, *_ = make_fw(data, ring=FakeRing(n=3))
+    fw.feed(b"C purple 40\n")                # not a known palette
+    assert fw.ring_palette == "color" and fw.ring_bright == 100
+    fw.feed(b"C red\n")                      # missing the brightness
+    assert fw.ring_palette == "color" and fw.ring_bright == 100
+    fw.feed(b"C red x\n")                    # not a number
+    assert fw.ring_palette == "color" and fw.ring_bright == 100

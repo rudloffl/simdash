@@ -5045,6 +5045,7 @@ const MO_GEO = [
   ["first_pair", "First pair at (0 = nose)", -180, 180, 1], ["home_angle", "Horn angle at home (° from horizontal, + = up)", -60, 60, 0.5],
   ["stroke", "Servo stroke ± from home (°)", 5, 90, 0.5],
   ["transmission_min_deg", "Horn–rod angle kept ≥ (and ≤ 180 −)", 0, 60, 1], ["joint_max_deg", "Ball joint swivel max (stud: any way; rod end: tilt off its bolt)", 5, 90, 1],
+  ["ring_brightness", "Ring brightness (0 = off, 1 = full)", 0, 1, 0.05],
 ];
 // the 6DOF tab's folds: open or closed remembered (Move it open by default)
 for (const [id, key, dflt] of [["#mo-acc-cue", "moAccCue", false], ["#mo-acc-move", "moAccMove", true], ["#mo-acc-geo", "moAccGeo", false],
@@ -5116,6 +5117,9 @@ function buildMotionForms() {
     + `<label>Rod ends<select data-k="joints">`
     + `<option value="stud"${g.joints === "rod_end" ? "" : " selected"}>Ball studs (ball links): swivel limited every way</option>`
     + `<option value="rod_end"${g.joints === "rod_end" ? " selected" : ""}>Rod ends on bolts: free about the bolt, tilt limited</option></select></label>`
+    + `<label>Status ring<select data-k="ring_palette">`
+    + `<option value="color"${g.ring_palette === "red" ? "" : " selected"}>Colour (green to red by g)</option>`
+    + `<option value="red"${g.ring_palette === "red" ? " selected" : ""}>Red only, behind a red diffuser</option></select></label>`
     + MO_GEO.map(([k, n, lo, hi, st]) => moField(k, n, lo, hi, st, g[k])).join("");
   lockGeometry();
   $("#mo-cal").innerHTML = moField("min_us", "Shortest pulse µs", 500, 1500, 10, sv.min_us) + moField("max_us", "Longest pulse µs", 1500, 2500, 10, sv.max_us);
@@ -5151,7 +5155,7 @@ $("#mo-axes").addEventListener("input", (e) => {
 });
 for (const [box, part] of [["#mo-geo", "geometry"], ["#mo-cal", "servos"], ["#mo-car", "car"]]) {
   $(box).addEventListener("input", (e) => {
-    if (["horns", "mount", "joints"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
+    if (["horns", "mount", "joints", "ring_palette"].includes(e.target.dataset.k)) {  // a different set of fields / drawing
       mo.s.geometry[e.target.dataset.k] = e.target.value;
       buildMotionForms();
       scheduleMotionSave();

@@ -597,6 +597,12 @@ def create_app(recorder=None):
         if not motion.enabled():
             raise HTTPException(409, "the 6DOF is turned off: turn it on in the System tab")
 
+    def _sync_ring_palette():
+        """Push the saved ring palette/brightness to the Link, so its next connect (or this one) matches
+        what's saved, not whatever Link last remembered (its own default, or before a backend restart)."""
+        g = motion.settings()["geometry"]
+        motion.link.set_palette(g.get("ring_palette", "color"), g.get("ring_brightness", 1.0))
+
     @app.get("/api/motion")
     def motion_setup():
         return motion.setup()
@@ -608,6 +614,7 @@ def create_app(recorder=None):
         except (TypeError, ValueError, KeyError) as e:
             raise HTTPException(400, f"bad setting: {e}")
         motion.player.reload_cueing()
+        _sync_ring_palette()
         return motion.setup()
 
     @app.post("/api/motion/pose")
@@ -714,8 +721,10 @@ def create_app(recorder=None):
         home = motion.solve({})
         if not motion.link.arm(on, home["pulse"] if home["ok"] else None):
             raise HTTPException(409, motion.link.status()["error"] or "cannot arm")
-        if on and motion.player.course is None:
-            motion.link.send(home["pulse"])
+        if on:
+            _sync_ring_palette()   # a fresh connect: match the ring to the saved setting, not Link's default
+            if motion.player.course is None:
+                motion.link.send(home["pulse"])
         return motion.link.status()
 
     @app.post("/api/motion/raw")

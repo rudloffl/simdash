@@ -448,6 +448,46 @@ def test_ring_colors_splits_between_the_two_nearest_pixels():
     assert out[0:3] == pytest.approx(out[3:6], abs=2)
 
 
+def _half_step_throw():
+    """fwd, left that throw the car exactly halfway between pixels 0 and 1 (see the split test above)."""
+    import math
+    angle = math.radians(360 / motion.RING_N / 2)
+    return -motion.G * math.cos(angle), -motion.G * math.sin(angle)
+
+
+def test_ring_colors_red_palette_is_red_only_with_a_fading_tail():
+    fwd, left = _half_step_throw()
+    out = motion.ring_colors(fwd, left, palette="red")
+    n = motion.RING_N
+    channels = [out[3 * i:3 * i + 3] for i in range(n)]
+    assert all(g == 0 and b == 0 for _, g, b in channels)                 # red only, no palette hue
+    lit = {i for i, (r, _, _) in enumerate(channels) if r > 0}
+    assert lit == {n - 1, 0, 1, 2}                                       # the dot (0, 1) plus a tail each side
+    reds = [c[0] for c in channels]
+    assert reds[0] == reds[1] > 0 and reds[0] == pytest.approx(reds[1], abs=2)   # the dot, evenly split
+    assert 0 < reds[n - 1] < reds[0] and 0 < reds[2] < reds[1]                   # the tail, dimmer than the dot
+
+
+def test_ring_colors_red_palette_brightness_is_gamma_corrected():
+    full = motion.ring_colors(-motion.G, 0.0, palette="red")[0]                  # mag = 1 / RING_MAX_G
+    half = motion.ring_colors(-motion.G / 2, 0.0, palette="red")[0]              # mag halved
+    assert half < full
+    # mag ** RING_GAMMA: halving mag should cut brightness by far more than half (gamma > 1 compresses lows)
+    assert half < full / 2
+
+
+def test_ring_colors_brightness_dims_and_clamps():
+    fwd, left = _half_step_throw()
+    full = motion.ring_colors(fwd, left, palette="red", brightness=1.0)
+    half = motion.ring_colors(fwd, left, palette="red", brightness=0.5)
+    off = motion.ring_colors(fwd, left, palette="red", brightness=0.0)
+    over = motion.ring_colors(fwd, left, palette="red", brightness=2.0)          # clamped, not doubled
+    assert off == [0] * (3 * motion.RING_N)
+    assert over == full
+    for f, h in zip(full, half):
+        assert h == pytest.approx(f / 2, abs=1)
+
+
 def test_cueing_mode_is_saved_and_checked(tmp_path, monkeypatch):
     monkeypatch.setattr(motion, "SETTINGS", tmp_path / "motion.json")
     monkeypatch.setitem(motion._cache, "s", None)

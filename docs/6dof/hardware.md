@@ -11,8 +11,10 @@
 | pyboard v1.1 (MicroPython) | yes | USB serial to the PC; I2C 1 on X9/X10. |
 | 2.42″ OLED, SSD1309, 128×64, SPI (7 pins) | yes | Planned: race stats while driving (not in the firmware yet). On SPI2 (Y side), 3.3 V logic; monochrome, so the whole screen is a 1 kB buffer sent in about 1 ms. Its SDA moves to Y7 (was Y8, now the status ring's) to make room for the ring below. |
 | micro-SD card | planned | In the pyboard's own slot. Firmware 6 mounts it at `/sd` (and `SKIPSD` keeps the board from booting off it): whole-race demos, later the track map for the display. |
-| WS2812B RGB LED ring, 12 pixels, 5 V | yes | Status ring: the car's acceleration direction and size while a course plays, a rotating rainbow otherwise (firmware 7, `ring.py`). Single data-in pin, daisy-chained internally; needs real hardware to confirm the timing (see firmware.md). |
-| 5–6 V supply, ≥ 5 A | to get | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V). |
+| WS2812B RGB LED ring, 12 pixels, 5 V | yes | Behind a 1 mm red printed diffuser: set `ring_palette` to `red` in the tab (red channel only, see firmware.md). Status ring: the car's acceleration direction and size while a course plays, a rotating comet (or rainbow in the `color` palette) otherwise (firmware 7/8, `ring.py`). Single data-in pin, daisy-chained internally; needs real hardware to confirm the timing (see firmware.md). |
+| 330 Ω resistor | to get | In series on the ring's DIN, close to the ring: the usual WS2812 protection against a noisy first pixel. |
+| 100–470 µF ≥ 10 V electrolytic | to get | Across the ring's 5 V/GND, close to the ring: smooths its own current spikes (separate from the PCA9685's own capacitor below). |
+| 5–6 V supply, ≥ 5 A | have (5 V 6 A) | A 5 V 5 A brick or a 6 V supply (MG90 is a bit stronger and faster at 6 V); 6 A covers the servos and the ring with room to spare. |
 | 1000 µF ≥ 10 V electrolytic | to get | Across V+/GND at the PCA9685: servo current comes in spikes. |
 | 12 × M3 ball-joint rod ends | to get | RC car linkage ends (or ball studs + sockets). One per rod end. |
 | 6 × rods | to get / print | M3 threaded rod cut to length, or printed rods with ball sockets; equal lengths matter more than the exact length. |
@@ -41,9 +43,16 @@ The status ring, on the pyboard's SPI2 (the OLED's pins, see below, since it isn
 
 | From | To | Why |
 |---|---|---|
-| pyboard **Y8** (MOSI2) | ring **DIN** | the single data line (firmware 7, `ring.py`: WS2812 timing through the SPI hardware, not bit-banged in software) |
-| supply **+** (5 V) | ring **5V** | power: up to ~60 mA a pixel at full white, 12 pixels could pull ~0.7 A — from the servo supply, not the pyboard |
+| pyboard **Y8** (MOSI2) | 330 Ω resistor → ring **DIN** | the single data line (firmware 7, `ring.py`: WS2812 timing through the SPI hardware, not bit-banged in software); the resistor, right at the ring, is the usual protection against a noisy first pixel |
+| supply **+** (5 V) | ring **5V** (+ the 100–470 µF capacitor, right at the ring) | power: up to ~60 mA a pixel at full white, 12 pixels could pull ~0.7 A — from the servo supply, not the pyboard; the capacitor smooths the ring's own current spikes, separately from the PCA9685's |
 | supply **−** | ring **GND** | ground (joined to the rest, see below) |
+
+**If the ring flickers or shows the wrong colours**: the pyboard's data pin is 3.3 V, and 0.7 × 5 V = 3.5 V is
+the WS2812's usual logic-high threshold — 3.3 V is marginal, worse over a longer wire or with more pixels.
+Two fixes, either is enough: a diode (or two) in the ring's own 5 V feed, dropping it to ~4.3 V (so 3.3 V
+clears 0.7 × 4.3 V ≈ 3 V comfortably) — cheap, but the ring runs a little dim; or a 74AHCT125 (a 5 V buffer
+that still reads 3.3 V as a clean high) between Y8 and the resistor, feeding it from the ring's own 5 V — no
+brightness lost, one more part.
 
 The OLED (planned, the firmware doesn't drive it yet), on the pyboard's SPI2, away from the PCA9685's pins:
 

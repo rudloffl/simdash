@@ -13,13 +13,13 @@ feed() with what arrives on USB and step() with the milliseconds since the last 
   cycle or an A line from the PC. USR long press (LONG_MS): play the demo again from the start.
 - Q: a one-line state report (STATE mode=... board=... ticks=...), answered in any mode, changing nothing.
 - The ring (if wired): an L line sets its 12 pixels (simdash's acceleration G-meter, while playing a
-  course); RING_TIMEOUT_MS after the last one, it free-runs a rainbow instead -- no PC needed, same idea
-  as the standalone demo.
+  course); RING_TIMEOUT_MS after the last one, it free-runs a rainbow (or, with a C line, a red comet)
+  instead -- no PC needed, same idea as the standalone demo. C also sets its brightness.
 """
 
 from board import VERSION
 from demo import DemoError, DemoPlayer
-from ring import rainbow
+from ring import rainbow, red_comet
 
 WAIT_MS = 3000
 TICK_MS = 20          # the servos' PWM frame: outputs updated at 50 Hz
@@ -37,6 +37,8 @@ class Firmware:
         self.ring = ring
         self.ring_rgb = None
         self.ring_since = None
+        self.ring_palette = "color"   # which idle animation to free-run: "color" (rainbow) or "red" (comet)
+        self.ring_bright = 100        # 0-100 %, scales whichever one
         self.open_file, self.pca_ok = open_file, pca_ok
         self.autoplay = autoplay  # False after a watchdog reset: stay limp, no demo at power-up
         self.host = host or (lambda: False)   # True when a PC has set the board up over USB: no demo then
@@ -83,6 +85,13 @@ class Firmware:
                 try:
                     self.ring_rgb = [max(0, min(255, int(v))) for v in parts[1:]]
                     self.ring_since = self.clock
+                except ValueError:
+                    pass
+            return
+        if op == "C":             # which idle animation the ring free-runs when quiet, and how bright
+            if len(parts) == 3 and parts[1] in ("color", "red"):
+                try:
+                    self.ring_palette, self.ring_bright = parts[1], max(0, min(100, int(parts[2])))
                 except ValueError:
                     pass
             return
@@ -201,8 +210,10 @@ class Firmware:
             return
         if self.ring_since is not None and now - self.ring_since < RING_TIMEOUT_MS:
             self.ring.show(self.ring_rgb)
+        elif self.ring_palette == "red":
+            self.ring.show(red_comet(now, v=round(200 * self.ring_bright / 100)))
         else:
-            self.ring.show(rainbow(now))
+            self.ring.show(rainbow(now, v=round(160 * self.ring_bright / 100)))
 
     def _leds(self, now):
         demo = self.mode in ("demo", "park")

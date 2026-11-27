@@ -167,3 +167,22 @@ def test_rainbow_turns_full_circle_and_stays_in_range():
     # a quarter turn moves the pattern around the ring, not just dims it
     assert ring6dof.rainbow(0, n=4) != ring6dof.rainbow(1000, n=4)
 
+
+
+def test_red_comet_is_red_only_with_a_fading_tail():
+    n = 8
+    out = ring6dof.red_comet(0, n=n, v=200)
+    channels = [out[3 * i:3 * i + 3] for i in range(n)]
+    assert all(g == 0 and b == 0 for _, g, b in channels)                        # red only
+    reds = [r for r, _, _ in channels]
+    lit = [i for i, r in enumerate(reds) if r > 0]
+    assert len(lit) == ring6dof.COMET_TAIL + 1                                    # the head plus its tail
+    assert reds[0] == 200                                                        # the head, at v
+    tail = [reds[(0 - k) % n] for k in range(1, ring6dof.COMET_TAIL + 1)]
+    assert tail == sorted(tail, reverse=True) and all(t < 200 for t in tail)      # fading, strictly dimmer
+
+
+def test_red_comet_turns_full_circle_and_tracks_rainbow_speed():
+    a, b = ring6dof.red_comet(0, n=6), ring6dof.red_comet(4000, n=6)   # one full turn later (ROT_DEG_PER_MS)
+    assert a == b
+    assert ring6dof.red_comet(0, n=6) != ring6dof.red_comet(1000, n=6)
