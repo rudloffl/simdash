@@ -5370,7 +5370,10 @@ $("#mo-center").onclick = () => {
 };
 // each axis in turn, a smooth swing to 70 % of its reach and back
 $("#mo-demo").onclick = () => {
-  if (mo.demo) { stopMotionDemo(); return; }
+  const was = mo.demo && mo.demoKind;
+  stopMotionDemo();
+  if (was === "axes") return;
+  mo.demoKind = "axes";
   const t0 = performance.now(), per = 3000;
   $("#mo-demo").textContent = "Stop";
   mo.demo = setInterval(() => {
@@ -5392,9 +5395,103 @@ $("#mo-demo").onclick = () => {
 };
 function stopMotionDemo() {
   if (!mo.demo) return;
-  clearInterval(mo.demo); mo.demo = null;
+  clearInterval(mo.demo); mo.demo = null; mo.envTarget = null;
   $("#mo-demo").textContent = "Demo";
+  for (const [k, sel] of Object.entries(MO_TOURS)) $(sel).textContent = MO_TOUR_NAMES[k];
 }
+// the envelope's radius (motion.envelope) in any direction, read between its sampled points (bilinear)
+function moEnvR(env, el, az) {
+  const { lat, lon, r } = env;
+  const fi = (el + 90) / 180 * (lat - 1), i = Math.min(Math.floor(fi), lat - 2), ti = fi - i;
+  const fj = (((az % 360) + 360) % 360) / 360 * lon, j = Math.floor(fj) % lon, tj = fj - Math.floor(fj), j2 = (j + 1) % lon;
+  const lo = r[i][j] * (1 - tj) + r[i][j2] * tj, hi = r[i + 1][j] * (1 - tj) + r[i + 1][j2] * tj;
+  return lo * (1 - ti) + hi * ti;
+}
+// a spiral over the envelope, bottom to top: one turn per ring of samples, 93 % of the way out (read between
+// the samples, the edge can sit a little inside them). [x, y, z] from home, with the distance along it (mm)
+function moEnvSpiral(env) {
+  const turns = env.lat - 1, N = turns * 72, rad = Math.PI / 180, pts = [];
+  let len = 0;
+  for (let k = 0; k <= N; k++) {
+    const el = -90 + 180 * k / N, az = 360 * turns * k / N, r = 0.93 * moEnvR(env, el, az);
+    const p = [r * Math.cos(el * rad) * Math.cos(az * rad), r * Math.cos(el * rad) * Math.sin(az * rad), r * Math.sin(el * rad)];
+    if (pts.length) len += Math.hypot(...p.map((v, j) => v - pts[pts.length - 1].p[j]));
+    pts.push({ p, len });
+  }
+  return pts;
+}
+// two demos over the envelope, each a timeline of segments that loops (from where the platform is, an eased
+// move to where the loop starts). "env": a spiral up the envelope's surface and back down at a steady speed,
+// kept level. "rot": motion.tilt_tour, worked out by simdash for the saved geometry: the platform glides
+// through the stations (home, halfway to each axis' reach) without stopping while it rolls, pitches and yaws
+// all at once, as far as it can at every moment. Where it is (its translation) is marked on the 3D view
+const MO_TOURS = { env: "#mo-env-tour", rot: "#mo-rot-tour" };
+const MO_TOUR_NAMES = { env: "Envelope tour", rot: "Tilt tour" };
+async function moTour(kind) {
+  const was = mo.demo && mo.demoKind;
+  stopMotionDemo();
+  if (was === kind || !mo.d?.envelope) return;
+  const btn = $(MO_TOURS[kind]);
+  let tour = null;
+  if (kind === "rot") {
+    btn.textContent = "Working it out…";
+    const r = await fetch("/api/motion/tilt-tour"), d = await r.json();
+    btn.textContent = MO_TOUR_NAMES.rot;
+    if (!r.ok) { $("#mo-state").className = "bad"; $("#mo-state").textContent = d.detail; return; }
+    if (mo.demo) return;   // something else started meanwhile
+    tour = d;
+  }
+  if (mo.mode !== "pose") $('#mo-mode button[data-m="pose"]').click();
+  mo.demoKind = kind;
+  const SPEED = 25, MOVE = 1200;   // mm/s along the spiral; ms for the move in
+  const ease = (f) => (1 - Math.cos(Math.PI * f)) / 2;
+  const pose = (p, rot = {}) => ({ x: p[0], y: p[1], z: p[2], roll: 0, pitch: 0, yaw: 0, ...rot });
+  const now = { ...mo.pose };
+  const intro = (to, label) => ({ ms: MOVE, label, at: (f) => {   // every axis, so it also levels a tilt
+    const w = ease(f);
+    return Object.fromEntries(MO_AXES.map((a) => [a.k, now[a.k] + (to[a.k] - now[a.k]) * w]));
+  } });
+  const segs = [];
+  if (kind === "env") {
+    const path = moEnvSpiral(mo.d.envelope), total = path[path.length - 1].len;
+    let k = 0;
+    const along = (dist) => {   // the point that far along the spiral
+      while (k > 0 && path[k].len > dist) k--;
+      while (k < path.length - 2 && path[k + 1].len < dist) k++;
+      const a = path[k], b = path[k + 1], f = (dist - a.len) / ((b.len - a.len) || 1);
+      return a.p.map((v, j) => v + (b.p[j] - v) * f);
+    };
+    segs.push(intro(pose(path[0].p), "to the bottom"));
+    segs.push({ ms: total / SPEED * 1000, label: (f) => `↑ ${Math.round(100 * f)} %`, at: (f) => pose(along(f * total)) });
+    segs.push({ ms: total / SPEED * 1000, label: (f) => `↓ ${Math.round(100 * (1 - f))} %`, at: (f) => pose(along((1 - f) * total)) });
+  } else {
+    const P = tour.poses, n = P.length, marks = tour.marks;
+    const sample = (x) => {   // between two samples, the loop's end running into its start
+      const i = Math.floor(x) % n, j = (i + 1) % n, u = x - Math.floor(x);
+      return Object.fromEntries(MO_AXES.map((a, c) => [a.k, P[i][c] + (P[j][c] - P[i][c]) * u]));
+    };
+    segs.push(intro(sample(0), `to ${marks[0][1]}`));
+    segs.push({ ms: n / tour.hz * 1000, at: (f) => sample(f * n), label: (f) => {
+      const x = f * n, m = marks.findLastIndex(([k]) => k <= x);
+      return `${marks[m][1]} → ${marks[(m + 1) % marks.length][1]}`;
+    } });
+  }
+  const loopMs = segs.slice(1).reduce((s, g) => s + g.ms, 0), introMs = segs[0].ms;
+  const t0 = performance.now();
+  mo.demo = setInterval(() => {
+    let t = performance.now() - t0, i = 0;
+    if (t >= introMs) { t = (t - introMs) % loopMs; i = 1; }
+    while (i < segs.length - 1 && t >= segs[i].ms) t -= segs[i++].ms;
+    const g = segs[i], f = Math.min(1, t / g.ms), p = g.at(f);
+    mo.envTarget = [p.x, p.y, p.z];
+    for (const a of MO_AXES) mo.pose[a.k] = +p[a.k].toFixed(2);
+    document.querySelectorAll("#mo-axes input").forEach((el) => (el.value = mo.pose[el.dataset.k]));
+    btn.textContent = `Stop (${typeof g.label === "function" ? g.label(f) : g.label})`;
+    sendPose();
+  }, 33);
+}
+$("#mo-env-tour").onclick = () => moTour("env");
+$("#mo-rot-tour").onclick = () => moTour("rot");
 
 // rotation like motion.rotation(): roll + leans right, pitch + nose up, yaw + nose left
 function moRot(p) {
@@ -5640,6 +5737,37 @@ function drawMotion() {
       : `style="fill:color-mix(in srgb, var(--text) ${Math.round(14 + 30 * f.lit)}%, var(--surface))"`;
     out.push(`<polygon class="${f.cls}" ${tone} points="${pts(f.w)}"/>`);
   });
+  // the envelope (motion.envelope): every place the platform's centre can reach from home, the platform kept
+  // level. A see-through blob fixed around the home point: its far side faint, its near side shaded over it
+  const env = mo.showEnv && mo.d?.envelope;
+  if (env) {
+    const { lat, lon, r } = env, rad = Math.PI / 180;
+    const V = r.map((row, i) => {
+      const e = (-90 + 180 * i / (lat - 1)) * rad;
+      return row.map((rr, j) => { const a = 360 * j / lon * rad;
+        return [rr * Math.cos(e) * Math.cos(a), rr * Math.cos(e) * Math.sin(a), d.home_height + rr * Math.sin(e)]; });
+    });
+    const faces = [];
+    for (let i = 0; i < lat - 1; i++) for (let j = 0; j < lon; j++) {
+      const j2 = (j + 1) % lon, q = [V[i][j], V[i][j2], V[i + 1][j2], V[i + 1][j]];
+      const u = sub(q[2], q[0]), v = sub(q[3], q[1]);   // the diagonals: still a normal where a pole closes the quad
+      let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const fc = q.reduce((s, p) => s.map((x, k) => x + p[k] / 4), [0, 0, 0]);
+      if (n[0] * fc[0] + n[1] * fc[1] + n[2] * (fc[2] - d.home_height) < 0) n = n.map((x) => -x);   // outward
+      const m = Math.hypot(...n) || 1;
+      n = n.map((x) => x / m);
+      const front = n[0] * far[0] + n[1] * far[1] + n[2] * far[2] < 0;
+      faces.push({ q, front, d: depth(q), lit: Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]) });
+    }
+    faces.sort((a, b) => a.front - b.front || b.d - a.d).forEach((f) => out.push(f.front
+      ? `<polygon class="env" style="fill:color-mix(in srgb, var(--s-angle) ${Math.round(6 + 16 * f.lit)}%, transparent)" points="${pts(f.q)}"/>`
+      : `<polygon class="env-back" points="${pts(f.q)}"/>`));
+  }
+  // the envelope tour's current target: a ring on the blob's surface
+  if (mo.envTarget) {
+    const [ex, ey] = P([mo.envTarget[0], mo.envTarget[1], d.home_height + mo.envTarget[2]]);
+    out.push(`<circle class="env-target" cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="6"/>`);
+  }
   // reference point: the platform's centre against where it sits at home. The path home -> centre is drawn
   // leg by leg (x red, then y green, then z blue) plus straight; the platform's own axes turn with it, the
   // home axes stay put (dotted), so roll / pitch / yaw show as the angle between the two
@@ -5692,6 +5820,10 @@ mo.carModel = pref.get("moCarModel", "coupe");
 $("#mo-car-pick").innerHTML = Object.entries(MO_CARS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
 $("#mo-car-pick").value = mo.carModel in MO_CARS ? mo.carModel : "coupe";
 $("#mo-car-pick").onchange = (e) => { mo.carModel = e.target.value; pref.set("moCarModel", mo.carModel); drawMotion(); };
+// the envelope blob on the 3D view: on or off, kept in the browser
+mo.showEnv = pref.get("moEnv", true);
+$("#mo-env").checked = mo.showEnv;
+$("#mo-env").onchange = (e) => { mo.showEnv = e.target.checked; pref.set("moEnv", mo.showEnv); drawMotion(); };
 $("#mo-view-pick").onchange = (e) => {
   const to = MO_VIEWS[e.target.value];
   if (!to) return;

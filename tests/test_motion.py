@@ -699,3 +699,48 @@ def test_write_firmware_copies_then_renames_all(monkeypatch):
     assert log.index("rename") > log.index(puts[-1]) and log[-1] == "restart"   # all copied, then renamed
     assert r["running"] and r["version"] == motion.firmware_version() and not motion.board_busy.is_set()
     assert motion.FIRMWARE_FILES[-1] == "main.py"
+
+
+def test_envelope_matches_the_single_axis_reach():
+    e, rc = motion.envelope(G), motion.reach(G)
+    lat, lon, r = e["lat"], e["lon"], e["r"]
+    assert len(r) == lat and all(len(row) == lon for row in r)
+    eq = r[(lat - 1) // 2]                          # the equator: surge and sway
+    assert eq[0] == pytest.approx(rc["x"][1], abs=0.5)
+    assert eq[lon // 2] == pytest.approx(rc["x"][0], abs=0.5)
+    assert eq[lon // 4] == pytest.approx(rc["y"][1], abs=0.5)
+    assert r[0][0] == pytest.approx(rc["z"][0], abs=0.5) and r[-1][0] == pytest.approx(rc["z"][1], abs=0.5)
+    # every point on it is a pose the platform takes, a little further out is not
+    for i in (2, 6, 10):
+        for j in (3, 9, 17):
+            el, az = math.radians(-90 + 180 * i / (lat - 1)), math.radians(360 * j / lon)
+            v = (math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el))
+            for k, inside in ((r[i][j] - 0.5, True), (r[i][j] + 1, False)):
+                p = dict(zip("xyz", (c * k for c in v)))
+                assert motion.within(motion.ik(p, G), G, p) is inside
+
+
+def test_stations_rotate_within_reach():
+    st = motion.stations(G)
+    assert [s["name"] for s in st] == ["home", "X+", "X−", "Y+", "Y−", "Z+", "Z−"]
+    assert st[0]["rot"]["roll"] == pytest.approx(motion.reach(G)["roll"], abs=0.2)
+    for s in st:
+        for ax, (neg, pos) in s["rot"].items():
+            assert neg > 2 and pos > 2                 # halfway out it still tilts a few degrees
+            for v, inside in ((-neg + 0.2, True), (pos - 0.2, True), (pos + 1, False)):
+                p = dict(s["at"], **{ax: v})
+                assert motion.within(motion.ik(p, G), G, p) is inside
+
+
+def test_tilt_tour_is_continuous_and_within_reach():
+    tt = motion.tilt_tour(G)
+    P, n = tt["poses"], len(tt["poses"])
+    assert [name for _, name in tt["marks"]][:3] == ["home", "X+", "Y+"]
+    for i in range(6):   # no jumps and no jolts (speed changes), the loop's end into its start included
+        assert max(abs(P[(k + 1) % n][i] - P[k][i]) for k in range(n)) < (0.3 if i < 3 else 1.5)
+        assert max(abs(P[(k + 1) % n][i] - 2 * P[k][i] + P[k - 1][i]) for k in range(n)) < (0.05 if i < 3 else 0.15)
+    assert all(motion.within(motion.ik(dict(zip(motion.AXES, p)), G), G, dict(zip(motion.AXES, p))) for p in P)
+    assert max(abs(p[3]) for p in P) > 4 and max(abs(p[5]) for p in P) > 4   # it does tilt
+    for k, name in tt["marks"]:   # it passes through each station
+        st = next(s for s in motion.stations(G) if s["name"] == name)
+        assert P[k][:3] == pytest.approx([st["at"][a] for a in "xyz"], abs=0.05)

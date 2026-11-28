@@ -445,6 +445,150 @@ def _reach(key):
     return out
 
 
+ENV_LAT, ENV_LON = 13, 24   # the envelope's sampling: rings from straight down to straight up, directions per ring
+
+
+def envelope(g):
+    """The translation envelope: how far the platform's centre can move from home in every direction,
+    the platform kept level. {"lat": n, "lon": m, "r": [[mm, ...] per ring]}: ring i at elevation
+    -90 + 180 i / (n - 1) degrees, direction j at azimuth 360 j / m (0 = nose, + = to the left)."""
+    return copy.deepcopy(_envelope(_gkey(g)))
+
+
+@functools.lru_cache(maxsize=16)
+def _envelope(key):
+    g = dict(key)
+    gm = geo(g)
+    L, H = gm["L"], gm["H"]
+
+    def ok(v, r):
+        p = {"x": v[0] * r, "y": v[1] * r, "z": v[2] * r}
+        return within(ik(p, g, L, H), g, p)
+
+    rows = []
+    for i in range(ENV_LAT):
+        el = math.radians(-90 + 180 * i / (ENV_LAT - 1))
+        row = []
+        for j in range(1 if i in (0, ENV_LAT - 1) else ENV_LON):   # the poles: one direction
+            az = math.radians(360 * j / ENV_LON)
+            v = (math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el))
+            # walk out to the first pose it can't take (the reachable set needn't be convex), then narrow it
+            lo, hi = 0.0, None
+            while hi is None and lo < 120:
+                if ok(v, lo + 4):
+                    lo += 4
+                else:
+                    hi = lo + 4
+            if hi is not None:
+                for _ in range(8):
+                    m = (lo + hi) / 2
+                    lo, hi = (m, hi) if ok(v, m) else (lo, m)
+            row.append(round(lo, 1))
+        rows.append(row * ENV_LON if len(row) == 1 else row)
+    return {"lat": ENV_LAT, "lon": ENV_LON, "r": rows}
+
+
+STATION_FRAC = 0.5   # the stations sit this share of the way to each axis' reach: at the very edge a shifted
+                     # platform can barely tilt (about 1°), halfway it still rolls, pitches and yaws 5 to 12°
+
+
+def stations(g):
+    """Home and a point along each translation axis both ways (STATION_FRAC of its reach), with how far the
+    platform can roll, pitch and yaw there, each alone: [{name, at: {x, y, z}, rot: {axis: [neg, pos]}}]."""
+    return copy.deepcopy(_stations(_gkey(g)))
+
+
+@functools.lru_cache(maxsize=16)
+def _stations(key):
+    g = dict(key)
+    gm = geo(g)
+    L, H, rc = gm["L"], gm["H"], reach(g)
+    out = []
+    for name, ax, sign in (("home", None, 0), ("X+", "x", 1), ("X−", "x", -1), ("Y+", "y", 1), ("Y−", "y", -1),
+                           ("Z+", "z", 1), ("Z−", "z", -1)):
+        at = {"x": 0.0, "y": 0.0, "z": 0.0}
+        if ax:
+            at[ax] = round(sign * STATION_FRAC * rc[ax][sign > 0], 1)
+        rot = {}
+        for r in ("roll", "pitch", "yaw"):
+            rot[r] = []
+            for s in (-1, 1):
+                lo, hi = 0.0, 90.0
+                for _ in range(20):
+                    m = (lo + hi) / 2
+                    p = dict(at, **{r: s * m})
+                    lo, hi = (m, hi) if within(ik(p, g, L, H), g, p) else (lo, m)
+                rot[r].append(round(lo, 1))
+        out.append({"name": name, "at": at, "rot": rot})
+    return out
+
+
+TILT_TOUR_HZ = 25
+TILT_TOUR_ORDER = ("home", "X+", "Y+", "X−", "Y−", "home", "Z+", "Z−")   # the stations it glides through, then loops
+TILT_TOUR_LEG_S = 7.5        # seconds from one station to the next
+TILT_TOUR_PERIODS = {"roll": 4.0, "pitch": 5.0, "yaw": 6.0}   # each axis swings on its own beat (s, about)
+TILT_TOUR_SHARE = 0.9        # how near the edge the tilt goes
+
+
+def tilt_tour(g):
+    """A continuous demo of the tilts: the platform glides through the stations on a smooth closed curve
+    (no stops) while it rolls, pitches and yaws all at once, each on its own beat, the tilt scaled at every
+    moment to TILT_TOUR_SHARE of what the platform can take there (and the scale smoothed, so it never
+    jumps). {"hz", "poses": [[x, y, z, roll, pitch, yaw], ...] one loop, "marks": [[sample, station], ...]}."""
+    return copy.deepcopy(_tilt_tour(_gkey(g)))
+
+
+@functools.lru_cache(maxsize=4)
+def _tilt_tour(key):
+    g = dict(key)
+    gm = geo(g)
+    L, H = gm["L"], gm["H"]
+    at = {s["name"]: [s["at"][k] for k in "xyz"] for s in stations(g)}
+    pts = [at[n] for n in TILT_TOUR_ORDER]
+    n, per = len(pts), int(TILT_TOUR_LEG_S * TILT_TOUR_HZ)
+    N = n * per
+    lim = stations(g)[0]["rot"]                                  # the single-axis tilts at home, as amplitudes
+    loop = N / TILT_TOUR_HZ                                      # each beat a whole number of times per loop
+    beat = {ax: loop / max(1, round(loop / T)) for ax, T in TILT_TOUR_PERIODS.items()}
+
+    def spline(i, u):                                            # closed Catmull-Rom through the stations
+        p0, p1, p2, p3 = (pts[(i + d) % n] for d in (-1, 0, 1, 2))
+        return [0.5 * (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u * u + (-a + 3 * b - 3 * c + d) * u ** 3)
+                for a, b, c, d in zip(p0, p1, p2, p3)]
+
+    def ok(p):
+        return within(ik(p, g, L, H), g, p)
+
+    trans, rots, scale = [], [], []
+    for k in range(N):
+        t = k / TILT_TOUR_HZ
+        xyz = spline(k // per, (k % per) / per)
+        rot = {ax: min(lim[ax]) * math.sin(2 * math.pi * t / T) for ax, T in beat.items()}
+        base = dict(zip("xyz", xyz))
+        if not ok(base):
+            raise ValueError("the tilt tour's path leaves the envelope")
+        # the largest multiple of this tilt the platform takes here (it can be over 1: one axis alone at its peak)
+        lo, hi = 0.0, 3.0
+        for _ in range(12):
+            m = (lo + hi) / 2
+            lo, hi = (m, hi) if ok(dict(base, **{ax: v * m for ax, v in rot.items()})) else (lo, m)
+        trans.append(xyz), rots.append(rot), scale.append(lo)
+    # smooth the scale without ever raising it: the lowest within ±w of each moment, then the mean of those
+    # over ±w (every value in that mean is at or under the scale at the centre, so the mean is too)
+    w = TILT_TOUR_HZ // 2
+    low = [min(scale[(k + d) % N] for d in range(-w, w + 1)) for k in range(N)]
+    smooth = [sum(low[(k + d) % N] for d in range(-w, w + 1)) / (2 * w + 1) for k in range(N)]
+    poses = []
+    for xyz, rot, s in zip(trans, rots, smooth):
+        s *= TILT_TOUR_SHARE
+        p = dict(zip("xyz", xyz), **{ax: v * s for ax, v in rot.items()})
+        while not ok(p) and s > 0:                               # the scale isn't strictly monotone: make sure
+            s *= 0.95
+            p = dict(zip("xyz", xyz), **{ax: v * s for ax, v in rot.items()})
+        poses.append([round(p[a], 2) for a in AXES])
+    return {"hz": TILT_TOUR_HZ, "poses": poses, "marks": [[i * per, name] for i, name in enumerate(TILT_TOUR_ORDER)]}
+
+
 def design(g):
     """Numbers for the person designing the parts."""
     gm = geo(g)
@@ -484,6 +628,8 @@ def design(g):
         "ball_gap": 0.0 if cross else round(gap_home, 1),
         "ball_gap_min": 0.0 if cross else round(gap_min, 1),
         "reach": reach(g),
+        "envelope": envelope(g),
+        "stations": stations(g),
         "leg_side": _leg_side(g, L, H),
         "legs": [{"shaft": [round(c, 2) for c in B], "horn_dir": [round(c, 4) for c in u],
                   "joint": [round(c, 2) for c in P]} for B, u, P in L],

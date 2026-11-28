@@ -770,11 +770,13 @@
         <option value="left">Left</option><option value="right">Right</option>
         <option value="top">Top</option><option value="custom" disabled>Custom (dragged)</option></select>
         <select id="mo-car-pick" class="mo-view-pick" title="What sits on the platform (only the picture)"></select>
+        <label class="mo-env-pick" title="Show how far the platform's centre can move from home (kept level)"><input type="checkbox" id="mo-env"> Envelope</label>
         <span class="right muted" id="mo-state"></span></h3>
       <svg id="mo-view" class="mo-view" role="img" aria-label="The platform in its current pose: servos, horns, rods and the car on top"></svg>
       <label class="mo-turn">Turn around the vertical axis
         <input type="range" id="mo-az" min="-180" max="180" step="1" value="-35"><span id="mo-az-v" class="muted"></span></label>
-      <div class="fx-hint">Pick a view above, or drag to turn it. Horns and rods turn red when a servo can't reach the pose; nothing is sent to the servos then.</div>
+      <div class="fx-hint">Pick a view above, or drag to turn it. Horns and rods turn red when a servo can't reach the pose; nothing is sent to the servos then.
+        The <b>envelope</b> is every place the platform's centre (the dot) can reach from home while kept level; any tilt or yaw makes it smaller.</div>
     </div>
     <div class="card mo-where-card" id="mo-where" hidden>
       <h3>On track <span class="right muted">shakers and pedal haptics at this moment</span></h3>
@@ -804,6 +806,8 @@
         <button data-m="pose">Platform pose</button><button data-m="servos">Servos directly</button></div>
       <span class="grow"></span>
       <button id="mo-center">Centre</button> <button id="mo-demo">Demo</button>
+      <button id="mo-env-tour" title="A spiral over the surface of the envelope, up and back down, the platform kept level">Envelope tour</button>
+      <button id="mo-rot-tour" title="Glides through home and halfway to each axis' reach both ways without stopping, rolling, pitching and yawing all at once as far as it can at every moment">Tilt tour</button>
     </div>
     <div class="mo-cols">
       <div class="fx-fields mo-axes" id="mo-axes"></div>

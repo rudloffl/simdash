@@ -827,6 +827,10 @@ a.btn:hover { border-color: var(--muted); }
 .mo-turn { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); margin: 6px 0 2px; }
 .mo-turn input { flex: 1; }
 .mo-turn span { min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
+.mo-view .env { stroke: color-mix(in srgb, var(--s-angle) 45%, transparent); stroke-width: 0.5; stroke-linejoin: round; }
+.mo-view .env-back { fill: color-mix(in srgb, var(--s-angle) 4%, transparent); stroke: color-mix(in srgb, var(--s-angle) 22%, transparent); stroke-width: 0.4; stroke-linejoin: round; }
+.mo-view .env-target { fill: none; stroke: var(--s-angle); stroke-width: 2.5; }
+.mo-env-pick { margin-left: 8px; font-size: 12px; font-weight: 400; display: inline-flex; align-items: center; gap: 4px; }
 .mo-view-pick { margin-left: 8px; font-size: 12px; font-weight: 400; padding: 2px 6px; }
 .mo-move-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .mo-move-bar .grow { flex: 1; }

@@ -617,6 +617,14 @@ def create_app(recorder=None):
         _sync_ring_palette()
         return motion.setup()
 
+    @app.get("/api/motion/tilt-tour")
+    def motion_tilt_tour():
+        """The Tilt tour demo for the saved geometry: one loop of poses (motion.tilt_tour)."""
+        try:
+            return motion.tilt_tour(motion.settings()["geometry"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     @app.post("/api/motion/pose")
     def motion_pose(body: dict):
         """Solve a pose ({x, y, z, roll, pitch, yaw}, optional unsaved "settings"); sent to the
